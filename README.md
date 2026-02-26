@@ -25,3 +25,5 @@ Build portable artifacts into root `dist/`:
 powershell -ExecutionPolicy Bypass -File .\JustRayzist\scripts\build_portable.ps1 -Clean
 powershell -ExecutionPolicy Bypass -File .\JustRayzist\scripts\package_release.ps1
 ```
+
+Portable builds include a ready `.venv` by default so end users can run without rebuilding an environment.

@@ -2,7 +2,8 @@ param(
   [string]$OutputDir = "..\\dist\\JustRayzistPortable",
   [string]$PythonExe = "",
   [switch]$Clean,
-  [switch]$SkipModels
+  [switch]$SkipModels,
+  [switch]$SkipVenv
 )
 
 $ErrorActionPreference = "Stop"
@@ -149,6 +150,30 @@ if ($pythonInfo.IsVirtualEnv -and (Test-Path $pythonInfo.SitePackagesSource)) {
   )
 }
 
+$sourceVenvDir = Join-Path $rootDir ".venv"
+if (-not $SkipVenv) {
+  $portableVenvDir = Join-Path $portableRoot ".venv"
+  $sourceVenvPython = Join-Path $sourceVenvDir "Scripts\\python.exe"
+  if ((Test-Path $sourceVenvPython) -and (Test-PythonDependencySet -PythonPath $sourceVenvPython)) {
+    Write-Host "Copying local virtual environment to portable bundle: $sourceVenvDir"
+    Invoke-Robocopy -Source $sourceVenvDir -Destination $portableVenvDir -ExtraArgs @(
+      "/XD", "__pycache__", ".pytest_cache", ".ruff_cache", "Lib\\site-packages\\__pycache__", "Scripts\\__pycache__"
+    )
+  } else {
+    Write-Host "Local .venv unavailable or missing dependencies. Creating portable .venv from bundled runtime."
+    Invoke-Robocopy -Source $runtimeDir -Destination $portableVenvDir -ExtraArgs @(
+      "/XD", "__pycache__", ".pytest_cache", ".ruff_cache", "Lib\\__pycache__", "Lib\\site-packages\\__pycache__"
+    )
+    $portableVenvScriptsDir = Join-Path $portableVenvDir "Scripts"
+    New-Item -ItemType Directory -Path $portableVenvScriptsDir -Force | Out-Null
+    Copy-Item (Join-Path $portableVenvDir "python.exe") -Destination (Join-Path $portableVenvScriptsDir "python.exe") -Force
+    $portablePythonw = Join-Path $portableVenvDir "pythonw.exe"
+    if (Test-Path $portablePythonw) {
+      Copy-Item $portablePythonw -Destination (Join-Path $portableVenvScriptsDir "pythonw.exe") -Force
+    }
+  }
+}
+
 Write-Host "Copying application files..."
 $projectDirs = @("app", "img", "launch", "docs")
 foreach ($dir in $projectDirs) {
@@ -205,6 +230,12 @@ $portablePython = Join-Path $runtimeDir "python.exe"
 if (-not (Test-Path $portablePython)) {
   throw "Portable build is missing runtime\\python\\python.exe."
 }
+if (-not $SkipVenv) {
+  $portableVenvPython = Join-Path $portableRoot ".venv\\Scripts\\python.exe"
+  if (-not (Test-Path $portableVenvPython)) {
+    throw "Portable build is missing .venv\\Scripts\\python.exe."
+  }
+}
 
 $defaultUpscalerCheckpoint = Join-Path $upscalerDestDir "2x_RealESRGAN_x2plus.pth"
 if (-not (Test-Path $defaultUpscalerCheckpoint)) {
@@ -219,6 +250,17 @@ if ($LASTEXITCODE -ne 0) {
     $missingModules = "(unknown)"
   }
   throw "Portable runtime is missing required dependencies: $missingModules. Build using a Python environment with project dependencies installed."
+}
+if (-not $SkipVenv) {
+  $portableVenvPython = Join-Path $portableRoot ".venv\\Scripts\\python.exe"
+  $missingVenvModuleOutput = & $portableVenvPython -c $dependencyCheckScript
+  if ($LASTEXITCODE -ne 0) {
+    $missingVenvModules = ($missingVenvModuleOutput -join ", ").Trim()
+    if (-not $missingVenvModules) {
+      $missingVenvModules = "(unknown)"
+    }
+    throw "Portable .venv is missing required dependencies: $missingVenvModules."
+  }
 }
 
 Write-Host ""

@@ -13,8 +13,34 @@ function Test-ModuleImport {
     [string]$ModuleName
   )
 
-  & $PythonPath -c "import $ModuleName" *> $null
-  return ($LASTEXITCODE -eq 0)
+  $previousPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    & $PythonPath -c "import $ModuleName" *> $null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+}
+
+function Invoke-BestEffort {
+  param(
+    [string]$PythonPath,
+    [string[]]$Arguments
+  )
+
+  $previousPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    & $PythonPath @Arguments *> $null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
 }
 
 if (-not (Test-Path $venvPython)) {
@@ -22,13 +48,13 @@ if (-not (Test-Path $venvPython)) {
 }
 
 if (-not (Test-ModuleImport -PythonPath $venvPython -ModuleName "pip")) {
-  & $venvPython -m ensurepip --upgrade
+  [void](Invoke-BestEffort -PythonPath $venvPython -Arguments @("-m", "ensurepip", "--upgrade"))
 }
 
 if (-not (Test-ModuleImport -PythonPath $venvPython -ModuleName "pip")) {
   Write-Host ".venv is incomplete. Rebuilding virtual environment..."
   & $PythonExe -m venv --clear $venvRoot
-  & $venvPython -m ensurepip --upgrade
+  [void](Invoke-BestEffort -PythonPath $venvPython -Arguments @("-m", "ensurepip", "--upgrade"))
 }
 
 if (-not (Test-ModuleImport -PythonPath $venvPython -ModuleName "pip")) {

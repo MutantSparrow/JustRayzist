@@ -181,12 +181,15 @@ Useful flags:
 - `-OutputDir dist\MyPortableBuild`
 - `-PythonExe E:\APPS\Python_3.13\python.exe`
 - `-SkipModels` (skip `models/packs`; keeps `models/upscaler` for upscale flow)
+- `-SkipVenv` (do not include project `.venv` in portable bundle)
 
 Notes:
 - If `-PythonExe` is omitted, the script prefers project-local `.venv\Scripts\python.exe` when available, then falls back to PATH `python`.
 - If a virtual environment interpreter is used, the script bundles base Python runtime and overlays that venv's `site-packages` into the portable runtime.
+- By default, portable build also copies project `.venv` into `<bundle>\.venv` (unless `-SkipVenv` is used).
 - Portable build now validates:
   - required runtime dependencies (`typer`, `fastapi`, `uvicorn`, `Pillow`, `torch`)
+  - bundled `.venv` dependency availability when `.venv` is included
   - default upscale checkpoint presence (`models/upscaler/2x_RealESRGAN_x2plus.pth`)
 
 Run packaged app:
@@ -203,3 +206,4 @@ Useful flags:
 - `-ZipPath dist\JustRayzist_v1.zip`
 - `-PythonExe E:\APPS\Python_3.13\python.exe`
 - `-SkipModels`
+- `-SkipVenv`

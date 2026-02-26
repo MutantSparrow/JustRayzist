@@ -3,6 +3,7 @@ param(
   [string]$ZipPath = "",
   [string]$PythonExe = "",
   [switch]$SkipModels,
+  [switch]$SkipVenv,
   [switch]$NoClean
 )
 
@@ -20,6 +21,9 @@ if ($PythonExe) {
 }
 if ($SkipModels) {
   $buildArgs += "-SkipModels"
+}
+if ($SkipVenv) {
+  $buildArgs += "-SkipVenv"
 }
 
 Write-Host "Building portable bundle..."
