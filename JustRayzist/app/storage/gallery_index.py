@@ -106,6 +106,23 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
         conn.execute(f"ALTER TABLE images ADD COLUMN {name} {sql_type}")
 
 
+def _prune_missing_rows(conn: sqlite3.Connection) -> int:
+    rows = conn.execute("SELECT id, output_path FROM images").fetchall()
+    missing_ids: list[int] = []
+    for row in rows:
+        output_path = Path(str(row["output_path"])).expanduser()
+        if output_path.exists():
+            continue
+        missing_ids.append(int(row["id"]))
+
+    if not missing_ids:
+        return 0
+
+    placeholders = ",".join("?" for _ in missing_ids)
+    conn.execute(f"DELETE FROM images WHERE id IN ({placeholders})", tuple(missing_ids))
+    return len(missing_ids)
+
+
 def _upsert_image(
     conn: sqlite3.Connection,
     image_path: Path,
@@ -198,6 +215,7 @@ def sync_outputs_to_gallery(settings: AppSettings) -> int:
 
     indexed = 0
     with _connect(db_path) as conn:
+        removed_missing = _prune_missing_rows(conn)
         existing_rows = conn.execute("SELECT filename FROM images").fetchall()
         existing = {str(row["filename"]) for row in existing_rows}
         for output_path in output_files:
@@ -207,7 +225,7 @@ def sync_outputs_to_gallery(settings: AppSettings) -> int:
             _upsert_image(conn, output_path, metadata)
             indexed += 1
         conn.commit()
-    return indexed
+    return indexed + removed_missing
 
 
 def list_images(
@@ -222,6 +240,9 @@ def list_images(
     safe_offset = max(0, offset)
     order_keyword = "DESC" if newest_first else "ASC"
     with _connect(db_path) as conn:
+        removed_missing = _prune_missing_rows(conn)
+        if removed_missing:
+            conn.commit()
         if prompt_query:
             rows = conn.execute(
                 f"""
@@ -248,6 +269,12 @@ def get_image(settings: AppSettings, filename: str) -> dict[str, Any] | None:
     db_path = ensure_gallery_schema(settings)
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM images WHERE filename = ?", (filename,)).fetchone()
+        if row is not None:
+            output_path = Path(str(row["output_path"])).expanduser()
+            if not output_path.exists():
+                conn.execute("DELETE FROM images WHERE filename = ?", (filename,))
+                conn.commit()
+                row = None
     if row is None:
         return None
     return _row_to_dict(row)

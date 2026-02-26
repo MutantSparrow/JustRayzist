@@ -621,6 +621,20 @@ function renderPendingTile(job) {
   return tile;
 }
 
+function dropMissingGalleryItem(filename) {
+  const target = String(filename || "").trim();
+  if (!target) return;
+  const previousCount = state.galleryItems.length;
+  state.galleryItems = state.galleryItems.filter((item) => item.filename !== target);
+  if (state.viewerFilename === target) {
+    hideViewer();
+  }
+  if (state.galleryItems.length !== previousCount) {
+    renderGallery();
+    syncViewerWithGallery();
+  }
+}
+
 function renderImageTile(item, index) {
   const tile = document.createElement("article");
   tile.className = "tile";
@@ -629,6 +643,10 @@ function renderImageTile(item, index) {
   image.src = `/images/${encodeURIComponent(item.filename)}?t=${Date.now()}`;
   image.alt = item.prompt || "Generated image";
   image.loading = "lazy";
+  image.addEventListener("error", () => {
+    tile.remove();
+    dropMissingGalleryItem(item.filename);
+  });
 
   const overlay = document.createElement("div");
   overlay.className = "tile-overlay";
