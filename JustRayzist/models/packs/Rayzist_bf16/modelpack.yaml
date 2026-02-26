@@ -1,0 +1,23 @@
+﻿name: Rayzist_bf16
+architecture: z_image_turbo
+backend_preference:
+  - diffusers
+pipeline_config_dir: ./config
+components:
+  transformer:
+    path: ./weights/Rayzist.v1.0.safetensors
+    format: safetensors
+  vae:
+    path: ./weights/ultrafluxVAEImproved_v10.safetensors
+    format: safetensors
+  text_encoder:
+    path: ./config/text_encoder/model.safetensors
+    format: safetensors
+required_configs:
+  - ./config/model_index.json
+  - ./config/scheduler/scheduler_config.json
+  - ./config/tokenizer/tokenizer.json
+  - ./config/transformer/config.json
+  - ./config/vae/config.json
+  - ./config/text_encoder/config.json
+

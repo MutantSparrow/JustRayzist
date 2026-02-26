@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JustRayzist</title>
+  <link rel="icon" type="image/x-icon" href="/img/favicon.ico">
+  <link rel="shortcut icon" href="/img/favicon.ico">
+  <link rel="stylesheet" href="/ui/styles.css?v=20260226_12">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img class="brand-logo" src="/img/logo.png" alt="JustRayzist">
+    </div>
+    <div class="prompt-area">
+      <div id="settings-summary" class="settings-summary" aria-live="polite"></div>
+      <div class="prompt-shell">
+        <button id="settings-button" class="prompt-settings-button" type="button" aria-expanded="false" aria-label="Settings">
+          <span class="prompt-settings-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <line x1="4" y1="6" x2="20" y2="6"></line>
+              <line x1="4" y1="12" x2="20" y2="12"></line>
+              <line x1="4" y1="18" x2="20" y2="18"></line>
+              <circle cx="8" cy="6" r="2"></circle>
+              <circle cx="15" cy="12" r="2"></circle>
+              <circle cx="11" cy="18" r="2"></circle>
+            </svg>
+          </span>
+        </button>
+        <textarea
+          id="prompt-input"
+          class="prompt-input"
+          placeholder="Enter prompt and press Enter to generate"
+          maxlength="4000"
+          rows="1"
+        ></textarea>
+      </div>
+    </div>
+    <button id="generate-button" class="generate-button btn btn-hfill" type="button" aria-label="GENERATE" title="GENERATE">
+      <span id="generate-button-label" class="generate-button-label">GENERATE</span>
+    </button>
+  </header>
+
+  <aside id="settings-panel" class="settings-panel" aria-hidden="true">
+    <div class="setting-group">
+      <label for="resolution-select">Resolution</label>
+      <select id="resolution-select">
+        <optgroup label="2:3">
+          <option value="832x1248">832x1248</option>
+          <option value="1024x1536">1024x1536</option>
+        </optgroup>
+        <optgroup label="3:4">
+          <option value="864x1152">864x1152</option>
+          <option value="1104x1472">1104x1472</option>
+        </optgroup>
+        <optgroup label="9:16">
+          <option value="720x1280">720x1280</option>
+          <option value="864x1536">864x1536</option>
+        </optgroup>
+        <optgroup label="1:1">
+          <option value="1024x1024" selected>1024x1024 (default)</option>
+          <option value="1280x1280">1280x1280</option>
+          <option value="1536x1536">1536x1536</option>
+        </optgroup>
+      </select>
+    </div>
+
+    <div class="setting-group">
+      <label>Orientation</label>
+      <div class="toggle-row" id="orientation-toggle">
+        <button class="toggle-option active" data-orientation="portrait" type="button">PORTRAIT</button>
+        <button class="toggle-option" data-orientation="landscape" type="button">LANDSCAPE</button>
+      </div>
+    </div>
+
+    <div class="setting-group">
+      <label>Freeze Seed</label>
+      <button id="freeze-seed-button" class="toggle-seed-button" type="button">FREEZE SEED: OFF</button>
+    </div>
+
+    <div class="setting-group">
+      <label>Scheduler/Sampler</label>
+      <button id="scheduler-sampler-button" class="toggle-seed-button" type="button">
+        SCHEDULER/SAMPLER: OFF (EULER)
+      </button>
+    </div>
+
+    <div class="setting-group">
+      <label>Prompt Enhancer</label>
+      <button id="prompt-enhance-button" class="toggle-seed-button" type="button">
+        PROMPT ENHANCER: OFF
+      </button>
+    </div>
+
+    <div class="setting-group setting-actions-row">
+      <button id="delete-gallery-button" class="danger-button" type="button">DELETE GALLERY</button>
+      <button id="kill-server-button" class="danger-button kill-server-button" type="button">KILL SERVER</button>
+    </div>
+  </aside>
+
+  <main class="gallery-area">
+    <section class="gallery-tools">
+      <input id="filter-input" type="text" placeholder="Filter by prompt keywords">
+      <button id="reverse-order-button" class="reverse-button" type="button">Newest First</button>
+    </section>
+    <p id="status-line" class="status-line">Ready.</p>
+    <section id="gallery" class="gallery"></section>
+    <p id="empty-state" class="empty-state hidden">No Pictures yet.</p>
+  </main>
+
+  <section id="viewer-modal" class="viewer-modal hidden" aria-hidden="true">
+    <div class="viewer-summary">
+      <div id="viewer-meta" class="viewer-meta"></div>
+      <div class="viewer-actions">
+        <span id="zoom-label" class="zoom-label">1.00x</span>
+        <button id="viewer-use-prompt-button" class="close-button" type="button">Use Prompt</button>
+        <button id="viewer-copy-prompt-button" class="close-button" type="button">Copy Prompt</button>
+        <button id="viewer-upscale-button" class="upscale-link" type="button">Upscale</button>
+        <a id="viewer-download" class="download-link" href="#" download>Download</a>
+        <button id="viewer-close-button" class="close-button" type="button">Close</button>
+      </div>
+    </div>
+    <div class="viewer-hints">
+      Keys: ←/→ navigate | Mousewheel zoom | Drag pan | Del/Backspace delete | Esc close | Double-click reset zoom
+    </div>
+    <div id="viewer-stage" class="viewer-stage">
+      <button id="viewer-prev-button" class="viewer-nav viewer-nav-prev" type="button" aria-label="Previous image">‹</button>
+      <img id="viewer-image" src="" alt="Generated image preview">
+      <button id="viewer-next-button" class="viewer-nav viewer-nav-next" type="button" aria-label="Next image">›</button>
+    </div>
+  </section>
+
+  <section id="confirm-modal" class="confirm-modal hidden" aria-hidden="true">
+    <div class="confirm-dialog">
+      <p id="confirm-modal-message" class="confirm-message"></p>
+      <div class="confirm-actions">
+        <button id="confirm-modal-cancel" class="close-button" type="button">Cancel</button>
+        <button id="confirm-modal-confirm" class="danger-button" type="button">Delete</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="disconnect-overlay" class="disconnect-overlay hidden" aria-hidden="true">
+    <div class="disconnect-crt" aria-hidden="true"></div>
+    <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
+  </section>
+
+  <script src="/ui/app.js?v=20260226_12"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+name: my_z_turbo_pack
+architecture: z_image_turbo
+backend_preference:
+  - diffusers
+pipeline_config_dir: ./config
+components:
+  transformer:
+    path: ./transformer.safetensors
+    format: safetensors
+  vae:
+    path: ./vae.safetensors
+    format: safetensors
+required_configs:
+  - ./config/model_index.json
+

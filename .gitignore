@@ -1,0 +1,31 @@
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+JustRayzist/.venv/
+JustRayzist/venv/
+JustRayzist/env/
+
+# Local runtime data
+JustRayzist/outputs/*
+!JustRayzist/outputs/.gitkeep
+JustRayzist/data/*
+!JustRayzist/data/.gitkeep
+JustRayzist/justrayzist.egg-info/
+
+# Local model binaries (too large for regular Git)
+JustRayzist/models/**/*.safetensors
+JustRayzist/models/**/*.gguf
+JustRayzist/models/**/*.pth
+
+dist/
+
+# IDE
+.vscode/
+.idea/

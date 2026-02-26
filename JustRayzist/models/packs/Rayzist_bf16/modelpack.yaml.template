@@ -1,0 +1,36 @@
+# Copy this file to:
+# models/packs/Rayzist_bf16/modelpack.yaml
+# Then update paths to your real local files.
+#
+# Rules:
+# - All paths must be local.
+# - Format must match extension (.safetensors or .gguf).
+# - pipeline_config_dir must point to a local diffusers-style config directory.
+
+name: Rayzist_bf16
+architecture: z_image_turbo
+backend_preference:
+  - diffusers
+
+# Local pipeline config directory used by ZImagePipeline.from_pretrained(...)
+pipeline_config_dir: ./config
+
+components:
+  # Main denoiser/transformer. Can be safetensors or gguf.
+  transformer:
+    path: ./weights/transformer.safetensors
+    format: safetensors
+
+  # VAE path. Bootstrap backend currently supports safetensors VAE.
+  vae:
+    path: ./weights/vae.safetensors
+    format: safetensors
+
+  # Optional encoder component for future backend expansion.
+  # Keep this if your pack management wants explicit encoder tracking.
+  # text_encoder:
+  #   path: ./weights/text_encoder.gguf
+  #   format: gguf
+
+required_configs:
+  - ./config/model_index.json
