@@ -210,16 +210,6 @@ foreach ($file in $filesToCopy) {
   Copy-Item (Join-Path $rootDir $file) -Destination (Join-Path $portableRoot $file) -Force
 }
 
-$portableScriptsDir = Join-Path $portableRoot "scripts"
-New-Item -ItemType Directory -Path $portableScriptsDir -Force | Out-Null
-$scriptsToCopy = @("bootstrap_env.ps1", "fetch_model_assets.ps1")
-foreach ($scriptFile in $scriptsToCopy) {
-  $sourceScript = Join-Path $rootDir ("scripts\" + $scriptFile)
-  if (Test-Path $sourceScript) {
-    Copy-Item $sourceScript -Destination (Join-Path $portableScriptsDir $scriptFile) -Force
-  }
-}
-
 New-Item -ItemType Directory -Path (Join-Path $portableRoot "outputs") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $portableRoot "data") -Force | Out-Null
 if (-not (Test-Path (Join-Path $portableRoot "data\\.gitkeep"))) {

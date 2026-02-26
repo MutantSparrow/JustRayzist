@@ -162,16 +162,12 @@ if !MISSING_ASSETS! EQU 0 exit /b 0
 echo.
 echo Missing default model assets for pack Rayzist_bf16.
 echo Attempting download from Hugging Face...
-if not exist "scripts\fetch_model_assets.ps1" (
-  echo Missing required fetch script: scripts\fetch_model_assets.ps1
-  exit /b 1
-)
-
-powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\fetch_model_assets.ps1"
-if errorlevel 1 (
-  echo Model download failed.
-  exit /b 1
-)
+call :download_asset "https://huggingface.co/MutantSparrow/Ray/resolve/main/Z-IMAGE-TURBO/Rayzist.v1.0.safetensors" "!NEEDED_TRANSFORMER!"
+if errorlevel 1 exit /b 1
+call :download_asset "https://huggingface.co/Owen777/UltraFlux-v1/resolve/main/vae/diffusion_pytorch_model.safetensors" "!NEEDED_VAE!"
+if errorlevel 1 exit /b 1
+call :download_asset "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" "!NEEDED_ENCODER!"
+if errorlevel 1 exit /b 1
 
 if not exist "!NEEDED_TRANSFORMER!" (
   echo Missing file after download: !NEEDED_TRANSFORMER!
@@ -187,6 +183,33 @@ if not exist "!NEEDED_ENCODER!" (
 )
 
 echo Model assets ready.
+exit /b 0
+
+:download_asset
+set "ASSET_URL=%~1"
+set "ASSET_DEST=%~2"
+for %%I in ("%ASSET_DEST%") do set "ASSET_DIR=%%~dpI"
+if not exist "%ASSET_DIR%" mkdir "%ASSET_DIR%" >nul 2>&1
+set "ASSET_TMP=%ASSET_DEST%.part"
+if exist "%ASSET_TMP%" del /f /q "%ASSET_TMP%" >nul 2>&1
+
+echo Downloading:
+echo   %ASSET_URL%
+echo To:
+echo   %ASSET_DEST%
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue';Invoke-WebRequest -Uri '%ASSET_URL%' -OutFile '%ASSET_TMP%' -MaximumRedirection 10"
+if errorlevel 1 (
+  echo Download failed for %ASSET_URL%
+  if exist "%ASSET_TMP%" del /f /q "%ASSET_TMP%" >nul 2>&1
+  exit /b 1
+)
+move /y "%ASSET_TMP%" "%ASSET_DEST%" >nul
+if errorlevel 1 (
+  echo Failed to finalize downloaded file: %ASSET_DEST%
+  if exist "%ASSET_TMP%" del /f /q "%ASSET_TMP%" >nul 2>&1
+  exit /b 1
+)
 exit /b 0
 
 :find_listening_pid
