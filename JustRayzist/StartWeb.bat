@@ -198,7 +198,7 @@ echo   %ASSET_URL%
 echo To:
 echo   %ASSET_DEST%
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue';Invoke-WebRequest -Uri '%ASSET_URL%' -OutFile '%ASSET_TMP%' -MaximumRedirection 10"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $wc=New-Object Net.WebClient; $wc.DownloadProgressChanged += { param($s,$e) if($e.ProgressPercentage -ge 0){ Write-Progress -Activity 'Downloading model asset' -Status ($e.ProgressPercentage.ToString() + '%%') -PercentComplete $e.ProgressPercentage } }; $wc.DownloadFile('%ASSET_URL%','%ASSET_TMP%'); Write-Progress -Activity 'Downloading model asset' -Completed"
 if errorlevel 1 (
   echo Download failed for %ASSET_URL%
   if exist "%ASSET_TMP%" del /f /q "%ASSET_TMP%" >nul 2>&1
