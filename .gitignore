@@ -23,6 +23,7 @@ JustRayzist/justrayzist.egg-info/
 JustRayzist/models/**/*.safetensors
 JustRayzist/models/**/*.gguf
 JustRayzist/models/**/*.pth
+!JustRayzist/models/upscaler/*.pth
 
 dist/
 
