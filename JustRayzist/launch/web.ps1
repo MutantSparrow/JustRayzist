@@ -27,7 +27,7 @@ function Resolve-ReadyPython {
     if (-not $isPathCommand -and -not (Test-Path $candidate)) {
       continue
     }
-    & $candidate -c "import typer" *> $null
+    & $candidate -c "import typer,fastapi,uvicorn,PIL,torch" *> $null
     if ($LASTEXITCODE -eq 0) {
       return $candidate
     }

@@ -39,9 +39,10 @@ echo   [3] high         (24GB VRAM target)
 echo.
 
 choice /c 123 /n /m "Choose profile [1-3]: "
-if errorlevel 3 set "PROFILE=high"
-if errorlevel 2 set "PROFILE=balanced"
-if errorlevel 1 set "PROFILE=constrained"
+set "PROFILE_CHOICE=%ERRORLEVEL%"
+if "%PROFILE_CHOICE%"=="3" set "PROFILE=high"
+if "%PROFILE_CHOICE%"=="2" set "PROFILE=balanced"
+if "%PROFILE_CHOICE%"=="1" set "PROFILE=constrained"
 
 echo.
 echo Select model pack:
@@ -141,7 +142,7 @@ if /I "%CANDIDATE%"=="python" goto :check_candidate
 if not exist "%CANDIDATE%" goto :eof
 
 :check_candidate
-"%CANDIDATE%" -c "import typer" >nul 2>&1
+"%CANDIDATE%" -c "import typer,fastapi,uvicorn,PIL,torch" >nul 2>&1
 if errorlevel 1 goto :eof
 set "PYTHON_EXE=%CANDIDATE%"
 goto :eof
