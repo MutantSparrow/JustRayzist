@@ -13,6 +13,7 @@ Run app/dev commands from `JustRayzist/`:
 ```powershell
 cd .\JustRayzist
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_env.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
 .\StartWeb.bat
 ```
 

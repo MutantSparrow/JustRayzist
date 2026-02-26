@@ -5,6 +5,17 @@
 - Local model pack configured at `models/packs/<pack_name>/modelpack.yaml`.
 - For GPU tests: CUDA-enabled PyTorch and NVIDIA driver.
 
+## Fetch Required Model Assets (One-Time Online Setup)
+Run this before `validate-models` on a fresh clone:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1
+```
+
+This downloads and places:
+- `models/packs/Rayzist_bf16/weights/Rayzist.v1.0.safetensors`
+- `models/packs/Rayzist_bf16/weights/ultrafluxVAEImproved_v10.safetensors`
+- `models/packs/Rayzist_bf16/config/text_encoder/model.safetensors`
+
 ## Validate Environment
 ```powershell
 python -m app.cli.main doctor

@@ -6,6 +6,10 @@ Check:
 - File extension matches declared `format` (`safetensors` or `gguf`).
 - `pipeline_config_dir` exists and contains required config files.
 
+Action:
+- Fetch required model weights into expected local paths:
+  - `powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1`
+
 ## Generation fails with model key mismatch
 Possible cause:
 - Transformer checkpoint format does not match expected architecture mapping.
