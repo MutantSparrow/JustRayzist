@@ -8,16 +8,23 @@ set "HOST=127.0.0.1"
 set "PORT=37717"
 
 set "PYTHON_EXE="
-call :try_python "%CD%\runtime\python\python.exe"
-if not defined PYTHON_EXE call :try_python "%CD%\.venv\Scripts\python.exe"
-if not defined PYTHON_EXE call :try_python "python"
+call :try_python "%CD%\runtime\python\python.exe" "%CD%\runtime\python"
+if not defined PYTHON_EXE call :try_python "%CD%\.venv\python.exe" "%CD%\.venv"
+if not defined PYTHON_EXE call :try_python "%CD%\.venv\Scripts\python.exe" "%CD%\.venv\Scripts"
+if not defined PYTHON_EXE if exist "scripts\bootstrap_env.ps1" call :try_python "python"
 
 if not defined PYTHON_EXE (
   echo.
   echo No usable Python interpreter with project dependencies was found.
-  echo Tried: runtime\python\python.exe, .venv\Scripts\python.exe, and PATH python.
-  echo Repair local env with:
-  echo   powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1
+  if exist "scripts\bootstrap_env.ps1" (
+    echo Tried: runtime\python\python.exe, .venv\python.exe, .venv\Scripts\python.exe, and PATH python.
+  ) else (
+    echo Tried: runtime\python\python.exe, .venv\python.exe, and .venv\Scripts\python.exe.
+  )
+  if exist "scripts\bootstrap_env.ps1" (
+    echo Repair local env with:
+    echo   powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1
+  )
   echo Or install into a selected interpreter:
   echo   python -m pip install -e .
   set "EXIT_CODE=1"
@@ -34,7 +41,7 @@ echo JustRayzist Web Launcher
 echo ========================
 echo Select runtime profile:
 echo   [1] constrained  (12GB VRAM target)
-echo   [2] balanced     (16GB VRAM target, default)
+echo   [2] balanced     (16GB VRAM target)
 echo   [3] high         (24GB VRAM target)
 echo.
 
@@ -138,14 +145,27 @@ goto :eof
 
 :try_python
 set "CANDIDATE=%~1"
+set "RUNTIME_DIR=%~2"
 if /I "%CANDIDATE%"=="python" goto :check_candidate
 if not exist "%CANDIDATE%" goto :eof
+if defined RUNTIME_DIR (
+  call :has_python_runtime "%RUNTIME_DIR%"
+  if errorlevel 1 goto :eof
+)
 
 :check_candidate
 "%CANDIDATE%" -c "import typer,fastapi,uvicorn,PIL,torch" >nul 2>&1
 if errorlevel 1 goto :eof
 set "PYTHON_EXE=%CANDIDATE%"
 goto :eof
+
+:has_python_runtime
+set "PY_RUNTIME_DIR=%~1"
+if exist "%PY_RUNTIME_DIR%\python3.dll" exit /b 0
+for %%F in ("%PY_RUNTIME_DIR%\python*.dll") do (
+  if exist "%%~fF" exit /b 0
+)
+exit /b 1
 
 :ensure_rayzist_pack_assets
 set "PACK_ROOT=%CD%\models\packs\Rayzist_bf16"

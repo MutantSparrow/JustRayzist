@@ -63,6 +63,37 @@ function Invoke-Robocopy {
   }
 }
 
+function Ensure-PortableVenvLayout {
+  param([string]$VenvDir)
+
+  $scriptsDir = Join-Path $VenvDir "Scripts"
+  New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+
+  $rootPython = Join-Path $VenvDir "python.exe"
+  $scriptsPython = Join-Path $scriptsDir "python.exe"
+  if ((Test-Path $scriptsPython) -and -not (Test-Path $rootPython)) {
+    Copy-Item $scriptsPython -Destination $rootPython -Force
+  } elseif ((Test-Path $rootPython) -and -not (Test-Path $scriptsPython)) {
+    Copy-Item $rootPython -Destination $scriptsPython -Force
+  }
+
+  $rootPythonw = Join-Path $VenvDir "pythonw.exe"
+  $scriptsPythonw = Join-Path $scriptsDir "pythonw.exe"
+  if ((Test-Path $scriptsPythonw) -and -not (Test-Path $rootPythonw)) {
+    Copy-Item $scriptsPythonw -Destination $rootPythonw -Force
+  } elseif ((Test-Path $rootPythonw) -and -not (Test-Path $scriptsPythonw)) {
+    Copy-Item $rootPythonw -Destination $scriptsPythonw -Force
+  }
+
+  $runtimeDlls = Get-ChildItem -Path $VenvDir -Filter "python*.dll" -File -ErrorAction SilentlyContinue
+  foreach ($dll in $runtimeDlls) {
+    $scriptsDllPath = Join-Path $scriptsDir $dll.Name
+    if (-not (Test-Path $scriptsDllPath)) {
+      Copy-Item $dll.FullName -Destination $scriptsDllPath -Force
+    }
+  }
+}
+
 function Resolve-PythonHome {
   param([string]$PythonExecutable)
 
@@ -122,8 +153,9 @@ $rootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $portableRoot = Join-Path $rootDir $OutputDir
 $portableRoot = [System.IO.Path]::GetFullPath($portableRoot)
 
-$localVenvPython = Join-Path $rootDir ".venv\\Scripts\\python.exe"
-$PythonExe = Resolve-ReadyPython -PreferredPythonExe $PythonExe -Candidates @($localVenvPython, "python")
+$localVenvRootPython = Join-Path $rootDir ".venv\\python.exe"
+$localVenvScriptsPython = Join-Path $rootDir ".venv\\Scripts\\python.exe"
+$PythonExe = Resolve-ReadyPython -PreferredPythonExe $PythonExe -Candidates @($localVenvRootPython, $localVenvScriptsPython, "python")
 if ([string]::IsNullOrWhiteSpace($PythonExe)) {
   throw "No usable Python interpreter with required dependencies found. Run scripts\\bootstrap_env.ps1 or pass -PythonExe."
 }
@@ -153,7 +185,9 @@ if ($pythonInfo.IsVirtualEnv -and (Test-Path $pythonInfo.SitePackagesSource)) {
 $sourceVenvDir = Join-Path $rootDir ".venv"
 if (-not $SkipVenv) {
   $portableVenvDir = Join-Path $portableRoot ".venv"
-  $sourceVenvPython = Join-Path $sourceVenvDir "Scripts\\python.exe"
+  $sourceVenvRootPython = Join-Path $sourceVenvDir "python.exe"
+  $sourceVenvScriptsPython = Join-Path $sourceVenvDir "Scripts\\python.exe"
+  $sourceVenvPython = if (Test-Path $sourceVenvRootPython) { $sourceVenvRootPython } else { $sourceVenvScriptsPython }
   if ((Test-Path $sourceVenvPython) -and (Test-PythonDependencySet -PythonPath $sourceVenvPython)) {
     Write-Host "Copying local virtual environment to portable bundle: $sourceVenvDir"
     Invoke-Robocopy -Source $sourceVenvDir -Destination $portableVenvDir -ExtraArgs @(
@@ -164,14 +198,8 @@ if (-not $SkipVenv) {
     Invoke-Robocopy -Source $runtimeDir -Destination $portableVenvDir -ExtraArgs @(
       "/XD", "__pycache__", ".pytest_cache", ".ruff_cache", "Lib\\__pycache__", "Lib\\site-packages\\__pycache__"
     )
-    $portableVenvScriptsDir = Join-Path $portableVenvDir "Scripts"
-    New-Item -ItemType Directory -Path $portableVenvScriptsDir -Force | Out-Null
-    Copy-Item (Join-Path $portableVenvDir "python.exe") -Destination (Join-Path $portableVenvScriptsDir "python.exe") -Force
-    $portablePythonw = Join-Path $portableVenvDir "pythonw.exe"
-    if (Test-Path $portablePythonw) {
-      Copy-Item $portablePythonw -Destination (Join-Path $portableVenvScriptsDir "pythonw.exe") -Force
-    }
   }
+  Ensure-PortableVenvLayout -VenvDir $portableVenvDir
 }
 
 Write-Host "Copying application files..."
@@ -220,10 +248,20 @@ $portablePython = Join-Path $runtimeDir "python.exe"
 if (-not (Test-Path $portablePython)) {
   throw "Portable build is missing runtime\\python\\python.exe."
 }
+$portablePythonDll = Join-Path $runtimeDir "python3.dll"
+$portableVersionedDll = Get-ChildItem -Path $runtimeDir -Filter "python*.dll" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not (Test-Path $portablePythonDll) -and -not $portableVersionedDll) {
+  throw "Portable build is missing Python runtime DLLs under runtime\\python."
+}
 if (-not $SkipVenv) {
-  $portableVenvPython = Join-Path $portableRoot ".venv\\Scripts\\python.exe"
+  $portableVenvPython = Join-Path $portableRoot ".venv\\python.exe"
   if (-not (Test-Path $portableVenvPython)) {
-    throw "Portable build is missing .venv\\Scripts\\python.exe."
+    throw "Portable build is missing .venv\\python.exe."
+  }
+  $portableVenvDll = Join-Path $portableRoot ".venv\\python3.dll"
+  $portableVenvVersionedDll = Get-ChildItem -Path (Join-Path $portableRoot ".venv") -Filter "python*.dll" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not (Test-Path $portableVenvDll) -and -not $portableVenvVersionedDll) {
+    throw "Portable build is missing Python runtime DLLs under .venv."
   }
 }
 
@@ -242,7 +280,7 @@ if ($LASTEXITCODE -ne 0) {
   throw "Portable runtime is missing required dependencies: $missingModules. Build using a Python environment with project dependencies installed."
 }
 if (-not $SkipVenv) {
-  $portableVenvPython = Join-Path $portableRoot ".venv\\Scripts\\python.exe"
+  $portableVenvPython = Join-Path $portableRoot ".venv\\python.exe"
   $missingVenvModuleOutput = & $portableVenvPython -c $dependencyCheckScript
   if ($LASTEXITCODE -ne 0) {
     $missingVenvModules = ($missingVenvModuleOutput -join ", ").Trim()
