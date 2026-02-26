@@ -157,7 +157,7 @@ if not exist "!NEEDED_TRANSFORMER!" set "MISSING_ASSETS=1"
 if not exist "!NEEDED_VAE!" set "MISSING_ASSETS=1"
 if not exist "!NEEDED_ENCODER!" set "MISSING_ASSETS=1"
 
-if !MISSING_ASSETS! EQU 0 goto :eof
+if !MISSING_ASSETS! EQU 0 exit /b 0
 
 echo.
 echo Missing default model assets for pack Rayzist_bf16.
@@ -187,7 +187,7 @@ if not exist "!NEEDED_ENCODER!" (
 )
 
 echo Model assets ready.
-goto :eof
+exit /b 0
 
 :find_listening_pid
 set "%~2="
