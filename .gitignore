@@ -13,10 +13,8 @@ JustRayzist/venv/
 JustRayzist/env/
 
 # Local runtime data
-JustRayzist/outputs/*
-!JustRayzist/outputs/.gitkeep
-JustRayzist/data/*
-!JustRayzist/data/.gitkeep
+JustRayzist/outputs/
+JustRayzist/data/
 JustRayzist/justrayzist.egg-info/
 
 # Local model binaries (too large for regular Git)
@@ -24,6 +22,11 @@ JustRayzist/models/**/*.safetensors
 JustRayzist/models/**/*.gguf
 JustRayzist/models/**/*.pth
 !JustRayzist/models/upscaler/*.pth
+
+# Local-only roadmap / dev artifacts
+JustRayzist.md
+JustRayzist/tests/
+JustRayzist/scripts/test_*.py
 
 dist/
 
