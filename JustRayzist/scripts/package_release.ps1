@@ -24,10 +24,16 @@ if ($SkipModels) {
 
 Write-Host "Building portable bundle..."
 & powershell -NoProfile -ExecutionPolicy Bypass -File $buildScript @buildArgs
+if ($LASTEXITCODE -ne 0) {
+  throw "Portable build failed with exit code $LASTEXITCODE."
+}
 
 $bundleDir = [System.IO.Path]::GetFullPath((Join-Path $rootDir $OutputDir))
 if (-not (Test-Path $bundleDir)) {
   throw "Portable bundle directory was not created: $bundleDir"
+}
+if (-not (Test-Path (Join-Path $bundleDir "StartWeb.bat"))) {
+  throw "Portable bundle is incomplete. Missing StartWeb.bat in $bundleDir"
 }
 
 $roadmapPath = Join-Path $bundleDir "JustRayzist.md"

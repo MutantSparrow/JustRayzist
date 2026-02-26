@@ -17,6 +17,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
 .\StartWeb.bat
 ```
 
+`StartWeb.bat` now auto-checks required `Rayzist_bf16` assets and downloads missing files from Hugging Face before launch.
+
 Build portable artifacts into root `dist/`:
 
 ```powershell

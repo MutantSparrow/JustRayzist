@@ -78,6 +78,13 @@ set "PACK_CHOICE_INDEX=%ERRORLEVEL%"
 
 set "PACK=!PACK_%PACK_CHOICE_INDEX%!"
 set "JUSTRAYZIST_PACK=!PACK!"
+if /I "!PACK!"=="Rayzist_bf16" (
+  call :ensure_rayzist_pack_assets
+  if errorlevel 1 (
+    set "EXIT_CODE=1"
+    goto :after_run
+  )
+)
 
 call :find_listening_pid !PORT! PORT_PID
 if defined PORT_PID (
@@ -137,6 +144,49 @@ if not exist "%CANDIDATE%" goto :eof
 "%CANDIDATE%" -c "import typer" >nul 2>&1
 if errorlevel 1 goto :eof
 set "PYTHON_EXE=%CANDIDATE%"
+goto :eof
+
+:ensure_rayzist_pack_assets
+set "PACK_ROOT=%CD%\models\packs\Rayzist_bf16"
+set "NEEDED_TRANSFORMER=%PACK_ROOT%\weights\Rayzist.v1.0.safetensors"
+set "NEEDED_VAE=%PACK_ROOT%\weights\ultrafluxVAEImproved_v10.safetensors"
+set "NEEDED_ENCODER=%PACK_ROOT%\config\text_encoder\model.safetensors"
+set "MISSING_ASSETS=0"
+
+if not exist "!NEEDED_TRANSFORMER!" set "MISSING_ASSETS=1"
+if not exist "!NEEDED_VAE!" set "MISSING_ASSETS=1"
+if not exist "!NEEDED_ENCODER!" set "MISSING_ASSETS=1"
+
+if !MISSING_ASSETS! EQU 0 goto :eof
+
+echo.
+echo Missing default model assets for pack Rayzist_bf16.
+echo Attempting download from Hugging Face...
+if not exist "scripts\fetch_model_assets.ps1" (
+  echo Missing required fetch script: scripts\fetch_model_assets.ps1
+  exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\fetch_model_assets.ps1"
+if errorlevel 1 (
+  echo Model download failed.
+  exit /b 1
+)
+
+if not exist "!NEEDED_TRANSFORMER!" (
+  echo Missing file after download: !NEEDED_TRANSFORMER!
+  exit /b 1
+)
+if not exist "!NEEDED_VAE!" (
+  echo Missing file after download: !NEEDED_VAE!
+  exit /b 1
+)
+if not exist "!NEEDED_ENCODER!" (
+  echo Missing file after download: !NEEDED_ENCODER!
+  exit /b 1
+)
+
+echo Model assets ready.
 goto :eof
 
 :find_listening_pid

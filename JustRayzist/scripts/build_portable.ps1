@@ -7,6 +7,47 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Test-PythonDependencySet {
+  param([string]$PythonPath)
+
+  $previousPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    & $PythonPath -c "import typer,fastapi,uvicorn,PIL,torch" *> $null
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+}
+
+function Resolve-ReadyPython {
+  param(
+    [string]$PreferredPythonExe,
+    [string[]]$Candidates
+  )
+
+  $candidateList = @()
+  if (-not [string]::IsNullOrWhiteSpace($PreferredPythonExe)) {
+    $candidateList += $PreferredPythonExe
+  } else {
+    $candidateList += $Candidates
+  }
+
+  foreach ($candidate in $candidateList) {
+    $isPathCommand = $candidate -eq "python"
+    if (-not $isPathCommand -and -not (Test-Path $candidate)) {
+      continue
+    }
+    if (Test-PythonDependencySet -PythonPath $candidate) {
+      return $candidate
+    }
+  }
+
+  return $null
+}
+
 function Invoke-Robocopy {
   param(
     [Parameter(Mandatory = $true)][string]$Source,
@@ -26,6 +67,9 @@ function Resolve-PythonHome {
 
   if ([string]::IsNullOrWhiteSpace($PythonExecutable)) {
     $PythonExecutable = (Get-Command python -ErrorAction Stop).Source
+  } elseif (-not (Test-Path $PythonExecutable)) {
+    $command = Get-Command $PythonExecutable -ErrorAction Stop
+    $PythonExecutable = $command.Source
   }
 
   $resolvedExe = (Resolve-Path $PythonExecutable).Path
@@ -77,11 +121,10 @@ $rootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $portableRoot = Join-Path $rootDir $OutputDir
 $portableRoot = [System.IO.Path]::GetFullPath($portableRoot)
 
+$localVenvPython = Join-Path $rootDir ".venv\\Scripts\\python.exe"
+$PythonExe = Resolve-ReadyPython -PreferredPythonExe $PythonExe -Candidates @($localVenvPython, "python")
 if ([string]::IsNullOrWhiteSpace($PythonExe)) {
-  $localVenvPython = Join-Path $rootDir ".venv\\Scripts\\python.exe"
-  if (Test-Path $localVenvPython) {
-    $PythonExe = $localVenvPython
-  }
+  throw "No usable Python interpreter with required dependencies found. Run scripts\\bootstrap_env.ps1 or pass -PythonExe."
 }
 
 if ($Clean -and (Test-Path $portableRoot)) {
@@ -128,7 +171,10 @@ if (-not $SkipModels) {
     "/XD", "__pycache__", ".cache"
   )
 } else {
-  New-Item -ItemType Directory -Path (Join-Path $portableRoot "models\\packs") -Force | Out-Null
+  Invoke-Robocopy -Source (Join-Path $rootDir "models\\packs") -Destination (Join-Path $portableRoot "models\\packs") -ExtraArgs @(
+    "/XD", "__pycache__", ".cache",
+    "/XF", "*.safetensors", "*.gguf"
+  )
 }
 
 $filesToCopy = @(
@@ -137,6 +183,16 @@ $filesToCopy = @(
 )
 foreach ($file in $filesToCopy) {
   Copy-Item (Join-Path $rootDir $file) -Destination (Join-Path $portableRoot $file) -Force
+}
+
+$portableScriptsDir = Join-Path $portableRoot "scripts"
+New-Item -ItemType Directory -Path $portableScriptsDir -Force | Out-Null
+$scriptsToCopy = @("bootstrap_env.ps1", "fetch_model_assets.ps1")
+foreach ($scriptFile in $scriptsToCopy) {
+  $sourceScript = Join-Path $rootDir ("scripts\" + $scriptFile)
+  if (Test-Path $sourceScript) {
+    Copy-Item $sourceScript -Destination (Join-Path $portableScriptsDir $scriptFile) -Force
+  }
 }
 
 New-Item -ItemType Directory -Path (Join-Path $portableRoot "outputs") -Force | Out-Null

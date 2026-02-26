@@ -139,6 +139,7 @@ Windows profile launcher:
   - `2` = balanced
   - `3` = high
 - Choose model pack from dynamically discovered entries under `models/packs/*/modelpack.yaml`
+- If `Rayzist_bf16` assets are missing, launcher auto-downloads them via `scripts/fetch_model_assets.ps1`
 
 Web API:
 - `POST /generate` with JSON `{ "prompt": "...", "width": 1024, "height": 1024, "enhance_prompt": false }`
