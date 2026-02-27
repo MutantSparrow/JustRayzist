@@ -5,6 +5,11 @@
 - Local model pack configured at `models/packs/<pack_name>/modelpack.yaml`.
 - For GPU tests: CUDA-enabled PyTorch and NVIDIA driver.
 
+## Bootstrap Local `.venv`
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe E:\APPS\Python_3.11\python.exe -Lane cu128
+```
+
 ## Fetch Required Model Assets (One-Time Online Setup)
 Run this before `validate-models` on a fresh clone:
 ```powershell
@@ -134,6 +139,7 @@ python -m app.cli.main serve --host 127.0.0.1 --port 37717
 
 Windows profile launcher:
 - Run `StartWeb.bat`
+- Optional: set `JUSTRAYZIST_PYTHON` to force source-mode interpreter path (example: `set JUSTRAYZIST_PYTHON=E:\APPS\Python\python.exe`).
 - Choose profile:
   - `1` = constrained
   - `2` = balanced
@@ -142,11 +148,16 @@ Windows profile launcher:
 - If `Rayzist_bf16` assets are missing, launcher auto-downloads them from Hugging Face before startup
 
 Web API:
+- `GET /health`
+- `GET /config`
 - `POST /generate` with JSON `{ "prompt": "...", "width": 1024, "height": 1024, "enhance_prompt": false }`
 - `POST /upscale` with JSON `{ "filename": "justrayzist_....png", "seed": 1234, "scheduler_mode": "euler", "enhance_prompt": false }`
 - `GET /images?prompt=<keyword>&limit=120&offset=0`
 - `GET /images/{filename}`
 - `GET /model-packs`
+- `DELETE /images/{filename}?confirm=DELETE`
+- `DELETE /gallery?confirm=DELETE`
+- `POST /server/kill`
 
 Web UI:
 - Open `http://127.0.0.1:37717/`
@@ -171,39 +182,44 @@ Web UI:
   - hold-to-compare link temporarily swaps the preview to the original source image
   - keyboard delete in fullscreen (`Delete`/`Backspace`) opens Yes/No confirmation
 
-## Build Portable Bundle (Windows)
-Create a standalone folder with bundled Python runtime:
+## Build PyInstaller One-Dir (Windows)
+Build lane-specific one-dir binaries:
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1 -Clean
+powershell -ExecutionPolicy Bypass -File scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
 ```
 
 Useful flags:
-- `-OutputDir dist\MyPortableBuild`
-- `-PythonExe E:\APPS\Python_3.13\python.exe`
-- `-SkipModels` (skip `models/packs`; keeps `models/upscaler` for upscale flow)
-- `-SkipVenv` (do not include project `.venv` in portable bundle)
+- `-Lane cu126|cu128`
+- `-PythonExe C:\Path\To\python.exe`
+- `-SkipDependencyInstall` (reuse existing build venv dependencies)
 
-Notes:
-- If `-PythonExe` is omitted, the script prefers project-local `.venv\Scripts\python.exe` when available, then falls back to PATH `python`.
-- If a virtual environment interpreter is used, the script bundles base Python runtime and overlays that venv's `site-packages` into the portable runtime.
-- By default, portable build also copies project `.venv` into `<bundle>\.venv` (unless `-SkipVenv` is used).
-- Portable build now validates:
-  - required runtime dependencies (`typer`, `fastapi`, `uvicorn`, `Pillow`, `torch`)
-  - bundled `.venv` dependency availability when `.venv` is included
-  - default upscale checkpoint presence (`models/upscaler/2x_RealESRGAN_x2plus.pth`)
+Outputs:
+- `dist\pyinstaller\<lane>\justrayzist-web\justrayzist-web.exe`
+- `dist\pyinstaller\<lane>\justrayzist-cli\justrayzist-cli.exe`
+
+## Create Release Artifact (Windows)
+Build (unless skipped), assemble release folder, and zip it:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Lane cu128 -Version v0.10.0-beta.01 -Clean
+```
+
+Useful flags:
+- `-Lane cu126|cu128`
+- `-Version vX.Y.Z`
+- `-PythonExe C:\Path\To\python.exe`
+- `-UseActivePython` (skip build-venv creation and build with `-PythonExe` directly)
+- `-SkipDependencyInstall` (assume PyInstaller + runtime deps are already installed)
+- `-SkipBuild`
+- `-NoZip`
+
+Release policy:
+- Model weights are never bundled in artifacts (`.safetensors`, `.gguf`, `.pth` are removed).
+- `StartWeb.bat` downloads missing `Rayzist_bf16` assets from Hugging Face on first launch.
+- Runtime lane marker is written to `release_lane.txt`.
+
+CUDA/driver baseline:
+- `cu126`: NVIDIA driver `>= 561.17` (20xx/30xx/40xx fallback lane)
+- `cu128`: NVIDIA driver `>= 572.61` (preferred lane, required for 50xx)
 
 Run packaged app:
-- Open `<bundle>\StartWeb.bat`
-
-## Create Release Archive (Windows)
-Build portable folder and zip it:
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\package_release.ps1
-```
-
-Useful flags:
-- `-OutputDir dist\MyPortableBuild`
-- `-ZipPath dist\JustRayzist_v1.zip`
-- `-PythonExe E:\APPS\Python_3.13\python.exe`
-- `-SkipModels`
-- `-SkipVenv`
+- Open `<release>\StartWeb.bat`

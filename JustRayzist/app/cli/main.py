@@ -230,7 +230,7 @@ def upscale_test(
     checkpoint: Path = typer.Option(
         Path("models/upscaler/2x_RealESRGAN_x2plus.pth"),
         "--checkpoint",
-        help="Path to upscaler .pth checkpoint.",
+        help="Path to upscaler checkpoint (.pth or .safetensors).",
     ),
     output_dir: Optional[Path] = typer.Option(
         None,
@@ -338,7 +338,7 @@ def upscale_refine(
     checkpoint: Path = typer.Option(
         Path("models/upscaler/2x_RealESRGAN_x2plus.pth"),
         "--checkpoint",
-        help="Path to upscaler .pth checkpoint.",
+        help="Path to upscaler checkpoint (.pth or .safetensors).",
     ),
     strength: float = typer.Option(0.20, "--strength", min=0.01, max=0.99),
     refine_steps: int = typer.Option(6, "--refine-steps", min=1, max=50),
@@ -409,7 +409,8 @@ def upscale_refine(
     model_pack = _load_pack_or_exit(seed_settings, pack)
     _assert_supported_backend_or_exit(model_pack)
     session = GenerationSession(settings=seed_settings, model_pack=model_pack)
-    source_image = Image.open(input_path).convert("RGB")
+    with Image.open(input_path) as source_file:
+        source_image = source_file.convert("RGB")
 
     try:
         result = session.upscale_and_refine(

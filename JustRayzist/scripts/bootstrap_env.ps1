@@ -1,11 +1,19 @@
 param(
-  [string]$PythonExe = "python"
+  [string]$PythonExe = "python",
+  [ValidateSet("cu126", "cu128")]
+  [string]$Lane = "cu128"
 )
 
 $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $venvRoot = Join-Path $projectRoot ".venv"
 $venvPython = Join-Path $venvRoot "Scripts\\python.exe"
+$tmpRoot = Join-Path $projectRoot ".build\\tmp"
+$torchRequirements = Join-Path $projectRoot ("requirements\\torch-" + $Lane + ".txt")
+
+New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
+$env:TEMP = $tmpRoot
+$env:TMP = $tmpRoot
 
 function Test-ModuleImport {
   param(
@@ -43,8 +51,30 @@ function Invoke-BestEffort {
   }
 }
 
+function Invoke-Checked {
+  param(
+    [Parameter(Mandatory = $true)][string]$Executable,
+    [Parameter(Mandatory = $true)][string[]]$Arguments,
+    [string]$WorkingDirectory = ""
+  )
+
+  if ($WorkingDirectory) {
+    Push-Location $WorkingDirectory
+  }
+  try {
+    & $Executable @Arguments
+    if ($LASTEXITCODE -ne 0) {
+      throw "Command failed: $Executable $($Arguments -join ' ') (exit code $LASTEXITCODE)"
+    }
+  } finally {
+    if ($WorkingDirectory) {
+      Pop-Location
+    }
+  }
+}
+
 if (-not (Test-Path $venvPython)) {
-  & $PythonExe -m venv $venvRoot
+  Invoke-Checked -Executable $PythonExe -Arguments @("-m", "venv", $venvRoot)
 }
 
 if (-not (Test-ModuleImport -PythonPath $venvPython -ModuleName "pip")) {
@@ -53,7 +83,7 @@ if (-not (Test-ModuleImport -PythonPath $venvPython -ModuleName "pip")) {
 
 if (-not (Test-ModuleImport -PythonPath $venvPython -ModuleName "pip")) {
   Write-Host ".venv is incomplete. Rebuilding virtual environment..."
-  & $PythonExe -m venv --clear $venvRoot
+  Invoke-Checked -Executable $PythonExe -Arguments @("-m", "venv", "--clear", $venvRoot)
   [void](Invoke-BestEffort -PythonPath $venvPython -Arguments @("-m", "ensurepip", "--upgrade"))
 }
 
@@ -61,9 +91,13 @@ if (-not (Test-ModuleImport -PythonPath $venvPython -ModuleName "pip")) {
   throw "Failed to bootstrap pip inside .venv."
 }
 
-Push-Location $projectRoot
-& $venvPython -m pip install --upgrade pip
-& $venvPython -m pip install -e .[dev]
-Pop-Location
+if (-not (Test-Path $torchRequirements)) {
+  throw "Missing torch requirements file for lane ${Lane}: $torchRequirements"
+}
 
-Write-Host "Environment ready. Use $venvPython for commands."
+Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "--upgrade", "pip")
+Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "--upgrade", "setuptools", "wheel")
+Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $torchRequirements)
+Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "--no-build-isolation", "-e", ".[dev]") -WorkingDirectory $projectRoot
+
+Write-Host "Environment ready. Use $venvPython for commands. Lane=$Lane."

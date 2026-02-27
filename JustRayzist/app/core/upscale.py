@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+import inspect
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -122,9 +123,13 @@ def _extract_state_dict(torch_module: Any, checkpoint: Any) -> dict[str, Any]:
 def _normalize_state_dict_keys(state_dict: dict[str, Any]) -> dict[str, Any]:
     if not state_dict:
         return state_dict
-    if any(key.startswith("module.") for key in state_dict):
-        return {key.removeprefix("module."): value for key, value in state_dict.items()}
-    return state_dict
+    normalized: dict[str, Any] = {}
+    for key, value in state_dict.items():
+        candidate = key.removeprefix("module.")
+        candidate = candidate.replace(".layer_norm.", ".norm.")
+        if candidate not in normalized:
+            normalized[candidate] = value
+    return normalized
 
 
 def _detect_upscaler_architecture(state_dict: dict[str, Any]) -> str:
@@ -605,7 +610,8 @@ def run_upscale_test(
     checkpoint_path: Path,
     profile_name: str,
 ) -> UpscaleResult:
-    source = Image.open(input_image_path).convert("RGB")
+    with Image.open(input_image_path) as source_file:
+        source = source_file.convert("RGB")
     return upscale_image(
         image=source,
         checkpoint_path=checkpoint_path,
@@ -622,7 +628,23 @@ def upscale_image(
     import torch
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if checkpoint_path.suffix.lower() == ".safetensors":
+        try:
+            from safetensors.torch import load_file as load_safetensors_file
+        except Exception as exc:
+            raise RuntimeError(
+                "safetensors checkpoint requested but safetensors is not available."
+            ) from exc
+        checkpoint = load_safetensors_file(str(checkpoint_path), device="cpu")
+    else:
+        load_kwargs: dict[str, Any] = {"map_location": "cpu"}
+        try:
+            load_parameters = inspect.signature(torch.load).parameters
+        except Exception:
+            load_parameters = {}
+        if "weights_only" in load_parameters:
+            load_kwargs["weights_only"] = True
+        checkpoint = torch.load(checkpoint_path, **load_kwargs)
     state_dict = _normalize_state_dict_keys(_extract_state_dict(torch, checkpoint))
     architecture = _detect_upscaler_architecture(state_dict)
     policy = resolve_upscale_policy(profile_name, architecture=architecture)

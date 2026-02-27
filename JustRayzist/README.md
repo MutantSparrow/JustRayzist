@@ -1,8 +1,11 @@
 # JustRayzist App Workspace
 
-This folder contains the runnable application project.
+This directory contains the runnable project:
+- `app/` runtime code (API, CLI, core, storage, web UI)
+- `models/` local model packs and upscaler checkpoints
+- `launch/` helper launch scripts
+- `scripts/` environment/bootstrap/build tooling
+- `docs/` usage and troubleshooting guides
 
-Repository-level documentation and roadmap are in:
-
+For full repository documentation, use:
 - `../README.md`
-- `../JustRayzist.md`

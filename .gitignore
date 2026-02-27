@@ -29,6 +29,13 @@ JustRayzist/tests/
 JustRayzist/scripts/test_*.py
 
 dist/
+.build/
+build/
+*.spec
+data/
+Prompt.txt
+prompt.txt
+JustRayzist/pytest-cache-files-*/
 
 # IDE
 .vscode/

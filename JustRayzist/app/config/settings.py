@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -38,6 +39,8 @@ def _resolve_root() -> Path:
     env_root = os.getenv("JUSTRAYZIST_ROOT")
     if env_root:
         return Path(env_root).expanduser().resolve()
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[2]
 
 
@@ -84,4 +87,3 @@ def load_settings(profile_name: str | None = None) -> AppSettings:
         runtime_profile=profile,
         paths=paths,
     )
-

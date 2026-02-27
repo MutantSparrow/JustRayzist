@@ -41,7 +41,7 @@ Check:
 If CUDA is unavailable:
 - App still runs on CPU, but performance and memory behavior are not representative of target hardware.
 
-## `ModuleNotFoundError: No module named 'typer'`
+## `ModuleNotFoundError` for runtime dependencies (`typer`, `fastapi`, `uvicorn`, `PIL`, `torch`)
 Cause:
 - The selected Python interpreter does not have project dependencies installed.
 
@@ -49,22 +49,35 @@ Action:
 - Install dependencies into the same interpreter you use to launch:
   - `python -m pip install -e .`
 - Rebuild/repair local `.venv` automatically:
-  - `powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1`
-- Or use the bundled/venv launchers that select project-local Python first:
+  - `powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe E:\APPS\Python_3.11\python.exe -Lane cu128`
+- Or use launcher wrappers:
   - `StartWeb.bat`
   - `launch\web.ps1`
   - `launch\cli.ps1`
 
-## Upscale fails: missing `2x_RealESRGAN_x2plus.pth`
+If you are testing on another machine:
+- Do not use GitHub auto-generated source zip archives.
+- Download the uploaded release asset zip from **Releases -> Assets**.
+
+## Launcher fails GPU preflight for lane/driver mismatch
 Cause:
-- Default upscaler checkpoint is not present at `models/upscaler/2x_RealESRGAN_x2plus.pth`.
+- Release lane in `release_lane.txt` does not match installed NVIDIA driver.
+
+Current floors:
+- `cu126`: driver `>= 561.17`
+- `cu128`: driver `>= 572.61` (required for RTX 50xx)
 
 Action:
-- Ensure the file exists at that exact path in the project/bundle.
-- Rebuild portable bundle after restoring the checkpoint:
-  - `powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1 -Clean`
+- Update NVIDIA driver to meet lane floor.
+- Or use artifact built for another lane.
 
-Portable build now fails early if this checkpoint is missing, to prevent shipping a broken upscale path.
+## Upscale fails: missing `.pth` checkpoint
+Cause:
+- No upscaler checkpoint is bundled in release artifacts.
+
+Action:
+- Place a compatible `.pth` file under `models/upscaler/`.
+- Provide that path to CLI upscale commands when needed.
 
 ## Slow first iteration in soak runs
 Expected:
