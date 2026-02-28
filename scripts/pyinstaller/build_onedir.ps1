@@ -3,7 +3,7 @@ param(
   [string]$Lane = "cu128",
   [string]$PythonExe = "python",
   [string]$BuildVenvDir = ".build\\pyinstaller\\venv",
-  [string]$DistRoot = "..\\dist\\pyinstaller",
+  [string]$DistRoot = "dist\\pyinstaller",
   [switch]$UseActivePython,
   [switch]$Clean,
   [switch]$SkipDependencyInstall

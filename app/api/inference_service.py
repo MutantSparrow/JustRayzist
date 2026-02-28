@@ -110,6 +110,15 @@ class InferenceService:
         _assert_supported_backend(pack)
         return pack
 
+    def resolve_output_path(self, raw_path: str) -> Path:
+        resolved = Path(str(raw_path)).expanduser().resolve()
+        outputs_dir = self._settings.paths.outputs_dir.resolve()
+        try:
+            resolved.relative_to(outputs_dir)
+        except ValueError as exc:
+            raise ValueError("Image path is outside managed outputs directory.") from exc
+        return resolved
+
     def _session_for_pack(self, model_pack: ModelPack) -> GenerationSession:
         if self._active_session is None:
             self._active_pack_name = model_pack.name
@@ -211,7 +220,7 @@ class InferenceService:
             source_output = source_row.get("output_path")
             if not source_output:
                 raise ValueError("Image source path is missing.")
-            source_path = Path(str(source_output)).expanduser().resolve()
+            source_path = self.resolve_output_path(str(source_output))
             if not source_path.exists():
                 raise ValueError("Image file not found on disk.")
 

@@ -18,6 +18,16 @@ def _gallery_db_path(settings: AppSettings) -> Path:
     return settings.paths.data_dir / "gallery.db"
 
 
+def _resolve_managed_output_path(settings: AppSettings, raw_path: Any) -> Path:
+    output_path = Path(str(raw_path)).expanduser().resolve()
+    outputs_dir = settings.paths.outputs_dir.resolve()
+    try:
+        output_path.relative_to(outputs_dir)
+    except ValueError as exc:
+        raise ValueError("Image path is outside managed outputs directory.") from exc
+    return output_path
+
+
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
@@ -106,14 +116,17 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
         conn.execute(f"ALTER TABLE images ADD COLUMN {name} {sql_type}")
 
 
-def _prune_missing_rows(conn: sqlite3.Connection) -> int:
+def _prune_missing_rows(conn: sqlite3.Connection, settings: AppSettings) -> int:
     rows = conn.execute("SELECT id, output_path FROM images").fetchall()
     missing_ids: list[int] = []
     for row in rows:
-        output_path = Path(str(row["output_path"])).expanduser()
-        if output_path.exists():
+        try:
+            output_path = _resolve_managed_output_path(settings, row["output_path"])
+        except ValueError:
+            missing_ids.append(int(row["id"]))
             continue
-        missing_ids.append(int(row["id"]))
+        if not output_path.exists():
+            missing_ids.append(int(row["id"]))
 
     if not missing_ids:
         return 0
@@ -215,7 +228,7 @@ def sync_outputs_to_gallery(settings: AppSettings) -> int:
 
     indexed = 0
     with _connect(db_path) as conn:
-        removed_missing = _prune_missing_rows(conn)
+        removed_missing = _prune_missing_rows(conn, settings)
         existing_rows = conn.execute("SELECT filename FROM images").fetchall()
         existing = {str(row["filename"]) for row in existing_rows}
         for output_path in output_files:
@@ -240,7 +253,7 @@ def list_images(
     safe_offset = max(0, offset)
     order_keyword = "DESC" if newest_first else "ASC"
     with _connect(db_path) as conn:
-        removed_missing = _prune_missing_rows(conn)
+        removed_missing = _prune_missing_rows(conn, settings)
         if removed_missing:
             conn.commit()
         if prompt_query:
@@ -270,11 +283,17 @@ def get_image(settings: AppSettings, filename: str) -> dict[str, Any] | None:
     with _connect(db_path) as conn:
         row = conn.execute("SELECT * FROM images WHERE filename = ?", (filename,)).fetchone()
         if row is not None:
-            output_path = Path(str(row["output_path"])).expanduser()
-            if not output_path.exists():
+            try:
+                output_path = _resolve_managed_output_path(settings, row["output_path"])
+            except ValueError:
                 conn.execute("DELETE FROM images WHERE filename = ?", (filename,))
                 conn.commit()
                 row = None
+            else:
+                if not output_path.exists():
+                    conn.execute("DELETE FROM images WHERE filename = ?", (filename,))
+                    conn.commit()
+                    row = None
     if row is None:
         return None
     return _row_to_dict(row)
@@ -294,7 +313,10 @@ def delete_gallery(settings: AppSettings) -> dict[str, int]:
         if row is not None:
             deleted_rows = int(row["total"])
         for record in rows:
-            output_path = Path(str(record["output_path"])).expanduser()
+            try:
+                output_path = _resolve_managed_output_path(settings, record["output_path"])
+            except ValueError:
+                continue
             try:
                 if output_path.exists():
                     output_path.unlink()
@@ -337,7 +359,7 @@ def delete_image(settings: AppSettings, filename: str) -> dict[str, int]:
         if row is None:
             raise ValueError("Image not found.")
 
-        output_path = Path(str(row["output_path"])).expanduser()
+        output_path = _resolve_managed_output_path(settings, row["output_path"])
         conn.execute("DELETE FROM images WHERE filename = ?", (filename,))
         deleted_rows = conn.total_changes
         remaining = conn.execute("SELECT COUNT(*) AS total FROM images").fetchone()

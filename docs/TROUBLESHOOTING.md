@@ -79,15 +79,19 @@ Action:
 - Place a compatible `.pth` or `.safetensors` file under `models/upscaler/`.
 - Provide that path to CLI upscale commands when needed.
 
-## Upscale output has color cast or severe seams
-Cause:
-- PLKSR checkpoints that use `layer_norm` can produce bad color/seams if loaded with a mismatched norm layout or aggressive tiling.
+## Upscale output quality is poor
+Check:
+- Source image may already contain heavy artifacts.
+- Prompt used for refine may be too strong/off-topic.
+- Scheduler/seed combination may be unstable for that image.
 
 Action:
-- Use current builds where LayerNorm PLKSR is auto-detected.
-- For `upscale-test`, allow auto policy (no explicit `--tile-size`) so layer_norm models run full-frame.
-- If you must force tiling, use higher overlap and validate output visually:
-  - `--tile-size 256 --tile-overlap 32`
+- Keep defaults first (`strength=0.20`, `refine_steps=6`, `scheduler_mode=euler`).
+- If outputs look overcooked, lower refine strength:
+  - `--strength 0.12`
+- If outputs look too soft, increase refine steps modestly:
+  - `--refine-steps 8`
+- Keep adaptive tiling enabled unless you are intentionally tuning tile behavior.
 
 ## Slow first iteration in soak runs
 Expected:
@@ -141,3 +145,11 @@ Check:
 Action:
 - Restart web server (startup performs output sync to SQLite index).
 - Call `GET /images` directly to verify API list response.
+
+## `GET /images/{filename}` returns not found for an existing DB row
+Cause:
+- Row path is missing on disk or outside managed `outputs/` directory.
+
+Action:
+- Keep generated images under `outputs/`.
+- If gallery DB was manually edited or copied from another machine, reindex by restarting the server.

@@ -1,5 +1,5 @@
 param(
-  [string]$DistRoot = "..\\dist"
+  [string]$DistRoot = "dist"
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,8 +13,7 @@ if (-not (Test-Path $distDir)) {
 }
 
 $patterns = @(
-  "JustRayzistPortable*",
-  "*NoModels*"
+  "JustRayzistPortable*"
 )
 
 foreach ($pattern in $patterns) {
@@ -29,4 +28,3 @@ foreach ($pattern in $patterns) {
 }
 
 Write-Host "Legacy artifact cleanup complete."
-

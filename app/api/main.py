@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import BackgroundTasks, Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -227,6 +227,19 @@ def index() -> FileResponse:
     if not index_path.exists():
         raise HTTPException(status_code=500, detail=f"UI entry file not found: {index_path}")
     return FileResponse(index_path, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api", include_in_schema=False)
+def api_docs_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/API")
+
+
+@app.get("/API", include_in_schema=False)
+def api_docs_page() -> FileResponse:
+    api_path = Path(settings.paths.ui_dir) / "api.html"
+    if not api_path.exists():
+        raise HTTPException(status_code=500, detail=f"API docs file not found: {api_path}")
+    return FileResponse(api_path, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/favicon.ico")

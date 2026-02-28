@@ -1,98 +1,149 @@
 # JustRayzist
 
-Offline-first local image generation app with:
-- FastAPI web UI/API
+JustRayzist is a Windows-first, offline-first local image generation app built around:
+
+- FastAPI web API + browser UI
 - Typer CLI
 - local model packs (`.safetensors` / `.gguf`)
-- optional upscale + refine flow
-- portable Windows packaging
+- profile-based runtime behavior for different VRAM classes
+- optional x2 upscaling + img2img refinement flow
+- PyInstaller one-dir release packaging
+
+The app is designed to run without runtime internet dependencies once required assets are present locally.
 
 ## Features
-- Local-only runtime controls (`HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`).
-- Runtime profiles for `constrained`, `balanced`, and `high` VRAM targets.
-- Model-pack validation and local component path checks.
-- PNG output with metadata and SQLite-backed gallery index.
-- Queue-based web generation/upscale workflow.
-- PyInstaller `--onedir` Windows packaging.
-- `StartWeb.bat` model bootstrap for default Rayzist pack assets from Hugging Face.
+
+- Local/offline runtime guards (`HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`).
+- Runtime profiles: `constrained`, `balanced`, `high`.
+- Model pack validation and local path enforcement.
+- PNG metadata writing and SQLite gallery indexing.
+- Web gallery with filtering, fullscreen, compare-hold for upscaled images, and queued jobs.
+- CLI workflows for generation, upscaling/refinement, soak runs, and soak reporting.
+- Lane-based release packaging (`cu126`, `cu128`) with GPU driver preflight.
+- Release artifacts do not bundle model weights.
 
 ## Repository Layout
+
 ```text
 .
-|- JustRayzist/        # app workspace (code, docs, launchers, models, scripts)
-|  |- app/             # API, CLI, core runtime, storage, web UI assets
-|  |- docs/            # usage and troubleshooting docs
-|  |- launch/          # PowerShell launch helpers
-|  |- models/          # model pack configs + upscaler checkpoints
-|  |- scripts/         # environment/bootstrap/build/release scripts
-|  |- StartWeb.bat     # interactive web launcher (profile + pack selection)
-|  \- pyproject.toml
-|- dist/               # portable build/release output
-\- README.md
+|- app/                       # API, CLI, core runtime, storage, UI assets
+|- docs/                      # Usage, packaging, troubleshooting docs
+|- launch/                    # PowerShell launcher helpers
+|- models/                    # Model pack configs and upscaler checkpoint folder
+|- requirements/              # Lane-pinned torch wheels
+|- scripts/                   # Bootstrap, fetch, pyinstaller, release tooling
+|- StartWeb.bat               # Interactive launcher
+|- pyproject.toml
+|- dist/                      # Build/release output
+\- README.md                  # Canonical repo documentation
 ```
 
+`dist/` is local build output and is intentionally not source-controlled.
+
 ## Tech Stack
+
 - Python 3.11+
-- PyTorch, Diffusers, Transformers, Accelerate
+- PyTorch + CUDA wheels (`cu126`/`cu128`)
+- Diffusers + Transformers + Accelerate
 - FastAPI + Uvicorn
 - Typer
 - Pillow
 - SQLite
-- PowerShell + batch launch/build tooling (Windows-first workflow)
+- PowerShell + batch tooling for bootstrap/build/release
+
+## Requirements
+
+- Windows host (primary supported workflow).
+- NVIDIA GPU recommended for target performance.
+- Python 3.11 interpreter available locally.
 
 ## Installation
-From repo root:
+
+From repository root:
 
 ```powershell
-cd .\JustRayzist
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_env.ps1 -PythonExe E:\APPS\Python_3.11\python.exe -Lane cu128
 ```
 
-This creates/repairs `.venv`, installs lane-matched CUDA PyTorch wheels, and installs project dependencies.
+This creates/repairs `.venv`, installs lane-matched torch wheels, and installs project dependencies.
+
+## Model Assets (One-Time Online Setup)
+
+From repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
+```
+
+Or use `StartWeb.bat` and let it auto-fetch missing default assets for `Rayzist_bf16`.
 
 ## Quick Start
-From `JustRayzist/`:
+
+From repository root:
 
 ```powershell
 .\StartWeb.bat
 ```
 
 Launcher flow:
+
 1. Select runtime profile.
 2. Select model pack.
-3. If pack is `Rayzist_bf16`, missing default assets are auto-downloaded from Hugging Face.
-4. Web server starts at `http://127.0.0.1:37717/`.
+3. Optional model asset bootstrap for `Rayzist_bf16`.
+4. Open `http://127.0.0.1:37717/`.
 
 ## Configuration
+
 Environment variables:
-- `JUSTRAYZIST_ROOT`: override workspace root path.
-- `JUSTRAYZIST_PROFILE`: runtime profile (`constrained|balanced|high`).
-- `JUSTRAYZIST_PACK`: preferred model pack name.
-- `JUSTRAYZIST_OFFLINE`: `1` (default) enables offline guard flags.
-- `JUSTRAYZIST_ENV`: environment label (default `dev`).
-- `JUSTRAYZIST_PYTHON`: optional source-mode launcher override for Python executable path.
+
+- `JUSTRAYZIST_ROOT`: override workspace root.
+- `JUSTRAYZIST_PROFILE`: `constrained|balanced|high`.
+- `JUSTRAYZIST_PACK`: default model pack name.
+- `JUSTRAYZIST_OFFLINE`: `1` (default) enables offline env guards.
+- `JUSTRAYZIST_ENV`: environment label (`dev` default).
+- `JUSTRAYZIST_PYTHON`: optional interpreter override for source-mode launcher.
+- `JUSTRAYZIST_SKIP_GPU_PREFLIGHT`: set `1` to bypass lane/driver preflight in packaged mode.
 
 ## CLI Usage
-From `JustRayzist/`:
+
+From repository root:
 
 ```powershell
 python -m app.cli.main status
 python -m app.cli.main doctor
 python -m app.cli.main validate-models
-python -m app.cli.main serve --host 127.0.0.1 --port 37717
+python -m app.cli.main serve --host 127.0.0.1 --port 37717 --profile balanced
 ```
 
 Generate:
+
 ```powershell
 python -m app.cli.main generate --pack Rayzist_bf16 --prompt "cinematic skyline at sunrise" --profile balanced
 ```
 
 Upscale + refine:
+
 ```powershell
 python -m app.cli.main upscale-refine --pack Rayzist_bf16 --input-image outputs\sample.png --prompt "portrait photo" --profile balanced
 ```
 
-## API Endpoints
+Soak test:
+
+```powershell
+python -m app.cli.main soak --pack Rayzist_bf16 --prompt "stress prompt" --iterations 20 --profile constrained
+```
+
+Soak report:
+
+```powershell
+python -m app.cli.main soak-report --list-sessions
+python -m app.cli.main soak-report --session-id <session_id>
+```
+
+## API Summary
+
+Base URL: `http://127.0.0.1:37717`
+
 - `GET /health`
 - `GET /config`
 - `GET /model-packs`
@@ -100,62 +151,105 @@ python -m app.cli.main upscale-refine --pack Rayzist_bf16 --input-image outputs\
 - `POST /upscale`
 - `GET /images`
 - `GET /images/{filename}`
-- `DELETE /images/{filename}`
-- `DELETE /gallery`
+- `DELETE /images/{filename}?confirm=DELETE`
+- `DELETE /gallery?confirm=DELETE`
 - `POST /server/kill`
-- `GET /` (web UI)
+- `GET /API` (interactive API documentation + tester)
 
-## Build And Release
+### API Example: Generate
+
+```http
+POST /generate
+Content-Type: application/json
+
+{
+  "prompt": "A cinematic skyline at sunrise",
+  "width": 1024,
+  "height": 1024,
+  "pack": "Rayzist_bf16",
+  "seed": 123456,
+  "scheduler_mode": "euler",
+  "enhance_prompt": false
+}
+```
+
+### API Example: Upscale
+
+```http
+POST /upscale
+Content-Type: application/json
+
+{
+  "filename": "justrayzist_20260228_120000_000.png",
+  "pack": "Rayzist_bf16",
+  "seed": 123456,
+  "scheduler_mode": "euler",
+  "enhance_prompt": false
+}
+```
+
+## Build and Release
+
 Build PyInstaller one-dir binaries:
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\JustRayzist\scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
+powershell -ExecutionPolicy Bypass -File .\scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
 ```
 
-Create release zip:
+Create release package:
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\JustRayzist\scripts\release\package_release.ps1 -Lane cu128 -Version v0.10.0-beta.01 -PythonExe .\JustRayzist\.venv\Scripts\python.exe -Clean
+powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Lane cu128 -Version v0.10.0-beta.01 -Clean
 ```
 
-Notes:
-- Release artifacts never bundle model weights (`.safetensors`, `.gguf`, `.pth`).
-- CUDA lanes:
-  - `cu126` (driver >= `561.17`) for 20xx/30xx/40xx fallback.
-  - `cu128` (driver >= `572.61`) as preferred default, required for 50xx.
-- Release users should download uploaded **release assets**, not GitHub auto-generated source zip archives.
+Cleanup legacy artifacts:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\release\clean_legacy_artifacts.ps1
+```
+
+## CUDA Lane Baseline
+
+- `cu126`: NVIDIA driver `>= 561.17` (20xx/30xx/40xx fallback lane)
+- `cu128`: NVIDIA driver `>= 572.61` (preferred lane; required for 50xx)
 
 ## Development Workflow
-From `JustRayzist/`:
+
+From repository root:
+
 ```powershell
 python -m app.cli.main doctor
 python -m app.cli.main validate-models
-python -m app.cli.main serve
+python -m ruff check app
 ```
 
-Optional checks:
-```powershell
-python -m ruff check .
-```
+If tests are present in your local workspace:
 
-If a local `tests/` directory is present in your workspace:
 ```powershell
 python -m pytest -q tests
 ```
 
 ## Troubleshooting
+
 See:
-- `JustRayzist/docs/USAGE.md`
-- `JustRayzist/docs/PACKAGING.md`
-- `JustRayzist/docs/TROUBLESHOOTING.md`
+
+- `docs/USAGE.md`
+- `docs/PACKAGING.md`
+- `docs/TROUBLESHOOTING.md`
 
 ## Known Limitations
-- Windows-first launcher and packaging workflow.
-- Runtime depends on local model availability and compatible GPU/driver stack for CUDA acceleration.
-- No authentication is implemented for local API control endpoints (`/server/kill`, deletion endpoints).
+
+- Windows-first launcher/build flow.
+- No authentication on local destructive endpoints (`/server/kill`, delete routes).
+- Runtime quality/performance depend on local model pack quality and GPU/driver compatibility.
 
 ## Contributing
-1. Keep changes focused and behavior-safe.
-2. Validate with lint/tests/smoke checks where available.
-3. Update docs when behavior, flags, or release flow changes.
+
+1. Keep changes behavior-safe and focused.
+2. Validate with lint/tests/smoke checks.
+3. Keep docs aligned with real command behavior.
+4. Prefer small, reviewable commits.
 
 ## License
+
 No license file is currently included in this repository.

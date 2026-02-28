@@ -162,9 +162,36 @@ Web API:
 - `DELETE /images/{filename}?confirm=DELETE`
 - `DELETE /gallery?confirm=DELETE`
 - `POST /server/kill`
+- `GET /API` (interactive endpoint list + request tester)
+
+API examples (PowerShell):
+```powershell
+Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:37717/health"
+
+$genBody = @{
+  prompt = "Cinematic skyline at sunrise"
+  width = 1024
+  height = 1024
+  pack = "Rayzist_bf16"
+  seed = 123456
+  scheduler_mode = "euler"
+  enhance_prompt = $false
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:37717/generate" -ContentType "application/json" -Body $genBody
+
+$upscaleBody = @{
+  filename = "justrayzist_20260228_120000_000.png"
+  pack = "Rayzist_bf16"
+  seed = 123456
+  scheduler_mode = "euler"
+  enhance_prompt = $false
+} | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:37717/upscale" -ContentType "application/json" -Body $upscaleBody
+```
 
 Web UI:
 - Open `http://127.0.0.1:37717/`
+- API reference/testing page: `http://127.0.0.1:37717/API`
 - Top bar includes prompt input, generate icon button, and settings popup.
 - Settings popup includes:
   - resolution selector (grouped by ratio)

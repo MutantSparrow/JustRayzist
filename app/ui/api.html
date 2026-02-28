@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JustRayzist API</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #050505;
+      --panel: #101010;
+      --line: #2e2e2e;
+      --text: #ececec;
+      --muted: #a9a9a9;
+      --lime: #b7ff00;
+      --magenta: #ff2cb6;
+      --danger: #ff4a4a;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", Tahoma, sans-serif;
+    }
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      display: grid;
+      gap: 16px;
+    }
+    h1, h2, h3 { margin: 0; }
+    .header, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      padding: 14px;
+    }
+    .subtle {
+      color: var(--muted);
+      margin-top: 6px;
+      font-size: 0.92rem;
+    }
+    .links {
+      margin-top: 8px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    a {
+      color: var(--lime);
+      text-decoration: none;
+    }
+    a:hover { text-decoration: underline; }
+    .tester-grid {
+      display: grid;
+      gap: 10px;
+    }
+    .row {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 130px 1fr;
+      align-items: center;
+    }
+    select, input, textarea, button {
+      background: #0a0a0a;
+      color: var(--text);
+      border: 1px solid var(--line);
+      font: inherit;
+      padding: 8px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 120px;
+      resize: vertical;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.9rem;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .send-btn {
+      border-color: var(--magenta);
+      color: var(--magenta);
+      cursor: pointer;
+    }
+    .send-btn:hover {
+      background: rgba(255, 44, 182, 0.12);
+    }
+    .fill-btn {
+      border-color: var(--lime);
+      color: var(--lime);
+      cursor: pointer;
+    }
+    .status {
+      margin-top: 8px;
+      font-weight: 600;
+    }
+    .status.ok { color: var(--lime); }
+    .status.err { color: var(--danger); }
+    pre {
+      margin: 0;
+      background: #080808;
+      border: 1px solid #252525;
+      padding: 10px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .endpoint-list {
+      display: grid;
+      gap: 10px;
+    }
+    .endpoint-card {
+      border: 1px solid var(--line);
+      padding: 12px;
+      background: #0c0c0c;
+      display: grid;
+      gap: 8px;
+    }
+    .route {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.95rem;
+    }
+    .method {
+      display: inline-block;
+      min-width: 72px;
+      text-align: center;
+      padding: 2px 8px;
+      border: 1px solid #444;
+      font-weight: 700;
+    }
+    .method.GET { color: var(--lime); border-color: #3f5820; }
+    .method.POST { color: var(--magenta); border-color: #5a2b4a; }
+    .method.DELETE { color: #ffa74d; border-color: #66513a; }
+    .description {
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="header">
+      <h1>API Reference and Tester</h1>
+      <p class="subtle">
+        Base URL: <code id="base-url"></code>
+      </p>
+      <div class="links">
+        <a href="/docs" target="_blank" rel="noopener">Swagger UI</a>
+        <a href="/openapi.json" target="_blank" rel="noopener">OpenAPI JSON</a>
+        <a href="/" target="_blank" rel="noopener">Main UI</a>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Request Tester</h2>
+      <p class="subtle">Small built-in client for quick endpoint checks.</p>
+      <div class="tester-grid">
+        <label class="row">
+          <span>Method</span>
+          <select id="tester-method">
+            <option value="GET">GET</option>
+            <option value="POST" selected>POST</option>
+            <option value="DELETE">DELETE</option>
+          </select>
+        </label>
+        <label class="row">
+          <span>Path</span>
+          <input id="tester-path" type="text" value="/health" spellcheck="false">
+        </label>
+        <label class="row">
+          <span>JSON Body</span>
+          <textarea id="tester-body" spellcheck="false">{}</textarea>
+        </label>
+        <div class="actions">
+          <button id="tester-send" class="send-btn" type="button">Send Request</button>
+          <button id="tester-clear" type="button">Clear</button>
+        </div>
+        <div id="tester-status" class="status"></div>
+        <pre id="tester-response"></pre>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Endpoints</h2>
+      <p class="subtle">Each entry includes a description and sample payload/response.</p>
+      <div id="endpoint-list" class="endpoint-list"></div>
+    </section>
+  </main>
+
+  <script src="/ui/api.js?v=20260228_01"></script>
+</body>
+</html>
