@@ -24,6 +24,7 @@ This checks required scripts/files and confirms model binaries are not tracked.
 ```
 
 This is the primary setup path and includes Python install, `.venv` setup, dependency install, model fetch, and sanity checks.
+It also installs Hugging Face CLI + XET support used by model downloads.
 
 ## 4) Manual Bootstrap (Optional / Advanced)
 
@@ -42,7 +43,7 @@ Notes:
 powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
 ```
 
-The script downloads required assets and validates SHA256 checksums.
+The script downloads required assets via Hugging Face CLI (`hf download`) with XET enabled and validates SHA256 checksums.
 
 ## 6) Sanity Checks
 

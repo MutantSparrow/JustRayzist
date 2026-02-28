@@ -14,3 +14,4 @@ powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1
 
 `StartWeb.bat` also attempts to auto-download missing default assets (including this upscaler checkpoint).
 Downloaded defaults are validated with SHA256 checks.
+Download backend uses Hugging Face CLI (`hf download`) with XET acceleration when environment setup is complete.

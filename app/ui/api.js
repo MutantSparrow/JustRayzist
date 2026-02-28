@@ -224,7 +224,7 @@ async function sendRequest() {
 }
 
 function clearTester() {
-  methodEl.value = "POST";
+  methodEl.value = "GET";
   pathEl.value = "/health";
   bodyEl.value = "{}";
   statusEl.textContent = "";

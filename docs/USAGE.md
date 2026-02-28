@@ -11,6 +11,7 @@
 ```
 
 `RunMeFirst.bat` detects/installs Python 3.11, creates or repairs `.venv`, installs lane-matched dependencies, downloads default model assets, validates the environment, and refreshes a desktop shortcut to `StartWeb.bat`.
+Model downloads are performed with Hugging Face CLI and XET acceleration.
 
 ## Manual `.venv` Bootstrap (Advanced)
 ```powershell
@@ -23,6 +24,7 @@ Run this before `validate-models` on a fresh clone:
 powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1
 ```
 Downloads are SHA256-verified before being accepted.
+Transfer backend: Hugging Face CLI (`hf download`) with `HF_XET_HIGH_PERFORMANCE=1`.
 
 This downloads and places:
 - `models/packs/Rayzist_bf16/weights/Rayzist.v1.0.safetensors`
@@ -223,7 +225,7 @@ Web UI:
   - keyboard delete in fullscreen (`Delete`/`Backspace`) opens Yes/No confirmation
 
 ## Build PyInstaller One-Dir (Windows)
-Build lane-specific one-dir binaries (legacy/offline workflow):
+Build lane-specific one-dir binaries (optional bundled workflow):
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
 ```

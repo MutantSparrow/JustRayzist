@@ -70,6 +70,7 @@ From repository root:
 - install Python 3.11 if missing
 - create or repair `.venv`
 - install lane-matched torch/runtime dependencies
+- install Hugging Face CLI + XET support in the environment
 - fetch default model assets from Hugging Face (checksum-verified)
 - run sanity checks and create a desktop shortcut
 
@@ -82,7 +83,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
 ```
 
 `RunMeFirst.bat` prefetches defaults automatically. `StartWeb.bat` can still auto-fetch missing default assets for `Rayzist_bf16` (including the default upscaler checkpoint).
-The fetch script verifies each downloaded asset with SHA256 before accepting it.
+Downloads are performed through Hugging Face CLI (`hf download`) with XET acceleration enabled (`HF_XET_HIGH_PERFORMANCE=1`), and each file is SHA256-verified before acceptance.
 
 ## Quick Start
 

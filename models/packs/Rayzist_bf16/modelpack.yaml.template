@@ -21,7 +21,7 @@ components:
     path: ./weights/transformer.safetensors
     format: safetensors
 
-  # VAE path. Bootstrap backend currently supports safetensors VAE.
+  # VAE path. The backend supports both safetensors and gguf VAE files.
   vae:
     path: ./weights/vae.safetensors
     format: safetensors

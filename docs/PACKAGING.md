@@ -12,6 +12,7 @@ Runtime model acquisition:
 - `RunMeFirst.bat` prefetches default assets from Hugging Face.
 - `StartWeb.bat` still auto-downloads missing default assets if needed.
 - `scripts/fetch_model_assets.ps1` can prefetch all defaults (including upscaler checkpoint) before first run.
+- Download backend is Hugging Face CLI (`hf download`) with XET acceleration enabled.
 - Downloaded assets are verified via SHA256.
 
 Dependency lock baseline:

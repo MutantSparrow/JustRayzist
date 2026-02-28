@@ -41,11 +41,17 @@ def _load_pack_or_exit(settings, pack_name: str):
 
 
 def _assert_supported_backend_or_exit(model_pack) -> None:
-    backend_name = (model_pack.backend_preference[0] if model_pack.backend_preference else "").lower()
-    if backend_name not in {"diffusers", "diffusers_zimage"}:
+    supported = {"diffusers", "diffusers_zimage"}
+    backends = [
+        str(name).strip().lower()
+        for name in model_pack.backend_preference
+        if str(name).strip()
+    ]
+    if not any(name in supported for name in backends):
         typer.echo(
-            f"Unsupported backend '{backend_name}' in bootstrap version. "
-            "Use backend_preference: ['diffusers']."
+            "Unsupported backend preference list "
+            f"{model_pack.backend_preference!r} in bootstrap version. "
+            f"Include one of: {sorted(supported)}."
         )
         raise typer.Exit(code=1)
 
@@ -174,7 +180,7 @@ def generate(
     except ImportError as exc:
         typer.echo(
             f"Missing dependency during generation: {exc}. "
-            "Install dependencies from pyproject.toml first."
+            "Run RunMeFirst.bat (recommended) or repair with scripts/bootstrap_env.ps1."
         )
         raise typer.Exit(code=2)
     except Exception as exc:

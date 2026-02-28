@@ -25,10 +25,10 @@ if exist "!WEB_EXE!" (
   if not defined PYTHON_EXE call :try_python_launcher_paths
   if not defined PYTHON_EXE (
     echo.
-    echo No packaged web executable found with a usable source Python interpreter.
+    echo No packaged web executable found with a usable source Python runtime.
     echo Checked packaged path:
     echo   !WEB_EXE!
-    echo Checked source interpreter candidates:
+    echo Checked source interpreter candidates - requires dependencies and ZImage diffusers symbols:
     if defined JUSTRAYZIST_PYTHON echo   JUSTRAYZIST_PYTHON=!JUSTRAYZIST_PYTHON!
     echo   %CD%\.venv\Scripts\python.exe
     echo   %CD%\.venv\python.exe
@@ -193,7 +193,7 @@ if /I "%CANDIDATE%"=="python" goto :check_source_candidate
 if not exist "%CANDIDATE%" goto :eof
 
 :check_source_candidate
-"%CANDIDATE%" -c "import typer,fastapi,uvicorn,PIL,torch" >nul 2>&1
+"%CANDIDATE%" -c "import typer,fastapi,uvicorn,PIL,torch,diffusers,transformers,accelerate,safetensors; from diffusers import ZImagePipeline, ZImageTransformer2DModel, ZImageImg2ImgPipeline" >nul 2>&1
 if errorlevel 1 goto :eof
 set "PYTHON_EXE=%CANDIDATE%"
 goto :eof
@@ -219,7 +219,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "if(-not $cmd){ Write-Host 'GPU preflight: nvidia-smi not found; skipping lane gate.'; exit 0 };" ^
   "$rows=& nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>$null;" ^
   "if(-not $rows){ Write-Host 'GPU preflight: no NVIDIA GPU detected; continuing.'; exit 0 };" ^
-  "$parts=$rows[0].Split(',');" ^
+  "$first=@($rows)[0].ToString();" ^
+  "$parts=$first.Split(',',2);" ^
+  "if($parts.Count -lt 2){ Write-Host ('GPU preflight: unexpected nvidia-smi row: ' + $first); exit 2 };" ^
   "$gpu=$parts[0].Trim();" ^
   "$driverText=$parts[1].Trim();" ^
   "try { $driver=[version]$driverText } catch { Write-Host ('GPU preflight: unable to parse driver version: ' + $driverText); exit 2 };" ^
@@ -260,6 +262,8 @@ echo   !FETCH_SCRIPT!
 powershell -NoProfile -ExecutionPolicy Bypass -File "!FETCH_SCRIPT!"
 if errorlevel 1 (
   echo Failed to fetch default model assets.
+  echo Ensure Hugging Face CLI with XET is installed via:
+  echo   .\RunMeFirst.bat
   exit /b 1
 )
 

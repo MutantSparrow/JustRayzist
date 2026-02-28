@@ -189,12 +189,18 @@ def build_zimage_pipeline(pack: ModelPack, profile: RuntimeProfile) -> LoadedZIm
         )
 
     import torch
-    from diffusers import (
-        AutoencoderKL,
-        GGUFQuantizationConfig,
-        ZImagePipeline,
-        ZImageTransformer2DModel,
-    )
+    try:
+        from diffusers import (
+            AutoencoderKL,
+            GGUFQuantizationConfig,
+            ZImagePipeline,
+            ZImageTransformer2DModel,
+        )
+    except ImportError as exc:
+        raise ImportError(
+            "Installed diffusers build is missing required ZImage classes. "
+            "Run RunMeFirst.bat to repair the environment."
+        ) from exc
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = _resolve_dtype(torch, device)

@@ -24,11 +24,10 @@ models/**/*.pth
 
 # Local-only roadmap / dev artifacts
 JustRayzist.md
-tests/
-scripts/test_*.py
 
 dist/
 .build/
+release_lane.txt
 build/
 *.spec
 Prompt.txt

@@ -150,7 +150,7 @@ if (-not (Test-Path (Join-Path $releaseDir "data\\.gitkeep"))) {
 if (-not (Test-Path (Join-Path $releaseDir "models\\upscaler\\README.txt"))) {
   Set-Content -Path (Join-Path $releaseDir "models\\upscaler\\README.txt") -Value @"
 No upscaler checkpoints are bundled in release artifacts.
-Use RunMeFirst.bat or scripts\fetch_model_assets.ps1 to download default assets from Hugging Face (checksum-verified).
+Use RunMeFirst.bat or scripts\fetch_model_assets.ps1 to download default assets from Hugging Face using HF CLI + XET (checksum-verified).
 You may also place a custom local .pth file in this folder.
 "@ -Encoding ascii
 }

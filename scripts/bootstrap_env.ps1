@@ -53,6 +53,17 @@ function Invoke-BestEffort {
   }
 }
 
+function Test-ZImageDiffusersSymbols {
+  param(
+    [string]$PythonPath
+  )
+
+  return (Invoke-BestEffort -PythonPath $PythonPath -Arguments @(
+      "-c",
+      "from diffusers import ZImagePipeline, ZImageTransformer2DModel, ZImageImg2ImgPipeline"
+    ))
+}
+
 function Invoke-Checked {
   param(
     [Parameter(Mandatory = $true)][string]$Executable,
@@ -103,10 +114,88 @@ if (-not (Test-Path $devRequirements)) {
   throw "Missing dev lock file: $devRequirements"
 }
 
+function Install-DiffusersWithFallback {
+  param(
+    [Parameter(Mandatory = $true)][string]$PythonPath
+  )
+
+  $attempts = @(
+    [PSCustomObject]@{
+      Label = "diffusers==0.36.0"
+      Args = @("-m", "pip", "install", "--upgrade", "diffusers==0.36.0")
+    },
+    [PSCustomObject]@{
+      Label = "diffusers==0.36.0.dev0"
+      Args = @("-m", "pip", "install", "--upgrade", "diffusers==0.36.0.dev0")
+    },
+    [PSCustomObject]@{
+      Label = "pre-release diffusers>=0.36.0"
+      Args = @("-m", "pip", "install", "--upgrade", "--pre", "diffusers>=0.36.0")
+    },
+    [PSCustomObject]@{
+      Label = "diffusers main branch zip"
+      Args = @(
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "https://github.com/huggingface/diffusers/archive/refs/heads/main.zip"
+      )
+    }
+  )
+
+  foreach ($attempt in $attempts) {
+    Write-Host ("Installing {0}..." -f $attempt.Label)
+    $installed = $false
+    try {
+      Invoke-Checked -Executable $PythonPath -Arguments $attempt.Args
+      $installed = $true
+    } catch {
+      Write-Host ("Install attempt failed for {0}: {1}" -f $attempt.Label, $_.Exception.Message) -ForegroundColor Yellow
+    }
+    if (-not $installed) {
+      continue
+    }
+    if (Test-ZImageDiffusersSymbols -PythonPath $PythonPath) {
+      Write-Host ("Using {0} (ZImage symbols verified)." -f $attempt.Label)
+      return
+    }
+    Write-Host ("Installed {0} but ZImage symbols are still missing." -f $attempt.Label) -ForegroundColor Yellow
+  }
+
+  throw (
+    "Unable to install a diffusers build exposing ZImagePipeline/ZImageTransformer2DModel/ZImageImg2ImgPipeline. " +
+    "Check internet access and rerun RunMeFirst.bat."
+  )
+}
+
 Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "--upgrade", "pip")
 Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "--upgrade", "setuptools", "wheel")
+Invoke-Checked -Executable $venvPython -Arguments @(
+  "-m", "pip", "install", "huggingface_hub[hf_xet]==0.35.0"
+)
 Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $torchRequirements)
-Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $runtimeRequirements)
+$runtimeNoDiffusers = Join-Path $tmpRoot "runtime-lock.no-diffusers.txt"
+$runtimeLines = Get-Content -Path $runtimeRequirements
+$filteredRuntime = @()
+foreach ($line in $runtimeLines) {
+  $trimmed = $line.Trim()
+  if (-not $trimmed) {
+    continue
+  }
+  if ($trimmed.StartsWith("#")) {
+    continue
+  }
+  if ($trimmed -match '^diffusers(\s|==|>=|<=|~=|@|$)') {
+    continue
+  }
+  $filteredRuntime += $line
+}
+if ($filteredRuntime.Count -gt 0) {
+  Set-Content -Path $runtimeNoDiffusers -Value $filteredRuntime -Encoding ascii
+  Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $runtimeNoDiffusers)
+}
+Install-DiffusersWithFallback -PythonPath $venvPython
 Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $devRequirements)
 Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "--no-build-isolation", "--no-deps", "-e", ".") -WorkingDirectory $projectRoot
 

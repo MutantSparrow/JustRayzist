@@ -10,14 +10,14 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "accelerate>=1.2.0",
-  "diffusers>=0.35.0",
+  "diffusers>=0.36.0",
   "fastapi>=0.116.0",
   "gguf>=0.17.0",
   "huggingface-hub>=0.35.0",
   "pillow>=11.0.0",
   "psutil>=6.0.0",
   "pyyaml>=6.0.0",
-  "safetensors>=0.6.0",
+  "safetensors>=0.6.2",
   "torch>=2.9.1",
   "torchaudio>=2.9.1",
   "torchvision>=0.24.1",

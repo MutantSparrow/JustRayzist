@@ -13,5 +13,7 @@ Source URLs:
 
 From project root, the automated fetch command is:
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\JustRayzist\scripts\fetch_model_assets.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
 ```
+
+The fetch script uses Hugging Face CLI (`hf download`) with XET acceleration and verifies SHA256 checksums.

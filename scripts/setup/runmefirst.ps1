@@ -137,9 +137,6 @@ function Test-Python311 {
 function Resolve-Python311 {
   $candidateList = New-Object System.Collections.Generic.List[string]
 
-  if (Test-Path $venvPython) {
-    $candidateList.Add($venvPython)
-  }
   if ($env:JUSTRAYZIST_PYTHON) {
     $candidateList.Add($env:JUSTRAYZIST_PYTHON)
   }
@@ -194,7 +191,12 @@ function Get-LaneSelection {
     return $result
   }
 
-  $parts = $rows[0].Split(",")
+  $firstRow = @($rows)[0].ToString()
+  $parts = $firstRow.Split(",", 2)
+  if ($parts.Count -lt 2) {
+    $result.Message = "Unexpected nvidia-smi output row '$firstRow'. Using cu128."
+    return $result
+  }
   $gpu = $parts[0].Trim()
   $driverText = $parts[1].Trim()
   $result.GpuName = $gpu
@@ -300,9 +302,9 @@ function Test-EnvironmentHealth {
     }
   }
 
-  $importProbe = Try-RunPython -PythonExe $venvPython -Code "import typer,fastapi,uvicorn,PIL,torch"
+  $importProbe = Try-RunPython -PythonExe $venvPython -Code "import typer,fastapi,uvicorn,PIL,torch,diffusers,transformers,accelerate,safetensors; from diffusers import ZImagePipeline, ZImageTransformer2DModel, ZImageImg2ImgPipeline"
   if (-not $importProbe.Success) {
-    $issues.Add("Core runtime imports failed in .venv.")
+    $issues.Add("Core runtime imports failed in .venv (including required ZImage diffusers symbols).")
   }
 
   $previousPreference = $ErrorActionPreference
@@ -405,7 +407,7 @@ try {
   }
 
   Set-StepTotal -Total 7
-  $pythonExe = Resolve-Python311
+  $script:ResolvedPythonExe = Resolve-Python311
 
   Invoke-Step -Title "Record target runtime lane" -Action {
     Ensure-ReleaseLaneFile -Lane $laneSelection.Lane
@@ -413,11 +415,14 @@ try {
   }
 
   Invoke-Step -Title "Ensure Python 3.11 is available" -Action {
-    if (-not $pythonExe) {
-      $pythonExe = Install-PythonFromManifest
-      Write-Host ("Installed Python at: {0}" -f $pythonExe) -ForegroundColor Gray
+    if ([string]::IsNullOrWhiteSpace($script:ResolvedPythonExe)) {
+      $script:ResolvedPythonExe = Install-PythonFromManifest
+      Write-Host ("Installed Python at: {0}" -f $script:ResolvedPythonExe) -ForegroundColor Gray
     } else {
-      Write-Host ("Python 3.11 detected at: {0}" -f $pythonExe) -ForegroundColor Gray
+      Write-Host ("Python 3.11 detected at: {0}" -f $script:ResolvedPythonExe) -ForegroundColor Gray
+    }
+    if ([string]::IsNullOrWhiteSpace($script:ResolvedPythonExe)) {
+      throw "Python 3.11 interpreter resolution failed."
     }
   }
 
@@ -426,7 +431,7 @@ try {
       "-NoProfile",
       "-ExecutionPolicy", "Bypass",
       "-File", $bootstrapScript,
-      "-PythonExe", $pythonExe,
+      "-PythonExe", $script:ResolvedPythonExe,
       "-Lane", $laneSelection.Lane
     )
   }

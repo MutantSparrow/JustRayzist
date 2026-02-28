@@ -61,10 +61,36 @@ Action:
   - `launch\web.ps1`
   - `launch\cli.ps1`
 
+## `cannot import name 'ZImagePipeline' from 'diffusers'`
+Cause:
+- A standard/stable `diffusers` build was installed, but this app requires ZImage classes from newer dev builds.
+
+Action:
+- Preferred repair path:
+  - `.\RunMeFirst.bat`
+- Manual repair path:
+  - `powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe E:\APPS\Python_3.11\python.exe -Lane cu128`
+
+Notes:
+- `scripts/bootstrap_env.ps1` now verifies `ZImagePipeline`, `ZImageTransformer2DModel`, and `ZImageImg2ImgPipeline` imports and auto-falls back to a compatible diffusers source when needed.
+
 If you are testing on another machine:
 - Do not use GitHub auto-generated source zip archives.
 - Download the uploaded release asset zip from **Releases -> Assets**.
 - Run `RunMeFirst.bat` once before launching `StartWeb.bat`.
+
+## Model fetch fails due to missing Hugging Face CLI / XET
+Cause:
+- `scripts/fetch_model_assets.ps1` uses Hugging Face CLI (`hf download`) with XET acceleration.
+- Environment is missing `huggingface_hub` CLI module and/or `hf_xet`.
+
+Action:
+- Run full setup/repair:
+  - `.\RunMeFirst.bat`
+- Or manually repair bootstrap environment:
+  - `powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe E:\APPS\Python_3.11\python.exe -Lane cu128`
+- Re-run:
+  - `powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1`
 
 ## Launcher fails GPU preflight for lane/driver mismatch
 Cause:

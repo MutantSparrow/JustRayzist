@@ -29,10 +29,16 @@ from app.storage.gallery_index import (
 
 
 def _assert_supported_backend(model_pack: ModelPack) -> None:
-    backend_name = (model_pack.backend_preference[0] if model_pack.backend_preference else "").lower()
-    if backend_name not in {"diffusers", "diffusers_zimage"}:
+    supported = {"diffusers", "diffusers_zimage"}
+    backends = [
+        str(name).strip().lower()
+        for name in model_pack.backend_preference
+        if str(name).strip()
+    ]
+    if not any(name in supported for name in backends):
         raise ModelPackValidationError(
-            f"Unsupported backend '{backend_name}'. Use backend_preference: ['diffusers']."
+            "Unsupported backend preference list "
+            f"{model_pack.backend_preference!r}. Include one of: {sorted(supported)}."
         )
 
 

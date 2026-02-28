@@ -221,7 +221,13 @@ class DiffusersZImageBackend:
         if self._img2img_pipe is not None:
             return self._img2img_pipe
 
-        from diffusers import ZImageImg2ImgPipeline
+        try:
+            from diffusers import ZImageImg2ImgPipeline
+        except ImportError as exc:
+            raise ImportError(
+                "Installed diffusers build is missing ZImageImg2ImgPipeline. "
+                "Run RunMeFirst.bat to repair the environment."
+            ) from exc
 
         loaded = self._ensure_loaded()
         base_pipe = loaded.pipeline
