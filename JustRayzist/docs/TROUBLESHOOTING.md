@@ -71,13 +71,23 @@ Action:
 - Update NVIDIA driver to meet lane floor.
 - Or use artifact built for another lane.
 
-## Upscale fails: missing `.pth` checkpoint
+## Upscale fails: missing upscaler checkpoint
 Cause:
 - No upscaler checkpoint is bundled in release artifacts.
 
 Action:
-- Place a compatible `.pth` file under `models/upscaler/`.
+- Place a compatible `.pth` or `.safetensors` file under `models/upscaler/`.
 - Provide that path to CLI upscale commands when needed.
+
+## Upscale output has color cast or severe seams
+Cause:
+- PLKSR checkpoints that use `layer_norm` can produce bad color/seams if loaded with a mismatched norm layout or aggressive tiling.
+
+Action:
+- Use current builds where LayerNorm PLKSR is auto-detected.
+- For `upscale-test`, allow auto policy (no explicit `--tile-size`) so layer_norm models run full-frame.
+- If you must force tiling, use higher overlap and validate output visually:
+  - `--tile-size 256 --tile-overlap 32`
 
 ## Slow first iteration in soak runs
 Expected:
@@ -85,6 +95,20 @@ Expected:
 
 Recommendation:
 - Keep `--warmup` enabled for soak tests.
+
+## `high` profile refine is too slow or times out
+Cause:
+- Refine stage can become expensive on large post-upscale images when full-frame img2img is used.
+
+Current behavior:
+- Adaptive tiling is used by default for larger outputs.
+- `high` uses full-frame only for smaller outputs (`max side <= 1024`), then switches to tiled refine.
+- If refine hits CUDA OOM, runtime retries with progressively smaller tiles.
+
+Action:
+- Keep auto tiling (omit `--refine-tile-size`) unless you are intentionally tuning.
+- For strict runtime caps, force tiling explicitly:
+  - `--refine-tile-size 1024 --refine-tile-overlap 64`
 
 ## Large memory drift during soak
 Use:

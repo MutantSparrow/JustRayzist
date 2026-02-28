@@ -18,8 +18,4 @@ class GenerationRequest:
     refine_steps: int | None = None
     refine_tile_size: int | None = None
     refine_tile_overlap: int = 64
-    sharpen_enabled: bool = True
-    sharpen_sigma: float | None = None
-    sharpen_amount: float | None = None
-    sharpen_threshold: int | None = None
     upscaler_checkpoint: Path | None = None

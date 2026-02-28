@@ -40,6 +40,7 @@ class UpscaleResult:
     output_width: int
     output_height: int
     architecture: str
+    norm_kind: str | None
     cuda_memory_before: CudaMemorySnapshot | None
     cuda_memory_after: CudaMemorySnapshot | None
     process_memory_before: ProcessMemorySnapshot | None
@@ -58,6 +59,7 @@ class UpscaleResult:
             "output_width": self.output_width,
             "output_height": self.output_height,
             "architecture": self.architecture,
+            "norm_kind": self.norm_kind,
             "cuda_memory_before": (
                 self.cuda_memory_before.to_dict() if self.cuda_memory_before else None
             ),
@@ -73,7 +75,12 @@ class UpscaleResult:
         }
 
 
-def resolve_upscale_policy(profile_name: str, architecture: str) -> UpscalePolicy:
+def resolve_upscale_policy(
+    profile_name: str,
+    architecture: str,
+    *,
+    norm_kind: str | None = None,
+) -> UpscalePolicy:
     normalized = profile_name.strip().lower()
     architecture_name = architecture.strip().lower()
 
@@ -87,13 +94,23 @@ def resolve_upscale_policy(profile_name: str, architecture: str) -> UpscalePolic
         return UpscalePolicy(tile_size=384, tile_overlap=24, prefer_half_precision=True)
 
     if architecture_name == "plksr":
+        selected: UpscalePolicy
         if normalized == "high":
-            return UpscalePolicy(tile_size=0, tile_overlap=24, prefer_half_precision=False)
-        if normalized == "balanced":
-            return UpscalePolicy(tile_size=512, tile_overlap=24, prefer_half_precision=False)
-        if normalized == "constrained":
-            return UpscalePolicy(tile_size=256, tile_overlap=16, prefer_half_precision=False)
-        return UpscalePolicy(tile_size=384, tile_overlap=24, prefer_half_precision=False)
+            selected = UpscalePolicy(tile_size=0, tile_overlap=24, prefer_half_precision=False)
+        elif normalized == "balanced":
+            selected = UpscalePolicy(tile_size=512, tile_overlap=24, prefer_half_precision=False)
+        elif normalized == "constrained":
+            selected = UpscalePolicy(tile_size=256, tile_overlap=16, prefer_half_precision=False)
+        else:
+            selected = UpscalePolicy(tile_size=384, tile_overlap=24, prefer_half_precision=False)
+        if norm_kind == "layer_norm_2d":
+            # Quality-safe default: LayerNorm PLKSR checkpoints are seam-prone when tiled.
+            return UpscalePolicy(
+                tile_size=0,
+                tile_overlap=selected.tile_overlap,
+                prefer_half_precision=selected.prefer_half_precision,
+            )
+        return selected
 
     if normalized == "high":
         return UpscalePolicy(tile_size=0, tile_overlap=24, prefer_half_precision=True)
@@ -126,10 +143,19 @@ def _normalize_state_dict_keys(state_dict: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
     for key, value in state_dict.items():
         candidate = key.removeprefix("module.")
-        candidate = candidate.replace(".layer_norm.", ".norm.")
         if candidate not in normalized:
             normalized[candidate] = value
     return normalized
+
+
+def _detect_plksr_norm_kind(state_dict: dict[str, Any]) -> str:
+    has_group_norm = any(re.match(r"^feats\.\d+\.norm\.(weight|bias)$", key) for key in state_dict)
+    has_layer_norm = any(re.match(r"^feats\.\d+\.layer_norm\.(weight|bias)$", key) for key in state_dict)
+    if has_group_norm and has_layer_norm:
+        raise ValueError("PLKSR checkpoint mixes GroupNorm and LayerNorm weights.")
+    if has_layer_norm:
+        return "layer_norm_2d"
+    return "group_norm"
 
 
 def _detect_upscaler_architecture(state_dict: dict[str, Any]) -> str:
@@ -358,7 +384,12 @@ def _build_rrdb_network(torch_module: Any, state_dict: dict[str, Any]) -> tuple[
     return model, scale_factor
 
 
-def _build_plksr_network(torch_module: Any, state_dict: dict[str, Any]) -> tuple[Any, int]:
+def _build_plksr_network(
+    torch_module: Any,
+    state_dict: dict[str, Any],
+    *,
+    norm_kind: str = "group_norm",
+) -> tuple[Any, int]:
     nn = torch_module.nn
 
     conv_index_pattern = re.compile(r"^feats\.(\d+)\.weight$")
@@ -442,22 +473,44 @@ def _build_plksr_network(torch_module: Any, state_dict: dict[str, Any]) -> tuple
             *,
             use_ea_value: bool,
             norm_groups_value: int,
+            norm_kind_value: str,
         ):
             super().__init__()
             self.channel_mixer = DCCM(dim_value)
             self.lk = PLKConv2d(n_split_value, kernel_size_value)
             self.attn = EA(dim_value) if use_ea_value else nn.Identity()
             self.refine = nn.Conv2d(dim_value, dim_value, 1, 1, 0)
-            self.norm = nn.GroupNorm(norm_groups_value, dim_value)
+            self.norm = nn.GroupNorm(norm_groups_value, dim_value) if norm_kind_value == "group_norm" else None
+            self.layer_norm = LayerNorm2d(dim_value) if norm_kind_value == "layer_norm_2d" else None
 
         def forward(self, x: Any) -> Any:
             x_skip = x
+            if self.layer_norm is not None:
+                # LayerNorm checkpoints in this family are pre-norm.
+                x = self.layer_norm(x)
             x = self.channel_mixer(x)
             x = self.lk(x)
             x = self.attn(x)
             x = self.refine(x)
-            x = self.norm(x)
+            if self.norm is not None:
+                x = self.norm(x)
             return x + x_skip
+
+    class LayerNorm2d(nn.Module):
+        def __init__(self, dim_value: int, eps_value: float = 1e-6):
+            super().__init__()
+            self.weight = nn.Parameter(torch_module.ones(dim_value))
+            self.bias = nn.Parameter(torch_module.zeros(dim_value))
+            self.eps = float(eps_value)
+
+        def forward(self, x: Any) -> Any:
+            mean = x.mean(dim=1, keepdim=True)
+            variance = (x - mean).pow(2).mean(dim=1, keepdim=True)
+            normalized = (x - mean) / torch_module.sqrt(variance + self.eps)
+            return (
+                normalized * self.weight.view(1, -1, 1, 1)
+                + self.bias.view(1, -1, 1, 1)
+            )
 
     modules: list[Any] = []
     for index in range(max_feature_index + 1):
@@ -501,6 +554,7 @@ def _build_plksr_network(torch_module: Any, state_dict: dict[str, Any]) -> tuple
                     kernel_size_value=kernel_size,
                     use_ea_value=use_ea,
                     norm_groups_value=norm_groups,
+                    norm_kind_value=norm_kind,
                 )
             )
             continue
@@ -524,14 +578,19 @@ def _build_plksr_network(torch_module: Any, state_dict: dict[str, Any]) -> tuple
     return model, scale_factor
 
 
-def _build_upscaler_network(torch_module: Any, state_dict: dict[str, Any]) -> tuple[Any, int]:
+def _build_upscaler_network(
+    torch_module: Any,
+    state_dict: dict[str, Any],
+    *,
+    norm_kind: str | None = None,
+) -> tuple[Any, int]:
     architecture = _detect_upscaler_architecture(state_dict)
     if architecture == "compact":
         return _build_compact_network(torch_module, state_dict)
     if architecture == "rrdb":
         return _build_rrdb_network(torch_module, state_dict)
     if architecture == "plksr":
-        return _build_plksr_network(torch_module, state_dict)
+        return _build_plksr_network(torch_module, state_dict, norm_kind=norm_kind or "group_norm")
     raise ValueError(f"Unsupported upscaler architecture: {architecture}")
 
 
@@ -609,6 +668,8 @@ def run_upscale_test(
     input_image_path: Path,
     checkpoint_path: Path,
     profile_name: str,
+    tile_size_override: int | None = None,
+    tile_overlap_override: int | None = None,
 ) -> UpscaleResult:
     with Image.open(input_image_path) as source_file:
         source = source_file.convert("RGB")
@@ -616,6 +677,8 @@ def run_upscale_test(
         image=source,
         checkpoint_path=checkpoint_path,
         profile_name=profile_name,
+        tile_size_override=tile_size_override,
+        tile_overlap_override=tile_overlap_override,
     )
 
 
@@ -624,6 +687,8 @@ def upscale_image(
     image: Image.Image,
     checkpoint_path: Path,
     profile_name: str,
+    tile_size_override: int | None = None,
+    tile_overlap_override: int | None = None,
 ) -> UpscaleResult:
     import torch
 
@@ -647,11 +712,16 @@ def upscale_image(
         checkpoint = torch.load(checkpoint_path, **load_kwargs)
     state_dict = _normalize_state_dict_keys(_extract_state_dict(torch, checkpoint))
     architecture = _detect_upscaler_architecture(state_dict)
-    policy = resolve_upscale_policy(profile_name, architecture=architecture)
+    norm_kind = _detect_plksr_norm_kind(state_dict) if architecture == "plksr" else None
+    policy = resolve_upscale_policy(profile_name, architecture=architecture, norm_kind=norm_kind)
+    effective_tile_size = policy.tile_size if tile_size_override is None else max(0, int(tile_size_override))
+    effective_tile_overlap = (
+        policy.tile_overlap if tile_overlap_override is None else max(0, int(tile_overlap_override))
+    )
 
     use_half = device == "cuda" and policy.prefer_half_precision
     dtype = torch.float16 if use_half else torch.float32
-    model, scale_factor = _build_upscaler_network(torch, state_dict)
+    model, scale_factor = _build_upscaler_network(torch, state_dict, norm_kind=norm_kind)
     model.load_state_dict(state_dict, strict=True)
     model = model.to(device=device)
     if use_half:
@@ -670,8 +740,8 @@ def upscale_image(
             model=model,
             input_tensor=input_tensor,
             scale_factor=scale_factor,
-            tile_size=policy.tile_size,
-            tile_overlap=policy.tile_overlap,
+            tile_size=effective_tile_size,
+            tile_overlap=effective_tile_overlap,
         )
     if torch.cuda.is_available():
         torch.cuda.synchronize()
@@ -685,14 +755,15 @@ def upscale_image(
         scale_factor=scale_factor,
         device=device,
         precision="fp16" if use_half else "fp32",
-        tile_size=policy.tile_size,
-        tile_overlap=policy.tile_overlap,
+        tile_size=effective_tile_size,
+        tile_overlap=effective_tile_overlap,
         duration_ms=duration_ms,
         source_width=int(source.width),
         source_height=int(source.height),
         output_width=int(output_image.width),
         output_height=int(output_image.height),
         architecture=architecture,
+        norm_kind=norm_kind,
         cuda_memory_before=cuda_before,
         cuda_memory_after=cuda_after,
         process_memory_before=process_before,

@@ -43,7 +43,7 @@ Outputs:
 - Generation metric row in `data/generation_metrics.jsonl`
 
 ## Upscale Test (Profile Sweep)
-Run superscaling on a local PNG using a local `.pth` upscaler checkpoint:
+Run superscaling on a local PNG using a local upscaler checkpoint (`.pth` or `.safetensors`):
 ```powershell
 python -m app.cli.main upscale-test `
   --input-image outputs/_Upscale_test.png `
@@ -51,34 +51,38 @@ python -m app.cli.main upscale-test `
   --profiles high,balanced,constrained
 ```
 
+Optional upscaler tiling overrides:
+- `--tile-size`: force upscale tiling (`0` means full-frame upscale).
+- `--tile-overlap`: overlap for tiled upscale.
+
 Outputs:
 - One upscaled PNG per tested profile in `outputs/`
 - One metric row per tested profile in `data/generation_metrics.jsonl` (`mode=upscale_test`)
 
 ## Upscale + Refine (2-Step)
-Run a three-stage path: `RealESRGAN x2plus` upscaling, then luma-only unsharp (`YCbCr`, Y channel), then Z-Image Turbo `img2img` refinement on the x2 image.
+Run a two-stage path: `RealESRGAN x2plus` upscaling, then Z-Image Turbo `img2img` refinement on the x2 image.
 ```powershell
 python -m app.cli.main upscale-refine `
   --pack Rayzist_bf16 `
   --input-image outputs/_Upscale_test.png `
   --checkpoint models/upscaler/2x_RealESRGAN_x2plus.pth `
   --prompt "portrait photo, natural skin, realistic detail" `
-  --sharpen `
-  --sharpen-sigma 1.0 `
-  --sharpen-amount 0.35 `
-  --sharpen-threshold 3 `
   --strength 0.20 `
   --refine-steps 6 `
   --profile balanced
 ```
 
 Useful flags:
-- `--sharpen/--no-sharpen`: enable or disable the luma unsharp middle pass.
-- `--sharpen-sigma`, `--sharpen-amount`, `--sharpen-threshold`: unsharp controls for Y channel.
 - `--enhance-prompt`: rewrite prompt with loaded text encoder before refine pass.
 - `--refine-tile-size`: force tiled refine size (`0` means full-frame refine).
 - `--refine-tile-overlap`: overlap used when tiled refine is active.
 - `--scheduler-mode euler|dpm`: choose scheduler for img2img refine.
+
+Adaptive refine defaults when `--refine-tile-size` is omitted:
+- `high`: full-frame for smaller outputs (`max side <= 1024`), otherwise adaptive tiling (2x2 grid, cap 896).
+- `balanced`: adaptive tiling (3x3 grid, cap 1024).
+- `constrained`: adaptive tiling (4x4 grid, cap 896).
+- On CUDA OOM during refine, runtime retries with smaller tiles before failing.
 
 Outputs:
 - One final refined PNG in `outputs/`

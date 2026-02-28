@@ -242,6 +242,18 @@ def upscale_test(
         "--profiles",
         help="Comma-separated profile list to test (high, balanced, constrained).",
     ),
+    tile_size: Optional[int] = typer.Option(
+        None,
+        "--tile-size",
+        min=0,
+        help="Override upscaler tile size. Use 0 for full-frame (no tiling).",
+    ),
+    tile_overlap: Optional[int] = typer.Option(
+        None,
+        "--tile-overlap",
+        min=0,
+        help="Override upscaler tile overlap. Ignored when tile size is 0.",
+    ),
 ) -> None:
     import gc
 
@@ -279,6 +291,8 @@ def upscale_test(
                 input_image_path=input_path,
                 checkpoint_path=checkpoint_path,
                 profile_name=settings.runtime_profile.name,
+                tile_size_override=tile_size,
+                tile_overlap_override=tile_overlap,
             )
             destination_dir = (
                 _resolve_cli_path(root, output_dir) if output_dir else settings.paths.outputs_dir
@@ -354,31 +368,6 @@ def upscale_refine(
         min=8,
         help="Tile overlap for img2img refine when tiling is active.",
     ),
-    sharpen: bool = typer.Option(
-        True,
-        "--sharpen/--no-sharpen",
-        help="Apply luma-only unsharp mask between upscale and img2img refine.",
-    ),
-    sharpen_sigma: float = typer.Option(
-        1.0,
-        "--sharpen-sigma",
-        min=0.0,
-        help="Unsharp sigma/radius on Y channel (YCbCr).",
-    ),
-    sharpen_amount: float = typer.Option(
-        0.35,
-        "--sharpen-amount",
-        min=0.0,
-        max=4.0,
-        help="Unsharp amount for Y channel.",
-    ),
-    sharpen_threshold: int = typer.Option(
-        3,
-        "--sharpen-threshold",
-        min=0,
-        max=255,
-        help="Unsharp threshold in 8-bit scale (noise suppression).",
-    ),
     scheduler_mode: str = typer.Option("euler", "--scheduler-mode"),
     seed: Optional[int] = typer.Option(None, "--seed"),
     enhance_prompt: bool = typer.Option(
@@ -426,10 +415,6 @@ def upscale_refine(
                 refine_steps=refine_steps,
                 refine_tile_size=refine_tile_size,
                 refine_tile_overlap=refine_tile_overlap,
-                sharpen_enabled=sharpen,
-                sharpen_sigma=sharpen_sigma,
-                sharpen_amount=sharpen_amount,
-                sharpen_threshold=sharpen_threshold,
                 upscaler_checkpoint=checkpoint_path,
             ),
         )
@@ -460,15 +445,15 @@ def upscale_refine(
             "model_pack": model_pack.name,
             "duration_ms": result.duration_ms,
             "upscale_duration_ms": result.upscale_duration_ms,
-            "sharpen_duration_ms": result.sharpen_duration_ms,
-            "sharpen_enabled": result.sharpen_enabled,
-            "sharpen_sigma": result.sharpen_sigma,
-            "sharpen_amount": result.sharpen_amount,
-            "sharpen_threshold": result.sharpen_threshold,
             "refine_duration_ms": result.refine_duration_ms,
             "refine_strength": result.refine_strength,
             "refine_tile_size": result.refine_tile_size,
             "refine_tile_overlap": result.refine_tile_overlap,
+            "refine_tile_size_requested": result.refine_tile_size_requested,
+            "refine_tile_size_effective": result.refine_tile_size_effective,
+            "refine_tile_overlap_effective": result.refine_tile_overlap_effective,
+            "refine_fallback_used": result.refine_fallback_used,
+            "refine_fallback_attempt_count": result.refine_fallback_attempt_count,
             "upscaler_checkpoint": str(checkpoint_path),
         },
     )
@@ -497,7 +482,7 @@ def upscale_refine(
     )
     typer.echo(
         f"Mode={result.mode}, total={result.duration_ms} ms, "
-        f"upscale={result.upscale_duration_ms} ms, sharpen={result.sharpen_duration_ms} ms, "
+        f"upscale={result.upscale_duration_ms} ms, "
         f"refine={result.refine_duration_ms} ms, "
         f"tile={result.refine_tile_size}"
     )

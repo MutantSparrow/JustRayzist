@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 import string
 import inspect
@@ -8,7 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from PIL import Image, ImageFilter
+from PIL import Image
 
 from app.config.settings import AppSettings
 from app.core.memory import (
@@ -41,15 +42,15 @@ class GenerationResult:
     prompt_enhanced: bool
     mode: str = "text2img"
     upscale_duration_ms: int | None = None
-    sharpen_duration_ms: int | None = None
-    sharpen_enabled: bool | None = None
-    sharpen_sigma: float | None = None
-    sharpen_amount: float | None = None
-    sharpen_threshold: int | None = None
     refine_duration_ms: int | None = None
     refine_strength: float | None = None
     refine_tile_size: int | None = None
     refine_tile_overlap: int | None = None
+    refine_tile_size_requested: int | None = None
+    refine_tile_size_effective: int | None = None
+    refine_tile_overlap_effective: int | None = None
+    refine_fallback_used: bool | None = None
+    refine_fallback_attempt_count: int | None = None
     input_image_width: int | None = None
     input_image_height: int | None = None
     cuda_memory_before: CudaMemorySnapshot | None = None
@@ -71,15 +72,15 @@ class GenerationResult:
             "prompt_enhanced": self.prompt_enhanced,
             "mode": self.mode,
             "upscale_duration_ms": self.upscale_duration_ms,
-            "sharpen_duration_ms": self.sharpen_duration_ms,
-            "sharpen_enabled": self.sharpen_enabled,
-            "sharpen_sigma": self.sharpen_sigma,
-            "sharpen_amount": self.sharpen_amount,
-            "sharpen_threshold": self.sharpen_threshold,
             "refine_duration_ms": self.refine_duration_ms,
             "refine_strength": self.refine_strength,
             "refine_tile_size": self.refine_tile_size,
             "refine_tile_overlap": self.refine_tile_overlap,
+            "refine_tile_size_requested": self.refine_tile_size_requested,
+            "refine_tile_size_effective": self.refine_tile_size_effective,
+            "refine_tile_overlap_effective": self.refine_tile_overlap_effective,
+            "refine_fallback_used": self.refine_fallback_used,
+            "refine_fallback_attempt_count": self.refine_fallback_attempt_count,
             "input_image_width": self.input_image_width,
             "input_image_height": self.input_image_height,
             "cuda_memory_before": (
@@ -98,12 +99,51 @@ class GenerationResult:
 
 
 class DiffusersZImageBackend:
+    _REFINE_TILE_SNAP = 64
+    _REFINE_GRID_DIVISOR_BY_PROFILE: dict[str, int] = {
+        "high": 2,
+        "balanced": 3,
+        "constrained": 4,
+    }
+    _REFINE_TILE_CAP_BY_PROFILE: dict[str, int] = {
+        "high": 896,
+        "balanced": 1024,
+        "constrained": 896,
+    }
+    _REFINE_HIGH_FULL_FRAME_MAX_DIM = 1024
+    _REFINE_FALLBACK_MIN_TILE_BY_PROFILE: dict[str, int] = {
+        "high": 512,
+        "balanced": 640,
+        "constrained": 512,
+    }
+    _REFINE_FALLBACK_STEP_FACTORS: tuple[float, ...] = (0.8, 0.64, 0.5)
+
     def __init__(self, settings: AppSettings, model_pack: ModelPack):
         self._settings = settings
         self._model_pack = model_pack
         self._loaded: LoadedZImagePipeline | None = None
         self._img2img_pipe: Any | None = None
         self._active_scheduler_mode_by_pipe: dict[int, str] = {}
+
+    @staticmethod
+    def _snap_up(value: int, multiple: int) -> int:
+        if value <= 0:
+            return 0
+        return int(math.ceil(value / multiple) * multiple)
+
+    @classmethod
+    def _build_stepdown_tiles(cls, start_tile: int, min_tile: int) -> list[int]:
+        if start_tile <= 0:
+            return []
+        tiles: list[int] = []
+        current = start_tile
+        for factor in cls._REFINE_FALLBACK_STEP_FACTORS:
+            candidate = cls._snap_up(int(current * factor), cls._REFINE_TILE_SNAP)
+            candidate = max(min_tile, candidate)
+            if candidate < current and candidate not in tiles:
+                tiles.append(candidate)
+                current = candidate
+        return tiles
 
     @staticmethod
     def _normalize_scheduler_mode(mode: str | None) -> str:
@@ -507,54 +547,16 @@ class DiffusersZImageBackend:
             return tile_size, overlap
 
         profile_name = self._settings.runtime_profile.name
-        if profile_name == "high":
+        max_dim = max(width, height)
+        if profile_name == "high" and max_dim <= self._REFINE_HIGH_FULL_FRAME_MAX_DIM:
             tile_size = 0
-        elif profile_name == "balanced":
-            tile_size = 1280
         else:
-            tile_size = 896
-
-        if max(width, height) <= tile_size or tile_size <= 0:
-            return 0, overlap
+            grid_divisor = self._REFINE_GRID_DIVISOR_BY_PROFILE.get(profile_name, 3)
+            tile_cap = self._REFINE_TILE_CAP_BY_PROFILE.get(profile_name, 1024)
+            raw_tile = int(math.ceil(max_dim / max(1, grid_divisor)))
+            snapped_tile = self._snap_up(raw_tile, self._REFINE_TILE_SNAP)
+            tile_size = min(tile_cap, snapped_tile)
         return tile_size, overlap
-
-    @staticmethod
-    def _resolve_sharpen_params(request: GenerationRequest) -> tuple[bool, float, float, int]:
-        enabled = bool(request.sharpen_enabled)
-        sigma = float(request.sharpen_sigma if request.sharpen_sigma is not None else 1.0)
-        amount = float(request.sharpen_amount if request.sharpen_amount is not None else 0.35)
-        threshold = int(request.sharpen_threshold if request.sharpen_threshold is not None else 3)
-        if sigma < 0:
-            raise ValueError("sharpen_sigma must be >= 0.")
-        if amount < 0:
-            raise ValueError("sharpen_amount must be >= 0.")
-        if threshold < 0 or threshold > 255:
-            raise ValueError("sharpen_threshold must be between 0 and 255.")
-        return enabled, sigma, amount, threshold
-
-    @staticmethod
-    def _apply_luma_unsharp_mask(
-        image: Image.Image,
-        *,
-        sigma: float,
-        amount: float,
-        threshold: int,
-    ) -> Image.Image:
-        if sigma <= 0.0 or amount <= 0.0:
-            return image
-        percent = int(round(amount * 100.0))
-        if percent <= 0:
-            return image
-
-        y, cb, cr = image.convert("YCbCr").split()
-        y_sharp = y.filter(
-            ImageFilter.UnsharpMask(
-                radius=float(sigma),
-                percent=percent,
-                threshold=int(threshold),
-            )
-        )
-        return Image.merge("YCbCr", (y_sharp, cb, cr)).convert("RGB")
 
     def _run_rewrite_attempt(
         self,
@@ -824,67 +826,92 @@ class DiffusersZImageBackend:
         tile_size: int,
         tile_overlap: int,
         torch_module: Any,
-    ) -> tuple[Image.Image, int, int]:
-        if tile_size > 0:
-            return (
-                self._run_img2img_tiled(
-                    pipe=pipe,
-                    prompt=prompt,
-                    image=image,
-                    strength=strength,
-                    steps=steps,
-                    guidance_scale=guidance_scale,
-                    seed=seed,
-                    tile_size=tile_size,
-                    tile_overlap=tile_overlap,
-                    torch_module=torch_module,
-                ),
-                tile_size,
-                tile_overlap,
-            )
+    ) -> tuple[Image.Image, int, int, int]:
+        profile_name = self._settings.runtime_profile.name
+        fallback_overlap = max(32, tile_overlap)
+        min_tile = self._REFINE_FALLBACK_MIN_TILE_BY_PROFILE.get(profile_name, 512)
 
-        generator = self._build_generator(
-            torch_module,
-            "cuda" if torch_module.cuda.is_available() else "cpu",
-            seed,
-        )
-        try:
-            return (
-                self._run_img2img_once(
-                    pipe=pipe,
-                    prompt=prompt,
-                    image=image,
-                    strength=strength,
-                    steps=steps,
-                    guidance_scale=guidance_scale,
-                    generator=generator,
-                    torch_module=torch_module,
-                ),
-                0,
-                tile_overlap,
-            )
-        except RuntimeError as exc:
-            if "out of memory" not in str(exc).lower():
-                raise
-            LOGGER.warning("Img2img refine OOM on full frame, retrying with tiles.")
-            self._clear_cuda_cache(torch_module)
-            fallback_tile = 896
-            return (
-                self._run_img2img_tiled(
-                    pipe=pipe,
-                    prompt=prompt,
-                    image=image,
-                    strength=strength,
-                    steps=steps,
-                    guidance_scale=guidance_scale,
-                    seed=seed,
-                    tile_size=fallback_tile,
-                    tile_overlap=max(32, tile_overlap),
-                    torch_module=torch_module,
-                ),
-                fallback_tile,
-                max(32, tile_overlap),
-            )
+        attempt_tiles: list[int] = []
+        if tile_size > 0:
+            attempt_tiles.append(tile_size)
+            attempt_tiles.extend(self._build_stepdown_tiles(tile_size, min_tile))
+        else:
+            attempt_tiles.append(0)
+            max_dim = max(image.width, image.height)
+            cap = self._REFINE_TILE_CAP_BY_PROFILE.get(profile_name, 1024)
+            fallback_start = min(cap, max_dim)
+            fallback_start = self._snap_up(fallback_start, self._REFINE_TILE_SNAP)
+            fallback_start = max(min_tile, fallback_start)
+            attempt_tiles.append(fallback_start)
+            attempt_tiles.extend(self._build_stepdown_tiles(fallback_start, min_tile))
+
+        normalized_attempt_tiles: list[int] = []
+        for index, candidate in enumerate(attempt_tiles):
+            if index > 0 and candidate > 0:
+                candidate = self._snap_up(candidate, self._REFINE_TILE_SNAP)
+                candidate = max(min_tile, candidate)
+            if candidate not in normalized_attempt_tiles:
+                normalized_attempt_tiles.append(candidate)
+        attempt_tiles = normalized_attempt_tiles
+
+        fallback_attempts = 0
+        for idx, candidate_tile in enumerate(attempt_tiles):
+            try:
+                if candidate_tile > 0:
+                    return (
+                        self._run_img2img_tiled(
+                            pipe=pipe,
+                            prompt=prompt,
+                            image=image,
+                            strength=strength,
+                            steps=steps,
+                            guidance_scale=guidance_scale,
+                            seed=seed,
+                            tile_size=candidate_tile,
+                            tile_overlap=fallback_overlap,
+                            torch_module=torch_module,
+                        ),
+                        candidate_tile,
+                        fallback_overlap,
+                        fallback_attempts,
+                    )
+                generator = self._build_generator(
+                    torch_module,
+                    "cuda" if torch_module.cuda.is_available() else "cpu",
+                    seed,
+                )
+                return (
+                    self._run_img2img_once(
+                        pipe=pipe,
+                        prompt=prompt,
+                        image=image,
+                        strength=strength,
+                        steps=steps,
+                        guidance_scale=guidance_scale,
+                        generator=generator,
+                        torch_module=torch_module,
+                    ),
+                    0,
+                    tile_overlap,
+                    fallback_attempts,
+                )
+            except RuntimeError as exc:
+                if "out of memory" not in str(exc).lower():
+                    raise
+                if idx == len(attempt_tiles) - 1:
+                    raise
+                fallback_attempts += 1
+                if candidate_tile == 0:
+                    LOGGER.warning(
+                        "Img2img refine OOM on full frame, retrying with tiled refine."
+                    )
+                else:
+                    LOGGER.warning(
+                        "Img2img refine OOM at tile size %s, retrying with smaller tile.",
+                        candidate_tile,
+                    )
+                self._clear_cuda_cache(torch_module)
+        raise RuntimeError("Unreachable OOM fallback state.")
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         loaded = self._ensure_loaded()
@@ -968,9 +995,6 @@ class DiffusersZImageBackend:
             if request.guidance_scale is not None
             else self._settings.runtime_profile.guidance_scale_default
         )
-        sharpen_enabled, sharpen_sigma, sharpen_amount, sharpen_threshold = self._resolve_sharpen_params(
-            request
-        )
         prompt_original, prompt_effective, prompt_enhanced = self._resolve_effective_prompt(
             pipe=txt_pipe,
             prompt=request.prompt,
@@ -995,24 +1019,19 @@ class DiffusersZImageBackend:
             profile_name=self._settings.runtime_profile.name,
         )
         refine_input_image = upscale_result.image
-        sharpen_duration_ms = 0
-        if sharpen_enabled:
-            sharpen_started = now_perf()
-            refine_input_image = self._apply_luma_unsharp_mask(
-                refine_input_image,
-                sigma=sharpen_sigma,
-                amount=sharpen_amount,
-                threshold=sharpen_threshold,
-            )
-            sharpen_duration_ms = int((now_perf() - sharpen_started) * 1000)
 
-        tile_size, tile_overlap = self._resolve_refine_tiling(
+        tile_size_requested, tile_overlap_requested = self._resolve_refine_tiling(
             request,
             refine_input_image.width,
             refine_input_image.height,
         )
         refine_started = now_perf()
-        refined_image, effective_tile_size, effective_tile_overlap = self._run_refine_with_oom_fallback(
+        (
+            refined_image,
+            effective_tile_size,
+            effective_tile_overlap,
+            fallback_attempt_count,
+        ) = self._run_refine_with_oom_fallback(
             pipe=img_pipe,
             prompt=prompt_effective,
             image=refine_input_image,
@@ -1020,8 +1039,8 @@ class DiffusersZImageBackend:
             steps=refine_steps,
             guidance_scale=guidance_scale,
             seed=request.seed,
-            tile_size=tile_size,
-            tile_overlap=tile_overlap,
+            tile_size=tile_size_requested,
+            tile_overlap=tile_overlap_requested,
             torch_module=torch,
         )
         if torch.cuda.is_available():
@@ -1045,15 +1064,15 @@ class DiffusersZImageBackend:
             prompt_enhanced=prompt_enhanced,
             mode="upscale_then_img2img",
             upscale_duration_ms=upscale_result.duration_ms,
-            sharpen_duration_ms=sharpen_duration_ms,
-            sharpen_enabled=sharpen_enabled,
-            sharpen_sigma=sharpen_sigma if sharpen_enabled else None,
-            sharpen_amount=sharpen_amount if sharpen_enabled else None,
-            sharpen_threshold=sharpen_threshold if sharpen_enabled else None,
             refine_duration_ms=refine_duration_ms,
             refine_strength=refine_strength,
             refine_tile_size=effective_tile_size,
             refine_tile_overlap=effective_tile_overlap,
+            refine_tile_size_requested=tile_size_requested,
+            refine_tile_size_effective=effective_tile_size,
+            refine_tile_overlap_effective=effective_tile_overlap,
+            refine_fallback_used=fallback_attempt_count > 0,
+            refine_fallback_attempt_count=fallback_attempt_count,
             input_image_width=input_image.width,
             input_image_height=input_image.height,
             cuda_memory_before=pre_mem,
