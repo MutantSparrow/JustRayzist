@@ -57,6 +57,10 @@ class GenerationResult:
     cuda_memory_after: CudaMemorySnapshot | None = None
     process_memory_before: ProcessMemorySnapshot | None = None
     process_memory_after: ProcessMemorySnapshot | None = None
+    runtime_profile: str | None = None
+    execution_mode: str | None = None
+    cuda_total_bytes: int | None = None
+    cuda_reserved_after_load_bytes: int | None = None
 
     def telemetry_dict(self) -> dict[str, Any]:
         return {
@@ -95,10 +99,20 @@ class GenerationResult:
             "process_memory_after": (
                 self.process_memory_after.to_dict() if self.process_memory_after else None
             ),
+            "runtime_profile": self.runtime_profile,
+            "execution_mode": self.execution_mode,
+            "cuda_total_bytes": self.cuda_total_bytes,
+            "cuda_reserved_after_load_bytes": self.cuda_reserved_after_load_bytes,
         }
 
 
 class DiffusersZImageBackend:
+    _HIGH_MODE_AUTO = "auto"
+    _HIGH_MODE_FULL_CUDA = "full_cuda"
+    _HIGH_MODE_MODEL_OFFLOAD = "model_offload"
+    _HIGH_RUNTIME_PRESSURE_RATIO = 0.90
+    _HIGH_RUNTIME_PRESSURE_HITS_TO_FALLBACK = 1
+
     _REFINE_TILE_SNAP = 64
     _REFINE_GRID_DIVISOR_BY_PROFILE: dict[str, int] = {
         "high": 2,
@@ -124,6 +138,11 @@ class DiffusersZImageBackend:
         self._loaded: LoadedZImagePipeline | None = None
         self._img2img_pipe: Any | None = None
         self._active_scheduler_mode_by_pipe: dict[int, str] = {}
+        self._effective_execution_mode: str = "unknown"
+        self._cuda_total_bytes: int | None = None
+        self._cuda_reserved_after_load_bytes: int | None = None
+        self._high_runtime_fallback_latched = False
+        self._high_runtime_pressure_hits = 0
 
     @staticmethod
     def _snap_up(value: int, multiple: int) -> int:
@@ -144,6 +163,215 @@ class DiffusersZImageBackend:
                 tiles.append(candidate)
                 current = candidate
         return tiles
+
+    def _default_execution_mode_for_profile(self) -> str:
+        profile = self._settings.runtime_profile
+        if profile.enable_sequential_offload:
+            return "sequential_offload"
+        if profile.enable_cpu_offload:
+            return self._HIGH_MODE_MODEL_OFFLOAD
+        return self._HIGH_MODE_FULL_CUDA
+
+    def _normalize_high_force_mode(self) -> str:
+        if self._settings.runtime_profile.name != "high":
+            return self._HIGH_MODE_AUTO
+
+        raw_mode = str(getattr(self._settings.runtime_profile, "high_force_mode", "auto") or "auto")
+        normalized = raw_mode.strip().lower()
+        if normalized in {
+            self._HIGH_MODE_AUTO,
+            self._HIGH_MODE_FULL_CUDA,
+            self._HIGH_MODE_MODEL_OFFLOAD,
+        }:
+            return normalized
+
+        LOGGER.warning(
+            "Invalid high_force_mode '%s'. Falling back to auto.",
+            raw_mode,
+        )
+        return self._HIGH_MODE_AUTO
+
+    @staticmethod
+    def _cuda_capacity_snapshot(torch_module: Any) -> tuple[int | None, int | None]:
+        try:
+            if not torch_module.cuda.is_available():
+                return None, None
+            device = int(torch_module.cuda.current_device())
+            total_bytes = int(torch_module.cuda.get_device_properties(device).total_memory)
+            reserved_bytes = int(torch_module.cuda.memory_reserved(device))
+            return total_bytes, reserved_bytes
+        except Exception:
+            return None, None
+
+    @staticmethod
+    def _ratio(numerator: int | None, denominator: int | None) -> float | None:
+        if numerator is None or denominator is None or denominator <= 0:
+            return None
+        return float(numerator) / float(denominator)
+
+    def _apply_pipe_execution_mode(self, pipe: Any, mode: str) -> str:
+        if mode == "sequential_offload":
+            if hasattr(pipe, "enable_sequential_cpu_offload"):
+                pipe.enable_sequential_cpu_offload()
+                return "sequential_offload"
+            LOGGER.warning(
+                "Requested sequential_offload mode but pipeline does not support it; using model_offload."
+            )
+            mode = self._HIGH_MODE_MODEL_OFFLOAD
+
+        if mode == self._HIGH_MODE_MODEL_OFFLOAD:
+            if hasattr(pipe, "enable_model_cpu_offload"):
+                pipe.enable_model_cpu_offload()
+                return self._HIGH_MODE_MODEL_OFFLOAD
+            LOGGER.warning(
+                "Requested model_offload mode but pipeline does not support it; falling back to full_cuda."
+            )
+            mode = self._HIGH_MODE_FULL_CUDA
+
+        if mode == self._HIGH_MODE_FULL_CUDA:
+            pipe.to("cuda")
+            return self._HIGH_MODE_FULL_CUDA
+
+        return mode
+
+    def _resolve_high_startup_mode(self, total_bytes: int | None, reserved_bytes: int | None) -> str:
+        force_mode = self._normalize_high_force_mode()
+        if force_mode in {self._HIGH_MODE_FULL_CUDA, self._HIGH_MODE_MODEL_OFFLOAD}:
+            return force_mode
+
+        if force_mode != self._HIGH_MODE_AUTO:
+            return self._HIGH_MODE_MODEL_OFFLOAD
+
+        if total_bytes is None or reserved_bytes is None:
+            LOGGER.warning(
+                "Unable to read CUDA capacity snapshot for high profile startup; using model_offload."
+            )
+            return self._HIGH_MODE_MODEL_OFFLOAD
+
+        threshold = float(getattr(self._settings.runtime_profile, "high_reserved_vram_ratio_threshold", 0.82))
+        threshold = max(0.50, min(0.98, threshold))
+        ratio = self._ratio(reserved_bytes, total_bytes) or 1.0
+        if ratio > threshold:
+            return self._HIGH_MODE_MODEL_OFFLOAD
+        return self._HIGH_MODE_FULL_CUDA
+
+    def _initialize_execution_mode(self, pipe: Any) -> None:
+        import torch
+
+        if not torch.cuda.is_available():
+            self._effective_execution_mode = "cpu"
+            self._cuda_total_bytes = None
+            self._cuda_reserved_after_load_bytes = None
+            return
+
+        total_bytes, reserved_bytes = self._cuda_capacity_snapshot(torch)
+        profile_name = self._settings.runtime_profile.name
+        selected_mode = self._default_execution_mode_for_profile()
+        startup_ratio = self._ratio(reserved_bytes, total_bytes)
+
+        if profile_name == "high":
+            selected_mode = self._resolve_high_startup_mode(total_bytes, reserved_bytes)
+            if selected_mode == self._HIGH_MODE_MODEL_OFFLOAD:
+                try:
+                    self._apply_pipe_execution_mode(pipe, self._HIGH_MODE_MODEL_OFFLOAD)
+                    self._clear_cuda_cache(torch)
+                except Exception as exc:
+                    LOGGER.warning(
+                        "High profile startup offload selection failed, keeping full_cuda. %s",
+                        exc,
+                    )
+                    selected_mode = self._HIGH_MODE_FULL_CUDA
+            self._high_runtime_fallback_latched = selected_mode == self._HIGH_MODE_MODEL_OFFLOAD
+
+        self._effective_execution_mode = selected_mode
+        total_after, reserved_after = self._cuda_capacity_snapshot(torch)
+        self._cuda_total_bytes = total_after if total_after is not None else total_bytes
+        self._cuda_reserved_after_load_bytes = (
+            reserved_after if reserved_after is not None else reserved_bytes
+        )
+        after_ratio = self._ratio(self._cuda_reserved_after_load_bytes, self._cuda_total_bytes)
+        LOGGER.info(
+            "Execution mode initialized: profile=%s mode=%s startup_reserved_ratio=%s reserved_after_load_ratio=%s total_vram_bytes=%s reserved_after_load_bytes=%s",
+            profile_name,
+            self._effective_execution_mode,
+            f"{startup_ratio:.3f}" if startup_ratio is not None else "n/a",
+            f"{after_ratio:.3f}" if after_ratio is not None else "n/a",
+            self._cuda_total_bytes if self._cuda_total_bytes is not None else "n/a",
+            self._cuda_reserved_after_load_bytes
+            if self._cuda_reserved_after_load_bytes is not None
+            else "n/a",
+        )
+
+    def _apply_high_runtime_fallback_if_needed(
+        self,
+        *,
+        post_mem: CudaMemorySnapshot | None,
+        torch_module: Any,
+    ) -> None:
+        if self._settings.runtime_profile.name != "high":
+            return
+        if self._effective_execution_mode != self._HIGH_MODE_FULL_CUDA:
+            return
+        if self._high_runtime_fallback_latched:
+            return
+        if not torch_module.cuda.is_available():
+            return
+
+        total_bytes = self._cuda_total_bytes
+        if total_bytes is None:
+            total_bytes, _ = self._cuda_capacity_snapshot(torch_module)
+            self._cuda_total_bytes = total_bytes
+        if total_bytes is None or total_bytes <= 0:
+            return
+
+        reserved_bytes = post_mem.reserved_bytes if post_mem is not None else None
+        if reserved_bytes is None:
+            _, reserved_bytes = self._cuda_capacity_snapshot(torch_module)
+        ratio = self._ratio(reserved_bytes, total_bytes)
+        if ratio is None:
+            return
+
+        if ratio >= self._HIGH_RUNTIME_PRESSURE_RATIO:
+            self._high_runtime_pressure_hits += 1
+        else:
+            self._high_runtime_pressure_hits = 0
+            return
+
+        if self._high_runtime_pressure_hits < self._HIGH_RUNTIME_PRESSURE_HITS_TO_FALLBACK:
+            return
+
+        loaded = self._loaded
+        if loaded is None:
+            return
+
+        try:
+            applied_mode = self._apply_pipe_execution_mode(
+                loaded.pipeline, self._HIGH_MODE_MODEL_OFFLOAD
+            )
+            if applied_mode != self._HIGH_MODE_MODEL_OFFLOAD:
+                return
+
+            if self._img2img_pipe is not None:
+                self._apply_pipe_execution_mode(self._img2img_pipe, self._HIGH_MODE_MODEL_OFFLOAD)
+
+            self._effective_execution_mode = self._HIGH_MODE_MODEL_OFFLOAD
+            self._high_runtime_fallback_latched = True
+            self._high_runtime_pressure_hits = 0
+            self._clear_cuda_cache(torch_module)
+            total_after, reserved_after = self._cuda_capacity_snapshot(torch_module)
+            if total_after is not None:
+                self._cuda_total_bytes = total_after
+            if reserved_after is not None:
+                self._cuda_reserved_after_load_bytes = reserved_after
+            LOGGER.warning(
+                "High profile runtime fallback activated: switched to model_offload after high CUDA pressure (reserved_ratio=%.3f).",
+                ratio,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "High profile runtime fallback failed; keeping full_cuda. %s",
+                exc,
+            )
 
     @staticmethod
     def _normalize_scheduler_mode(mode: str | None) -> str:
@@ -215,6 +443,7 @@ class DiffusersZImageBackend:
                 self._model_pack,
                 self._settings.runtime_profile,
             )
+            self._initialize_execution_mode(self._loaded.pipeline)
         return self._loaded
 
     def _ensure_img2img_pipe(self) -> Any:
@@ -242,13 +471,16 @@ class DiffusersZImageBackend:
             pipe.set_progress_bar_config(disable=True)
 
         if loaded.device == "cuda":
-            profile = self._settings.runtime_profile
-            if profile.enable_sequential_offload and hasattr(pipe, "enable_sequential_cpu_offload"):
-                pipe.enable_sequential_cpu_offload()
-            elif profile.enable_cpu_offload and hasattr(pipe, "enable_model_cpu_offload"):
-                pipe.enable_model_cpu_offload()
-            else:
-                pipe.to("cuda")
+            target_mode = self._effective_execution_mode
+            if target_mode in {"unknown", "cpu"}:
+                target_mode = self._default_execution_mode_for_profile()
+            applied_mode = self._apply_pipe_execution_mode(pipe, target_mode)
+            if applied_mode != target_mode:
+                LOGGER.info(
+                    "Img2img pipe execution mode adjusted from %s to %s.",
+                    target_mode,
+                    applied_mode,
+                )
         self._img2img_pipe = pipe
         return self._img2img_pipe
 
@@ -960,6 +1192,7 @@ class DiffusersZImageBackend:
         duration_ms = int((now_perf() - started) * 1000)
         post_mem = cuda_memory_snapshot(torch)
         post_proc_mem = process_memory_snapshot()
+        self._apply_high_runtime_fallback_if_needed(post_mem=post_mem, torch_module=torch)
         image = output.images[0]
         return GenerationResult(
             image=image,
@@ -977,6 +1210,10 @@ class DiffusersZImageBackend:
             cuda_memory_after=post_mem,
             process_memory_before=pre_proc_mem,
             process_memory_after=post_proc_mem,
+            runtime_profile=self._settings.runtime_profile.name,
+            execution_mode=self._effective_execution_mode,
+            cuda_total_bytes=self._cuda_total_bytes,
+            cuda_reserved_after_load_bytes=self._cuda_reserved_after_load_bytes,
         )
 
     def upscale_and_refine(self, input_image: object, request: GenerationRequest) -> GenerationResult:
@@ -1055,6 +1292,7 @@ class DiffusersZImageBackend:
         duration_ms = int((now_perf() - started) * 1000)
         post_mem = cuda_memory_snapshot(torch)
         post_proc_mem = process_memory_snapshot()
+        self._apply_high_runtime_fallback_if_needed(post_mem=post_mem, torch_module=torch)
 
         return GenerationResult(
             image=refined_image,
@@ -1085,4 +1323,8 @@ class DiffusersZImageBackend:
             cuda_memory_after=post_mem,
             process_memory_before=pre_proc_mem,
             process_memory_after=post_proc_mem,
+            runtime_profile=self._settings.runtime_profile.name,
+            execution_mode=self._effective_execution_mode,
+            cuda_total_bytes=self._cuda_total_bytes,
+            cuda_reserved_after_load_bytes=self._cuda_reserved_after_load_bytes,
         )

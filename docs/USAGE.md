@@ -28,7 +28,7 @@ Transfer backend: Hugging Face CLI (`hf download`) with `HF_XET_HIGH_PERFORMANCE
 
 This downloads and places:
 - `models/packs/Rayzist_bf16/weights/Rayzist.v1.0.safetensors`
-- `models/packs/Rayzist_bf16/weights/ultrafluxVAEImproved_v10.safetensors`
+- `models/packs/Rayzist_bf16/weights/diffusion_pytorch_model.safetensors`
 - `models/packs/Rayzist_bf16/config/text_encoder/model.safetensors`
 - `models/upscaler/2x_RealESRGAN_x2plus.pth`
 
@@ -98,6 +98,11 @@ Adaptive refine defaults when `--refine-tile-size` is omitted:
 Outputs:
 - One final refined PNG in `outputs/`
 - One metric row in `data/generation_metrics.jsonl` (`mode=upscale_then_img2img`)
+- Metrics include runtime execution diagnostics such as:
+  - `runtime_profile`
+  - `execution_mode` (`full_cuda`, `model_offload`, `sequential_offload`)
+  - `cuda_total_bytes`
+  - `cuda_reserved_after_load_bytes`
 
 ## Soak Testing
 Run repeated generations and track memory drift/recycles:
@@ -151,14 +156,22 @@ python -m app.cli.main soak-report --session-id <session_id>
 ```powershell
 python -m app.cli.main serve --host 127.0.0.1 --port 37717
 ```
+LAN listen mode:
+```powershell
+python -m app.cli.main serve --host 0.0.0.0 --port 37717
+```
 
 Windows profile launcher:
 - Run `StartWeb.bat`
 - Optional: set `JUSTRAYZIST_PYTHON` to force source-mode interpreter path (example: `set JUSTRAYZIST_PYTHON=E:\APPS\Python\python.exe`).
+- Optional: set `JUSTRAYZIST_LISTEN=1` to force LAN listen mode (`0.0.0.0`) in launcher.
 - Choose profile:
   - `1` = constrained
   - `2` = balanced
   - `3` = high
+- `high` uses adaptive execution mode selection at startup:
+  - prefers `full_cuda` when reserved VRAM ratio is healthy
+  - automatically uses `model_offload` when full residency is likely to thrash memory
 - Choose model pack from dynamically discovered entries under `models/packs/*/modelpack.yaml`
 - If `Rayzist_bf16` assets are missing, launcher auto-downloads them from Hugging Face before startup (including default upscaler checkpoint)
 

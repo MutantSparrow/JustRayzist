@@ -13,6 +13,8 @@ class RuntimeProfile:
     steps_default: int
     default_soak_drift_threshold_mb: int
     default_soak_recycle_every: int
+    high_reserved_vram_ratio_threshold: float = 0.80
+    high_force_mode: str = "auto"
 
 
 RUNTIME_PROFILES: dict[str, RuntimeProfile] = {
@@ -27,6 +29,8 @@ RUNTIME_PROFILES: dict[str, RuntimeProfile] = {
         steps_default=9,
         default_soak_drift_threshold_mb=256,
         default_soak_recycle_every=0,
+        high_reserved_vram_ratio_threshold=0.80,
+        high_force_mode="auto",
     ),
     "balanced": RuntimeProfile(
         name="balanced",

@@ -6,6 +6,8 @@ chcp 65001 >nul
 cls
 
 set "HOST=127.0.0.1"
+set "DISPLAY_HOST=127.0.0.1"
+set "NETWORK_MODE=local"
 set "PORT=37717"
 set "JUSTRAYZIST_ROOT=%CD%"
 set "PYTHONHOME="
@@ -108,6 +110,30 @@ if /I "!PACK!"=="Rayzist_bf16" (
   )
 )
 
+echo.
+if /I "%JUSTRAYZIST_LISTEN%"=="1" (
+  set "HOST=0.0.0.0"
+  set "DISPLAY_HOST=[your-LAN-IP]"
+  set "NETWORK_MODE=lan"
+  echo Network mode forced by JUSTRAYZIST_LISTEN=1: LAN listen ^(0.0.0.0^)
+) else (
+  echo Select network mode:
+  echo   [1] local only  ^(127.0.0.1^)
+  echo   [2] LAN listen  ^(0.0.0.0^)
+  echo.
+  choice /c 12 /n /m "Choose network mode [1-2]: "
+  set "NETWORK_CHOICE=!ERRORLEVEL!"
+  if "!NETWORK_CHOICE!"=="2" (
+    set "HOST=0.0.0.0"
+    set "DISPLAY_HOST=[your-LAN-IP]"
+    set "NETWORK_MODE=lan"
+  ) else (
+    set "HOST=127.0.0.1"
+    set "DISPLAY_HOST=127.0.0.1"
+    set "NETWORK_MODE=local"
+  )
+)
+
 set "RELEASE_LANE=cu128"
 if exist "%CD%\release_lane.txt" (
   set /p RELEASE_LANE=<"%CD%\release_lane.txt"
@@ -167,7 +193,13 @@ echo.
 echo Starting web server with profile: !PROFILE!
 echo Using model pack: !PACK!
 echo Runtime lane: !RELEASE_LANE!
-echo URL: http://!HOST!:!PORT!/
+echo Bind address: !HOST!:!PORT!
+if /I "!NETWORK_MODE!"=="lan" (
+  echo Local URL: http://127.0.0.1:!PORT!/
+  echo LAN URL:   http://!DISPLAY_HOST!:!PORT!/ ^(replace [your-LAN-IP] with this machine's LAN IP^)
+) else (
+  echo URL: http://!DISPLAY_HOST!:!PORT!/
+)
 echo.
 
 if /I "!RUN_MODE!"=="exe" (
@@ -238,7 +270,7 @@ exit /b 0
 :ensure_rayzist_pack_assets
 set "PACK_ROOT=%CD%\models\packs\Rayzist_bf16"
 set "NEEDED_TRANSFORMER=%PACK_ROOT%\weights\Rayzist.v1.0.safetensors"
-set "NEEDED_VAE=%PACK_ROOT%\weights\ultrafluxVAEImproved_v10.safetensors"
+set "NEEDED_VAE=%PACK_ROOT%\weights\diffusion_pytorch_model.safetensors"
 set "NEEDED_ENCODER=%PACK_ROOT%\config\text_encoder\model.safetensors"
 set "NEEDED_UPSCALER=%CD%\models\upscaler\2x_RealESRGAN_x2plus.pth"
 set "FETCH_SCRIPT=%CD%\scripts\fetch_model_assets.ps1"

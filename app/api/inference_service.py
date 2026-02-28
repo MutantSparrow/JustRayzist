@@ -181,6 +181,8 @@ class InferenceService:
                     "duration_ms": result.duration_ms,
                     "seed": result.seed,
                     "scheduler_mode": result.scheduler_mode,
+                    "runtime_profile": result.runtime_profile,
+                    "execution_mode": result.execution_mode,
                 },
             )
             append_generation_metric(
@@ -207,6 +209,8 @@ class InferenceService:
             image_row["prompt_original"] = result.prompt_original
             image_row["prompt_effective"] = result.prompt_effective
             image_row["prompt_enhanced"] = result.prompt_enhanced
+            image_row["runtime_profile"] = result.runtime_profile
+            image_row["execution_mode"] = result.execution_mode
             return image_row
 
     def upscale(
@@ -276,6 +280,8 @@ class InferenceService:
                     "duration_ms": result.duration_ms,
                     "seed": result.seed,
                     "scheduler_mode": result.scheduler_mode,
+                    "runtime_profile": result.runtime_profile,
+                    "execution_mode": result.execution_mode,
                 },
             )
             append_generation_metric(
@@ -305,6 +311,8 @@ class InferenceService:
             image_row["prompt_original"] = result.prompt_original
             image_row["prompt_effective"] = result.prompt_effective
             image_row["prompt_enhanced"] = result.prompt_enhanced
+            image_row["runtime_profile"] = result.runtime_profile
+            image_row["execution_mode"] = result.execution_mode
             return image_row
 
     @staticmethod

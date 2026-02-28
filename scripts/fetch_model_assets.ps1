@@ -6,20 +6,20 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
-function Resolve-PythonForHfCli {
+function Resolve-HfCliExecutable {
   $candidates = @(
-    (Join-Path $projectRoot ".venv\Scripts\python.exe"),
-    "python"
+    (Join-Path $projectRoot ".venv\Scripts\hf.exe"),
+    "hf"
   )
 
   foreach ($candidate in $candidates) {
-    if ($candidate -ne "python" -and -not (Test-Path $candidate)) {
+    if ($candidate -ne "hf" -and -not (Test-Path $candidate)) {
       continue
     }
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-      & $candidate -c "import sys; print(sys.executable)" *> $null
+      & $candidate "version" *> $null
       if ($LASTEXITCODE -eq 0) {
         return $candidate
       }
@@ -34,41 +34,30 @@ function Resolve-PythonForHfCli {
 
 function Invoke-HfCli {
   param(
-    [Parameter(Mandatory = $true)][string]$PythonExe,
+    [Parameter(Mandatory = $true)][string]$HfExe,
     [Parameter(Mandatory = $true)][string[]]$Arguments
   )
 
-  & $PythonExe @Arguments
+  & $HfExe @Arguments
   if ($LASTEXITCODE -ne 0) {
-    throw "HF CLI command failed: $PythonExe $($Arguments -join ' ') (exit code $LASTEXITCODE)"
+    throw "HF CLI command failed: $HfExe $($Arguments -join ' ') (exit code $LASTEXITCODE)"
   }
 }
 
 function Ensure-HfCliPrerequisites {
-  param([Parameter(Mandatory = $true)][string]$PythonExe)
+  param([Parameter(Mandatory = $true)][string]$HfExe)
 
-  $checks = @(
-    "import huggingface_hub",
-    "import hf_xet"
-  )
-  foreach ($code in $checks) {
-    & $PythonExe -c $code *> $null
-    if ($LASTEXITCODE -ne 0) {
-      throw (
-        "Missing Hugging Face CLI/XET dependency in selected Python environment: $PythonExe. " +
-        "Run .\RunMeFirst.bat to repair setup, then retry."
-      )
-    }
+  Invoke-HfCli -HfExe $HfExe -Arguments @("version")
+
+  & $HfExe "download" "--help" *> $null
+  if ($LASTEXITCODE -ne 0) {
+    throw "HF CLI command failed: $HfExe download --help (exit code $LASTEXITCODE)"
   }
-
-  Invoke-HfCli -PythonExe $PythonExe -Arguments @(
-    "-m", "huggingface_hub.commands.huggingface_cli", "--help"
-  )
 }
 
 function Download-Asset {
   param(
-    [Parameter(Mandatory = $true)][string]$PythonExe,
+    [Parameter(Mandatory = $true)][string]$HfExe,
     [Parameter(Mandatory = $true)][string]$Name,
     [Parameter(Mandatory = $true)][string]$RepoId,
     [Parameter(Mandatory = $true)][string]$RepoFile,
@@ -122,14 +111,14 @@ function Download-Asset {
 
   New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
   try {
-    Invoke-HfCli -PythonExe $PythonExe -Arguments @(
-      "-m", "huggingface_hub.commands.huggingface_cli",
+    Invoke-HfCli -HfExe $HfExe -Arguments @(
       "download",
       $RepoId,
       $RepoFile,
       "--repo-type", "model",
       "--revision", $Revision,
-      "--local-dir", $stageDir
+      "--local-dir", $stageDir,
+      "--max-workers", "8"
     )
 
     $repoFileRelative = $RepoFile -replace "/", "\"
@@ -169,10 +158,10 @@ $assets = @(
   },
   @{
     Name = "VAE checkpoint"
-    RepoId = "Owen777/UltraFlux-v1"
+    RepoId = "Tongyi-MAI/Z-Image-Turbo"
     RepoFile = "vae/diffusion_pytorch_model.safetensors"
-    RelativeOutputPath = "models/packs/Rayzist_bf16/weights/ultrafluxVAEImproved_v10.safetensors"
-    Sha256 = "2bf9ad685686b480b03651a8d8595951e4a5578016b8ead4af5e22d3dc9b3409"
+    RelativeOutputPath = "models/packs/Rayzist_bf16/weights/diffusion_pytorch_model.safetensors"
+    Sha256 = "f5b59a26851551b67ae1fe58d32e76486e1e812def4696a4bea97f16604d40a3"
   },
   @{
     Name = "Text encoder checkpoint"
@@ -190,21 +179,33 @@ $assets = @(
   }
 )
 
-$pythonExe = Resolve-PythonForHfCli
-if ([string]::IsNullOrWhiteSpace($pythonExe)) {
+$hfExe = Resolve-HfCliExecutable
+if ([string]::IsNullOrWhiteSpace($hfExe)) {
   throw (
-    "Python interpreter not found for Hugging Face CLI downloads. " +
+    "Hugging Face CLI executable (hf) not found. " +
     "Run .\RunMeFirst.bat to install/repair the environment."
+  )
+}
+if ($hfExe -eq "hf") {
+  Write-Warning (
+    "Using 'hf' from PATH. For strict reproducibility, prefer .venv\Scripts\hf.exe " +
+    "by running .\RunMeFirst.bat first."
   )
 }
 
 $env:HF_XET_HIGH_PERFORMANCE = "1"
 Remove-Item Env:HF_HUB_DISABLE_XET -ErrorAction SilentlyContinue
 
-Ensure-HfCliPrerequisites -PythonExe $pythonExe
+Ensure-HfCliPrerequisites -HfExe $hfExe
 
 foreach ($asset in $assets) {
-  Download-Asset -PythonExe $pythonExe -Name $asset.Name -RepoId $asset.RepoId -RepoFile $asset.RepoFile -RelativeOutputPath $asset.RelativeOutputPath -Sha256 $asset.Sha256 -Overwrite:$Force
+  Download-Asset -HfExe $hfExe -Name $asset.Name -RepoId $asset.RepoId -RepoFile $asset.RepoFile -RelativeOutputPath $asset.RelativeOutputPath -Sha256 $asset.Sha256 -Overwrite:$Force
+}
+
+$deprecatedVaePath = Join-Path $projectRoot "models/packs/Rayzist_bf16/weights/ultrafluxVAEImproved_v10.safetensors"
+if (Test-Path $deprecatedVaePath) {
+  Remove-Item -Path $deprecatedVaePath -Force
+  Write-Host "[cleanup] Removed deprecated VAE file: $deprecatedVaePath"
 }
 
 Write-Host ""

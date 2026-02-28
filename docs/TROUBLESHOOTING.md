@@ -144,6 +144,20 @@ Current behavior:
 - `high` uses full-frame only for smaller outputs (`max side <= 1024`), then switches to tiled refine.
 - If refine hits CUDA OOM, runtime retries with progressively smaller tiles.
 
+## `high` profile text2img is unexpectedly slower than `balanced`
+Cause:
+- On some 24GB-class GPUs, effective free VRAM can be lower than nominal due to driver/desktop/runtime overhead.
+- If full GPU residency creates heavy memory pressure, throughput can drop instead of improve.
+
+Current behavior:
+- `high` now auto-selects execution mode at startup using observed CUDA reserved memory ratio.
+- If reserved VRAM is high, runtime switches `high` to model offload for stability/throughput.
+- During repeated generation, `high` can fall back from full CUDA to model offload if sustained pressure is detected.
+
+Action:
+- Re-launch server after major workload changes to re-evaluate startup mode.
+- Compare `execution_mode` in metrics rows (`full_cuda` vs `model_offload`) when diagnosing performance.
+
 Action:
 - Keep auto tiling (omit `--refine-tile-size`) unless you are intentionally tuning.
 - For strict runtime caps, force tiling explicitly:

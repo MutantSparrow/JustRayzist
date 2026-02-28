@@ -204,6 +204,8 @@ def generate(
             "device": result.device,
             "model_pack": model_pack.name,
             "duration_ms": result.duration_ms,
+            "runtime_profile": result.runtime_profile,
+            "execution_mode": result.execution_mode,
         },
     )
     metrics_file = append_generation_metric(
@@ -461,6 +463,8 @@ def upscale_refine(
             "refine_fallback_used": result.refine_fallback_used,
             "refine_fallback_attempt_count": result.refine_fallback_attempt_count,
             "upscaler_checkpoint": str(checkpoint_path),
+            "runtime_profile": result.runtime_profile,
+            "execution_mode": result.execution_mode,
         },
     )
     metrics_file = append_generation_metric(

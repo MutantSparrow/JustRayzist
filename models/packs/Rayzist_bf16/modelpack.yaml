@@ -8,7 +8,7 @@ components:
     path: ./weights/Rayzist.v1.0.safetensors
     format: safetensors
   vae:
-    path: ./weights/ultrafluxVAEImproved_v10.safetensors
+    path: ./weights/diffusion_pytorch_model.safetensors
     format: safetensors
   text_encoder:
     path: ./config/text_encoder/model.safetensors
