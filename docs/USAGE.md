@@ -9,12 +9,17 @@
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe E:\APPS\Python_3.11\python.exe -Lane cu128
 ```
+The bootstrap script installs pinned dependencies from:
+- `requirements/runtime-lock.txt`
+- `requirements/dev-lock.txt`
+- `requirements/torch-<lane>.txt`
 
 ## Fetch Required Model Assets (One-Time Online Setup)
 Run this before `validate-models` on a fresh clone:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1
 ```
+Downloads are SHA256-verified before being accepted.
 
 This downloads and places:
 - `models/packs/Rayzist_bf16/weights/Rayzist.v1.0.safetensors`

@@ -121,14 +121,23 @@ if ($UseActivePython) {
 
 if (-not $SkipDependencyInstall) {
   $torchRequirements = Join-Path $rootDir ("requirements\\torch-" + $Lane + ".txt")
+  $runtimeRequirements = Join-Path $rootDir "requirements\\runtime-lock.txt"
+  $buildRequirements = Join-Path $rootDir "requirements\\build-lock.txt"
   if (-not (Test-Path $torchRequirements)) {
     throw "Missing torch requirements file for lane ${Lane}: $torchRequirements"
   }
+  if (-not (Test-Path $runtimeRequirements)) {
+    throw "Missing runtime lock file: $runtimeRequirements"
+  }
+  if (-not (Test-Path $buildRequirements)) {
+    throw "Missing build lock file: $buildRequirements"
+  }
 
   Invoke-Robust -Executable $venvPython -Arguments @("-m", "pip", "install", "--upgrade", "pip", "setuptools>=68", "wheel")
-  Invoke-Robust -Executable $venvPython -Arguments @("-m", "pip", "install", "--upgrade", "pyinstaller")
+  Invoke-Robust -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $buildRequirements)
   Invoke-Robust -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $torchRequirements)
-  Invoke-Robust -Executable $venvPython -Arguments @("-m", "pip", "install", "-e", ".") -WorkingDirectory $rootDir
+  Invoke-Robust -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $runtimeRequirements)
+  Invoke-Robust -Executable $venvPython -Arguments @("-m", "pip", "install", "--no-deps", "-e", ".") -WorkingDirectory $rootDir
 }
 
 New-Item -ItemType Directory -Path $laneDistDir -Force | Out-Null

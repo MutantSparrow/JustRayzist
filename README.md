@@ -30,7 +30,7 @@ The app is designed to run without runtime internet dependencies once required a
 |- docs/                      # Usage, packaging, troubleshooting docs
 |- launch/                    # PowerShell launcher helpers
 |- models/                    # Model pack configs and local checkpoint cache
-|- requirements/              # Lane-pinned torch wheels
+|- requirements/              # Lane-pinned torch + lock files
 |- scripts/                   # Bootstrap, fetch, pyinstaller, release tooling
 |- StartWeb.bat               # Interactive launcher
 |- pyproject.toml
@@ -65,7 +65,7 @@ From repository root:
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_env.ps1 -PythonExe E:\APPS\Python_3.11\python.exe -Lane cu128
 ```
 
-This creates/repairs `.venv`, installs lane-matched torch wheels, and installs project dependencies.
+This creates/repairs `.venv`, installs lane-matched torch wheels, then installs locked runtime/dev dependencies.
 
 ## Model Assets (One-Time Online Setup)
 
@@ -76,6 +76,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
 ```
 
 Or use `StartWeb.bat` and let it auto-fetch missing default assets for `Rayzist_bf16` (including the default upscaler checkpoint).
+The fetch script verifies each downloaded asset with SHA256 before accepting it.
 
 ## Quick Start
 
@@ -202,6 +203,12 @@ Create release package:
 powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Lane cu128 -Version v0.10.0-beta.01 -Clean
 ```
 
+Repository readiness check:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\release\verify_repo_readiness.ps1
+```
+
 Cleanup legacy artifacts:
 
 ```powershell
@@ -223,11 +230,7 @@ python -m app.cli.main validate-models
 python -m ruff check app
 ```
 
-If tests are present in your local workspace:
-
-```powershell
-python -m pytest -q tests
-```
+No tracked pytest suite is currently shipped in this repository; rely on doctor/validate-models/lint/smoke checks for clone sanity.
 
 ## Troubleshooting
 
@@ -236,6 +239,7 @@ See:
 - `docs/USAGE.md`
 - `docs/PACKAGING.md`
 - `docs/TROUBLESHOOTING.md`
+- `docs/CLONE_BUILD_CHECKLIST.md`
 
 ## Known Limitations
 

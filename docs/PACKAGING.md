@@ -11,6 +11,14 @@
 Runtime model acquisition:
 - `StartWeb.bat` auto-downloads missing default assets from Hugging Face.
 - `scripts/fetch_model_assets.ps1` can prefetch all defaults (including upscaler checkpoint) before first run.
+- Downloaded assets are verified via SHA256.
+
+Dependency lock baseline:
+- `requirements/runtime-lock.txt`
+- `requirements/dev-lock.txt`
+- `requirements/build-lock.txt`
+- `requirements/torch-cu126.txt`
+- `requirements/torch-cu128.txt`
 
 ## Build Commands
 Build lane binaries:
@@ -29,6 +37,11 @@ If dependencies are already present in the selected interpreter, add `-SkipDepen
 Cleanup legacy dist outputs:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\release\clean_legacy_artifacts.ps1
+```
+
+Repository readiness check:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\release\verify_repo_readiness.ps1
 ```
 
 ## CUDA/Driver Baseline

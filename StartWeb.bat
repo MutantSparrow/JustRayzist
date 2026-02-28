@@ -238,6 +238,7 @@ set "NEEDED_TRANSFORMER=%PACK_ROOT%\weights\Rayzist.v1.0.safetensors"
 set "NEEDED_VAE=%PACK_ROOT%\weights\ultrafluxVAEImproved_v10.safetensors"
 set "NEEDED_ENCODER=%PACK_ROOT%\config\text_encoder\model.safetensors"
 set "NEEDED_UPSCALER=%CD%\models\upscaler\2x_RealESRGAN_x2plus.pth"
+set "FETCH_SCRIPT=%CD%\scripts\fetch_model_assets.ps1"
 set "MISSING_ASSETS=0"
 
 if not exist "!NEEDED_TRANSFORMER!" set "MISSING_ASSETS=1"
@@ -249,15 +250,17 @@ if !MISSING_ASSETS! EQU 0 exit /b 0
 
 echo.
 echo Missing default model assets for pack Rayzist_bf16.
-echo Attempting download from Hugging Face...
-call :download_asset "https://huggingface.co/MutantSparrow/Ray/resolve/main/Z-IMAGE-TURBO/Rayzist.v1.0.safetensors" "!NEEDED_TRANSFORMER!"
-if errorlevel 1 exit /b 1
-call :download_asset "https://huggingface.co/Owen777/UltraFlux-v1/resolve/main/vae/diffusion_pytorch_model.safetensors" "!NEEDED_VAE!"
-if errorlevel 1 exit /b 1
-call :download_asset "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" "!NEEDED_ENCODER!"
-if errorlevel 1 exit /b 1
-call :download_asset "https://huggingface.co/imagepipeline/superresolution/resolve/main/RealESRGAN_x2plus.pth" "!NEEDED_UPSCALER!"
-if errorlevel 1 exit /b 1
+if not exist "!FETCH_SCRIPT!" (
+  echo Missing fetch script: !FETCH_SCRIPT!
+  exit /b 1
+)
+echo Running fetch script:
+echo   !FETCH_SCRIPT!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!FETCH_SCRIPT!"
+if errorlevel 1 (
+  echo Failed to fetch default model assets.
+  exit /b 1
+)
 
 if not exist "!NEEDED_TRANSFORMER!" (
   echo Missing file after download: !NEEDED_TRANSFORMER!
@@ -277,33 +280,6 @@ if not exist "!NEEDED_UPSCALER!" (
 )
 
 echo Model assets ready.
-exit /b 0
-
-:download_asset
-set "ASSET_URL=%~1"
-set "ASSET_DEST=%~2"
-for %%I in ("%ASSET_DEST%") do set "ASSET_DIR=%%~dpI"
-if not exist "%ASSET_DIR%" mkdir "%ASSET_DIR%" >nul 2>&1
-set "ASSET_TMP=%ASSET_DEST%.part"
-if exist "%ASSET_TMP%" del /f /q "%ASSET_TMP%" >nul 2>&1
-
-echo Downloading:
-echo   %ASSET_URL%
-echo To:
-echo   %ASSET_DEST%
-
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $wc=New-Object Net.WebClient; $wc.DownloadProgressChanged += { param($s,$e) if($e.ProgressPercentage -ge 0){ Write-Progress -Activity 'Downloading model asset' -Status ($e.ProgressPercentage.ToString() + '%%') -PercentComplete $e.ProgressPercentage } }; $wc.DownloadFile('%ASSET_URL%','%ASSET_TMP%'); Write-Progress -Activity 'Downloading model asset' -Completed"
-if errorlevel 1 (
-  echo Download failed for %ASSET_URL%
-  if exist "%ASSET_TMP%" del /f /q "%ASSET_TMP%" >nul 2>&1
-  exit /b 1
-)
-move /y "%ASSET_TMP%" "%ASSET_DEST%" >nul
-if errorlevel 1 (
-  echo Failed to finalize downloaded file: %ASSET_DEST%
-  if exist "%ASSET_TMP%" del /f /q "%ASSET_TMP%" >nul 2>&1
-  exit /b 1
-)
 exit /b 0
 
 :find_listening_pid

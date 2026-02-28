@@ -89,7 +89,7 @@ Copy-Item (Join-Path $rootDir "README.md") -Destination (Join-Path $releaseDir "
 New-Item -ItemType Directory -Path (Join-Path $releaseDir "models\\upscaler") -Force | Out-Null
 Set-Content -Path (Join-Path $releaseDir "models\\upscaler\\README.txt") -Value @"
 No upscaler checkpoints are bundled in release artifacts.
-Use StartWeb.bat or scripts\fetch_model_assets.ps1 to download default assets from Hugging Face.
+Use StartWeb.bat or scripts\fetch_model_assets.ps1 to download default assets from Hugging Face (SHA256 verified).
 You may also place a custom local .pth file in this folder.
 "@ -Encoding ascii
 

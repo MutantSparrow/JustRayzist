@@ -10,6 +10,8 @@ $venvRoot = Join-Path $projectRoot ".venv"
 $venvPython = Join-Path $venvRoot "Scripts\\python.exe"
 $tmpRoot = Join-Path $projectRoot ".build\\tmp"
 $torchRequirements = Join-Path $projectRoot ("requirements\\torch-" + $Lane + ".txt")
+$runtimeRequirements = Join-Path $projectRoot "requirements\\runtime-lock.txt"
+$devRequirements = Join-Path $projectRoot "requirements\\dev-lock.txt"
 
 New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
 $env:TEMP = $tmpRoot
@@ -94,10 +96,18 @@ if (-not (Test-ModuleImport -PythonPath $venvPython -ModuleName "pip")) {
 if (-not (Test-Path $torchRequirements)) {
   throw "Missing torch requirements file for lane ${Lane}: $torchRequirements"
 }
+if (-not (Test-Path $runtimeRequirements)) {
+  throw "Missing runtime lock file: $runtimeRequirements"
+}
+if (-not (Test-Path $devRequirements)) {
+  throw "Missing dev lock file: $devRequirements"
+}
 
 Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "--upgrade", "pip")
 Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "--upgrade", "setuptools", "wheel")
 Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $torchRequirements)
-Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "--no-build-isolation", "-e", ".[dev]") -WorkingDirectory $projectRoot
+Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $runtimeRequirements)
+Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $devRequirements)
+Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "--no-build-isolation", "--no-deps", "-e", ".") -WorkingDirectory $projectRoot
 
 Write-Host "Environment ready. Use $venvPython for commands. Lane=$Lane."

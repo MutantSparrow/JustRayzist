@@ -1,0 +1,12 @@
+accelerate==1.2.0
+diffusers==0.35.0
+fastapi==0.116.0
+gguf==0.17.0
+huggingface-hub==0.35.0
+pillow==11.0.0
+psutil==6.0.0
+pyyaml==6.0.0
+safetensors==0.6.0
+transformers==4.56.0
+typer==0.16.0
+uvicorn==0.35.0

@@ -47,7 +47,9 @@ Cause:
 
 Action:
 - Install dependencies into the same interpreter you use to launch:
-  - `python -m pip install -e .`
+  - `python -m pip install -r requirements\runtime-lock.txt`
+  - `python -m pip install -r requirements\dev-lock.txt`
+  - `python -m pip install --no-deps -e .`
 - Rebuild/repair local `.venv` automatically:
   - `powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe E:\APPS\Python_3.11\python.exe -Lane cu128`
 - Or use launcher wrappers:
