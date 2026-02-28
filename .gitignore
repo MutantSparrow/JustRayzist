@@ -21,7 +21,6 @@ justrayzist.egg-info/
 models/**/*.safetensors
 models/**/*.gguf
 models/**/*.pth
-!models/upscaler/*.pth
 
 # Local-only roadmap / dev artifacts
 JustRayzist.md

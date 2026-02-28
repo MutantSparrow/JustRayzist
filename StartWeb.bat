@@ -237,11 +237,13 @@ set "PACK_ROOT=%CD%\models\packs\Rayzist_bf16"
 set "NEEDED_TRANSFORMER=%PACK_ROOT%\weights\Rayzist.v1.0.safetensors"
 set "NEEDED_VAE=%PACK_ROOT%\weights\ultrafluxVAEImproved_v10.safetensors"
 set "NEEDED_ENCODER=%PACK_ROOT%\config\text_encoder\model.safetensors"
+set "NEEDED_UPSCALER=%CD%\models\upscaler\2x_RealESRGAN_x2plus.pth"
 set "MISSING_ASSETS=0"
 
 if not exist "!NEEDED_TRANSFORMER!" set "MISSING_ASSETS=1"
 if not exist "!NEEDED_VAE!" set "MISSING_ASSETS=1"
 if not exist "!NEEDED_ENCODER!" set "MISSING_ASSETS=1"
+if not exist "!NEEDED_UPSCALER!" set "MISSING_ASSETS=1"
 
 if !MISSING_ASSETS! EQU 0 exit /b 0
 
@@ -254,6 +256,8 @@ call :download_asset "https://huggingface.co/Owen777/UltraFlux-v1/resolve/main/v
 if errorlevel 1 exit /b 1
 call :download_asset "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" "!NEEDED_ENCODER!"
 if errorlevel 1 exit /b 1
+call :download_asset "https://huggingface.co/imagepipeline/superresolution/resolve/main/RealESRGAN_x2plus.pth" "!NEEDED_UPSCALER!"
+if errorlevel 1 exit /b 1
 
 if not exist "!NEEDED_TRANSFORMER!" (
   echo Missing file after download: !NEEDED_TRANSFORMER!
@@ -265,6 +269,10 @@ if not exist "!NEEDED_VAE!" (
 )
 if not exist "!NEEDED_ENCODER!" (
   echo Missing file after download: !NEEDED_ENCODER!
+  exit /b 1
+)
+if not exist "!NEEDED_UPSCALER!" (
+  echo Missing file after download: !NEEDED_UPSCALER!
   exit /b 1
 )
 

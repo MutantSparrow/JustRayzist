@@ -20,6 +20,7 @@ This downloads and places:
 - `models/packs/Rayzist_bf16/weights/Rayzist.v1.0.safetensors`
 - `models/packs/Rayzist_bf16/weights/ultrafluxVAEImproved_v10.safetensors`
 - `models/packs/Rayzist_bf16/config/text_encoder/model.safetensors`
+- `models/upscaler/2x_RealESRGAN_x2plus.pth`
 
 ## Validate Environment
 ```powershell
@@ -149,7 +150,7 @@ Windows profile launcher:
   - `2` = balanced
   - `3` = high
 - Choose model pack from dynamically discovered entries under `models/packs/*/modelpack.yaml`
-- If `Rayzist_bf16` assets are missing, launcher auto-downloads them from Hugging Face before startup
+- If `Rayzist_bf16` assets are missing, launcher auto-downloads them from Hugging Face before startup (including default upscaler checkpoint)
 
 Web API:
 - `GET /health`
@@ -245,7 +246,7 @@ Useful flags:
 
 Release policy:
 - Model weights are never bundled in artifacts (`.safetensors`, `.gguf`, `.pth` are removed).
-- `StartWeb.bat` downloads missing `Rayzist_bf16` assets from Hugging Face on first launch.
+- `StartWeb.bat` downloads missing `Rayzist_bf16` assets from Hugging Face on first launch, including `models/upscaler/2x_RealESRGAN_x2plus.pth`.
 - Runtime lane marker is written to `release_lane.txt`.
 
 CUDA/driver baseline:

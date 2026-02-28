@@ -62,6 +62,11 @@ $assets = @(
     Name = "Text encoder checkpoint"
     Url = "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors"
     RelativeOutputPath = "models/packs/Rayzist_bf16/config/text_encoder/model.safetensors"
+  },
+  @{
+    Name = "Upscaler checkpoint (RealESRGAN x2plus)"
+    Url = "https://huggingface.co/imagepipeline/superresolution/resolve/main/RealESRGAN_x2plus.pth"
+    RelativeOutputPath = "models/upscaler/2x_RealESRGAN_x2plus.pth"
   }
 )
 

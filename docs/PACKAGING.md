@@ -8,6 +8,10 @@
   - `bin/web/justrayzist-web.exe`
   - `bin/cli/justrayzist-cli.exe`
 
+Runtime model acquisition:
+- `StartWeb.bat` auto-downloads missing default assets from Hugging Face.
+- `scripts/fetch_model_assets.ps1` can prefetch all defaults (including upscaler checkpoint) before first run.
+
 ## Build Commands
 Build lane binaries:
 ```powershell

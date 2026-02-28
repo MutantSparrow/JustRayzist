@@ -76,8 +76,10 @@ Cause:
 - No upscaler checkpoint is bundled in release artifacts.
 
 Action:
-- Place a compatible `.pth` or `.safetensors` file under `models/upscaler/`.
-- Provide that path to CLI upscale commands when needed.
+- Fetch defaults from Hugging Face:
+  - `powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1`
+- Or launch with `StartWeb.bat` to auto-download default assets (including `2x_RealESRGAN_x2plus.pth`).
+- You can still provide a custom `.pth` or `.safetensors` checkpoint via CLI `--checkpoint`.
 
 ## Upscale output quality is poor
 Check:

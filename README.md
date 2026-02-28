@@ -29,7 +29,7 @@ The app is designed to run without runtime internet dependencies once required a
 |- app/                       # API, CLI, core runtime, storage, UI assets
 |- docs/                      # Usage, packaging, troubleshooting docs
 |- launch/                    # PowerShell launcher helpers
-|- models/                    # Model pack configs and upscaler checkpoint folder
+|- models/                    # Model pack configs and local checkpoint cache
 |- requirements/              # Lane-pinned torch wheels
 |- scripts/                   # Bootstrap, fetch, pyinstaller, release tooling
 |- StartWeb.bat               # Interactive launcher
@@ -75,7 +75,7 @@ From repository root:
 powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
 ```
 
-Or use `StartWeb.bat` and let it auto-fetch missing default assets for `Rayzist_bf16`.
+Or use `StartWeb.bat` and let it auto-fetch missing default assets for `Rayzist_bf16` (including the default upscaler checkpoint).
 
 ## Quick Start
 
