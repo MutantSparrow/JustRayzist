@@ -1,15 +1,16 @@
 # Packaging and Compatibility
 
 ## Packaging Strategy
-- Packaging format: PyInstaller `--onedir`
+- Default packaging format: bootstrap runtime bundle (no embedded Python/CUDA binaries)
+- Optional packaging format: PyInstaller `--onedir` (`bundled` mode)
 - Models are never bundled in artifacts.
-- Runtime entrypoint: `StartWeb.bat`
-- Release binaries:
-  - `bin/web/justrayzist-web.exe`
-  - `bin/cli/justrayzist-cli.exe`
+- Runtime entrypoints:
+  - `RunMeFirst.bat` (setup/repair)
+  - `StartWeb.bat` (launch app)
 
 Runtime model acquisition:
-- `StartWeb.bat` auto-downloads missing default assets from Hugging Face.
+- `RunMeFirst.bat` prefetches default assets from Hugging Face.
+- `StartWeb.bat` still auto-downloads missing default assets if needed.
 - `scripts/fetch_model_assets.ps1` can prefetch all defaults (including upscaler checkpoint) before first run.
 - Downloaded assets are verified via SHA256.
 
@@ -21,14 +22,19 @@ Dependency lock baseline:
 - `requirements/torch-cu128.txt`
 
 ## Build Commands
-Build lane binaries:
+Create bootstrap release artifact (recommended):
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version v0.10.0-beta.02 -Clean
+```
+
+Optional: build lane binaries for bundled release:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
 ```
 
-Create release artifact:
+Create bundled release artifact (large):
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Lane cu128 -Version v0.10.0-beta.01 -PythonExe .\.venv\Scripts\python.exe -Clean
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version v0.10.0-beta.02 -PythonExe .\.venv\Scripts\python.exe -Clean
 ```
 
 If the host Python cannot create virtual environments, add `-UseActivePython`.

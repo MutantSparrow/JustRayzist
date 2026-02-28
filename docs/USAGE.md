@@ -1,18 +1,21 @@
 # JustRayzist Usage
 
 ## Prerequisites
-- Python 3.11+ environment with dependencies installed.
+- Windows host with internet access for initial setup.
 - Local model pack configured at `models/packs/<pack_name>/modelpack.yaml`.
 - For GPU tests: CUDA-enabled PyTorch and NVIDIA driver.
 
-## Bootstrap Local `.venv`
+## Run Setup / Repair (Recommended)
+```powershell
+.\RunMeFirst.bat
+```
+
+`RunMeFirst.bat` detects/installs Python 3.11, creates or repairs `.venv`, installs lane-matched dependencies, downloads default model assets, validates the environment, and refreshes a desktop shortcut to `StartWeb.bat`.
+
+## Manual `.venv` Bootstrap (Advanced)
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe E:\APPS\Python_3.11\python.exe -Lane cu128
 ```
-The bootstrap script installs pinned dependencies from:
-- `requirements/runtime-lock.txt`
-- `requirements/dev-lock.txt`
-- `requirements/torch-<lane>.txt`
 
 ## Fetch Required Model Assets (One-Time Online Setup)
 Run this before `validate-models` on a fresh clone:
@@ -220,7 +223,7 @@ Web UI:
   - keyboard delete in fullscreen (`Delete`/`Backspace`) opens Yes/No confirmation
 
 ## Build PyInstaller One-Dir (Windows)
-Build lane-specific one-dir binaries:
+Build lane-specific one-dir binaries (legacy/offline workflow):
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
 ```
@@ -235,22 +238,30 @@ Outputs:
 - `dist\pyinstaller\<lane>\justrayzist-cli\justrayzist-cli.exe`
 
 ## Create Release Artifact (Windows)
-Build (unless skipped), assemble release folder, and zip it:
+Default bootstrap release (small artifact):
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Lane cu128 -Version v0.10.0-beta.01 -Clean
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version v0.10.0-beta.02 -Clean
+```
+
+Optional bundled release (large artifact, offline-style):
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version v0.10.0-beta.02 -Clean
 ```
 
 Useful flags:
+- `-Mode bootstrap|bundled`
 - `-Lane cu126|cu128`
 - `-Version vX.Y.Z`
 - `-PythonExe C:\Path\To\python.exe`
 - `-UseActivePython` (skip build-venv creation and build with `-PythonExe` directly)
 - `-SkipDependencyInstall` (assume PyInstaller + runtime deps are already installed)
 - `-SkipBuild`
+- `-IncludeCliBinary` (bundled mode only; adds second large binary payload)
 - `-NoZip`
 
 Release policy:
 - Model weights are never bundled in artifacts (`.safetensors`, `.gguf`, `.pth` are removed).
+- `RunMeFirst.bat` performs setup/repair and prefetches default assets before launch.
 - `StartWeb.bat` downloads missing `Rayzist_bf16` assets from Hugging Face on first launch, including `models/upscaler/2x_RealESRGAN_x2plus.pth`.
 - Runtime lane marker is written to `release_lane.txt`.
 
@@ -259,4 +270,4 @@ CUDA/driver baseline:
 - `cu128`: NVIDIA driver `>= 572.61` (preferred lane, required for 50xx)
 
 Run packaged app:
-- Open `<release>\StartWeb.bat`
+- Open `<release>\RunMeFirst.bat` first, then launch `<release>\StartWeb.bat`

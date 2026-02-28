@@ -7,6 +7,8 @@ Check:
 - `pipeline_config_dir` exists and contains required config files.
 
 Action:
+- Run the full setup/repair workflow:
+  - `.\RunMeFirst.bat`
 - Fetch required model weights into expected local paths:
   - `powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1`
 
@@ -46,6 +48,8 @@ Cause:
 - The selected Python interpreter does not have project dependencies installed.
 
 Action:
+- Preferred repair path:
+  - `.\RunMeFirst.bat`
 - Install dependencies into the same interpreter you use to launch:
   - `python -m pip install -r requirements\runtime-lock.txt`
   - `python -m pip install -r requirements\dev-lock.txt`
@@ -60,6 +64,7 @@ Action:
 If you are testing on another machine:
 - Do not use GitHub auto-generated source zip archives.
 - Download the uploaded release asset zip from **Releases -> Assets**.
+- Run `RunMeFirst.bat` once before launching `StartWeb.bat`.
 
 ## Launcher fails GPU preflight for lane/driver mismatch
 Cause:

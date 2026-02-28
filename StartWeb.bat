@@ -34,9 +34,10 @@ if exist "!WEB_EXE!" (
     echo   %CD%\.venv\python.exe
     echo   PATH python
     echo.
-    echo Build/package first:
-    echo   powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Lane cu128 -Version v0.0.0
-    echo Or repair source environment:
+    echo Setup or repair the environment first:
+    echo   .\RunMeFirst.bat
+    echo.
+    echo Manual fallback:
     echo   powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1
     set "EXIT_CODE=1"
     goto :after_run

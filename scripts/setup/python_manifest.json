@@ -1,0 +1,18 @@
+{
+  "python_version": "3.11.9",
+  "installers": {
+    "amd64": {
+      "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe",
+      "md5": "e8dcd502e34932eebcaf1be056d5cbcd"
+    },
+    "x86": {
+      "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9.exe",
+      "md5": "2a1d1ac2d8a0aa847515f9dd121ccbb7"
+    },
+    "arm64": {
+      "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-arm64.exe",
+      "md5": "328d93f71cb078965e4cfa2eb2663fa1"
+    }
+  },
+  "silent_args": "/quiet InstallAllUsers=0 PrependPath=1 Include_test=0 Include_launcher=1 Shortcuts=0"
+}

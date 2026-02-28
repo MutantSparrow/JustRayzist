@@ -17,7 +17,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\release\verify_repo_readiness
 
 This checks required scripts/files and confirms model binaries are not tracked.
 
-## 3) Bootstrap Python Environment
+## 3) Run Setup / Repair
+
+```powershell
+.\RunMeFirst.bat
+```
+
+This is the primary setup path and includes Python install, `.venv` setup, dependency install, model fetch, and sanity checks.
+
+## 4) Manual Bootstrap (Optional / Advanced)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_env.ps1 -PythonExe E:\APPS\Python_3.11\python.exe -Lane cu128
@@ -28,7 +36,7 @@ Notes:
 - `requirements/runtime-lock.txt` and `requirements/dev-lock.txt` pin app/dev dependency baselines.
 - `requirements/torch-cu126.txt` and `requirements/torch-cu128.txt` pin CUDA lane torch wheels.
 
-## 4) Fetch Default Model Assets (One-Time Online Step)
+## 5) Fetch Default Model Assets (Optional Manual Step)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
@@ -36,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
 
 The script downloads required assets and validates SHA256 checksums.
 
-## 5) Sanity Checks
+## 6) Sanity Checks
 
 ```powershell
 python -m app.cli.main doctor
@@ -44,20 +52,26 @@ python -m app.cli.main validate-models
 python -m ruff check app
 ```
 
-## 6) Launch App from Source
+## 7) Launch App from Source
 
 ```powershell
 .\StartWeb.bat
 ```
 
-## 7) Build One-Dir Binaries
+## 8) Build One-Dir Binaries (Optional Bundled Workflow)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
 ```
 
-## 8) Create Release Artifact
+## 9) Create Bootstrap Release Artifact
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Lane cu128 -Version v0.0.0 -Clean
+powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version v0.0.0 -Clean
+```
+
+## 10) Create Bundled Release Artifact (Optional, Large)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version v0.0.0 -Clean
 ```

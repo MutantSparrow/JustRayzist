@@ -7,7 +7,7 @@ JustRayzist is a Windows-first, offline-first local image generation app built a
 - local model packs (`.safetensors` / `.gguf`)
 - profile-based runtime behavior for different VRAM classes
 - optional x2 upscaling + img2img refinement flow
-- PyInstaller one-dir release packaging
+- RunMeFirst bootstrap installation and auto-repair
 
 The app is designed to run without runtime internet dependencies once required assets are present locally.
 
@@ -19,7 +19,7 @@ The app is designed to run without runtime internet dependencies once required a
 - PNG metadata writing and SQLite gallery indexing.
 - Web gallery with filtering, fullscreen, compare-hold for upscaled images, and queued jobs.
 - CLI workflows for generation, upscaling/refinement, soak runs, and soak reporting.
-- Lane-based release packaging (`cu126`, `cu128`) with GPU driver preflight.
+- Lane-aware bootstrap packaging (`cu126`, `cu128`) with GPU driver preflight.
 - Release artifacts do not bundle model weights.
 
 ## Repository Layout
@@ -31,7 +31,8 @@ The app is designed to run without runtime internet dependencies once required a
 |- launch/                    # PowerShell launcher helpers
 |- models/                    # Model pack configs and local checkpoint cache
 |- requirements/              # Lane-pinned torch + lock files
-|- scripts/                   # Bootstrap, fetch, pyinstaller, release tooling
+|- scripts/                   # Setup, bootstrap, fetch, release tooling
+|- RunMeFirst.bat             # Setup + repair entrypoint
 |- StartWeb.bat               # Interactive launcher
 |- pyproject.toml
 |- dist/                      # Build/release output
@@ -49,23 +50,28 @@ The app is designed to run without runtime internet dependencies once required a
 - Typer
 - Pillow
 - SQLite
-- PowerShell + batch tooling for bootstrap/build/release
+- PowerShell + batch tooling for setup/repair/release
 
 ## Requirements
 
 - Windows host (primary supported workflow).
 - NVIDIA GPU recommended for target performance.
-- Python 3.11 interpreter available locally.
+- Internet access for first-time setup (Python/dependencies/model downloads).
 
 ## Installation
 
 From repository root:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_env.ps1 -PythonExe E:\APPS\Python_3.11\python.exe -Lane cu128
+.\RunMeFirst.bat
 ```
 
-This creates/repairs `.venv`, installs lane-matched torch wheels, then installs locked runtime/dev dependencies.
+`RunMeFirst.bat` will:
+- install Python 3.11 if missing
+- create or repair `.venv`
+- install lane-matched torch/runtime dependencies
+- fetch default model assets from Hugging Face (checksum-verified)
+- run sanity checks and create a desktop shortcut
 
 ## Model Assets (One-Time Online Setup)
 
@@ -75,7 +81,7 @@ From repository root:
 powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
 ```
 
-Or use `StartWeb.bat` and let it auto-fetch missing default assets for `Rayzist_bf16` (including the default upscaler checkpoint).
+`RunMeFirst.bat` prefetches defaults automatically. `StartWeb.bat` can still auto-fetch missing default assets for `Rayzist_bf16` (including the default upscaler checkpoint).
 The fetch script verifies each downloaded asset with SHA256 before accepting it.
 
 ## Quick Start
@@ -83,6 +89,7 @@ The fetch script verifies each downloaded asset with SHA256 before accepting it.
 From repository root:
 
 ```powershell
+.\RunMeFirst.bat
 .\StartWeb.bat
 ```
 
@@ -189,18 +196,18 @@ Content-Type: application/json
 }
 ```
 
-## Build and Release
+## Release Packaging
 
-Build PyInstaller one-dir binaries:
+Create default bootstrap release artifact:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
+powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version v0.10.0-beta.02 -Clean
 ```
 
-Create release package:
+Optional large offline-style bundled release (web exe):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Lane cu128 -Version v0.10.0-beta.01 -Clean
+powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version v0.10.0-beta.02 -Clean
 ```
 
 Repository readiness check:
