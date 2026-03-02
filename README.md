@@ -1,27 +1,37 @@
 # JustRayzist
+<img width="1900" height="921" alt="image" src="https://github.com/user-attachments/assets/8ade356b-d74b-43bd-b983-06befb5fc230" />
 
-JustRayzist is a Windows-first, offline-first local image generation app built around:
+
+<br>Not feeling like ComfyUI? Too broke to get a monthly sub to an image platform?<br>
+Got 35GB of space on a drive somewhere and an RTX card? <br>
+
+### Enter Just Rayzist!
+A lightweight, easy to install and easier to run app that just runs.<br>
+Built around my Z-Image-Turbo finetune, it gives you a fast image generation platform, available through a local web page, command line or via local API so your favorite AI agents can use it.<br>
+It generates images up to 1536x1536 and can upscale up to double that in less than a minute. <br>
+It even has a built in prompt enhancement feature and a cool image browser.<br><br>
+<img height="200" alt="image" src="https://github.com/user-attachments/assets/8d4374d7-e2f3-48a7-89d2-514ecf19abc3" />
+<img height="200" alt="image" src="https://github.com/user-attachments/assets/8ae8c35c-dfab-4e4f-95d2-cf4780957095" />
+
+
+
+## Specs
 
 - FastAPI web API + browser UI
 - Typer CLI
 - Z-Image Turbo, and more specifically my very own finetune: [Rayzist](https://huggingface.co/MutantSparrow/Ray)
 - local model packs (`.safetensors` / `.gguf`)
-- profile-based runtime behavior for different VRAM classes
-- custom mixed-model fast upscale flow
-- RunMeFirst bootstrap installation and auto-repair
-
-The app is designed to run without runtime internet dependencies once required assets are present locally.
-
-## Features
-
-- Local/offline runtime guards (`HF_HUB_OFFLINE`, `TRANSFORMERS_OFFLINE`).
-- Runtime profiles: `constrained`, `balanced`, `high`.
-- Model pack validation and local path enforcement.
+- Runtime profiles `constrained`, `balanced`, `high` support different VRAM classes
+- custom mixed-model fast upscale flow. It's not the best in the world, but it's the best at that speed!
+- RunMeFirst bootstrap installation and auto-repair.
+- Run it locally or open it to LAN access
+- Model pack system to support custom -Image-Turbo models, VAEs or encoder models.
 - PNG metadata writing and SQLite gallery indexing.
 - Web gallery with filtering, fullscreen, compare-hold for upscaled images, and queued jobs.
 - CLI workflows for generation, mixed-model upscaling, soak runs, and soak reporting.
 - Lane-aware bootstrap packaging (`cu126`, `cu128`) with GPU driver preflight.
-- Release artifacts do not bundle model weights.
+
+The app is designed to run 100% without runtime internet dependencies once installed locally.
 
 ## Tech Stack
 
@@ -36,8 +46,18 @@ The app is designed to run without runtime internet dependencies once required a
 ## Requirements
 
 - Windows host (primary supported workflow).
-- NVIDIA GPU recommended for target performance.
-- Internet access for first-time setup (Python/dependencies/model downloads).
+- NVIDIA GPU required.
+- Internet access for first-time setup (Python/dependencies/model downloads(everything is coming from HuggingFace, so you need access to that)).
+
+### CUDA Lane Baseline
+
+- `cu126`: NVIDIA driver `>= 561.17` (20xx/30xx/40xx fallback lane)
+- `cu128`: NVIDIA driver `>= 572.61` (preferred lane; required for 50xx)
+
+12, 16 and 24GB RTX card supported: 20xx, 30xx, 40xx and 50xx sries and up.<br>
+Tested on 4090, 4080 3090, 3060ti.<br>
+It will work on 8GB cards provided you have enough system RAM, but it will slow down considerably.<br>
+It *should* run purely on CPU thanks to smart offload but you *probably* do not want to do this.
 
 ## Installation
 
@@ -50,20 +70,11 @@ From repository root:
 `RunMeFirst.bat` will:
 - install Python 3.11 if missing
 - create or repair `.venv`
-- install lane-matched torch/runtime dependencies
+- installmatching torch/runtime dependencies based on your detected GPU
 - install Hugging Face CLI + XET support in the environment
-- fetch default model assets from Hugging Face (checksum-verified)
+- fetch default model assets from Hugging Face
 - run sanity checks and create a desktop shortcut
 
-## Model Assets (One-Time Online Setup)
-
-From repository root:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
-```
-
-`RunMeFirst.bat` prefetches defaults automatically. `StartWeb.bat` can still auto-fetch missing default assets required by the default pack and custom mixed-model fast upscale path.
 Downloads are performed through Hugging Face CLI (`hf download`) with XET acceleration enabled (`HF_XET_HIGH_PERFORMANCE=1`), and each file is SHA256-verified before acceptance.
 
 ## Quick Start
@@ -71,20 +82,21 @@ Downloads are performed through Hugging Face CLI (`hf download`) with XET accele
 From repository root:
 
 ```powershell
-.\RunMeFirst.bat
 .\StartWeb.bat
 ```
-
+<br>
+...or use the desktop shortcut.<br>
+<br>
 Launcher flow:
 
 1. Select runtime profile.
 2. Select model pack.
-3. Optional model asset bootstrap for `Rayzist_bf16`.
+3. Select if the server will listen to LAN connections.
 4. Open `http://127.0.0.1:37717/`.
 
-## Configuration
+## CLI Usage
 
-Environment variables:
+Environment variables (used for CLI)
 
 - `JUSTRAYZIST_ROOT`: override workspace root.
 - `JUSTRAYZIST_PROFILE`: `constrained|balanced|high`.
@@ -93,8 +105,7 @@ Environment variables:
 - `JUSTRAYZIST_ENV`: environment label (`dev` default).
 - `JUSTRAYZIST_PYTHON`: optional interpreter override for source-mode launcher.
 - `JUSTRAYZIST_SKIP_GPU_PREFLIGHT`: set `1` to bypass lane/driver preflight in packaged mode.
-
-## CLI Usage
+<br><br>
 
 From repository root:
 
@@ -180,16 +191,6 @@ Content-Type: application/json
 
 `POST /upscale` uses the app's default custom mixed-model fast upscale path.
 
-## Release Packaging
-
-Release packaging docs were moved to:
-- `scripts/release/README.md`
-
-## CUDA Lane Baseline
-
-- `cu126`: NVIDIA driver `>= 561.17` (20xx/30xx/40xx fallback lane)
-- `cu128`: NVIDIA driver `>= 572.61` (preferred lane; required for 50xx)
-
 ## Troubleshooting
 
 See:
@@ -204,6 +205,7 @@ See:
 - Windows-first launcher/build flow.
 - No authentication on local destructive endpoints (`/server/kill`, delete routes).
 - Runtime quality/performance depend on local model pack quality and GPU/driver compatibility.
+- With multiple users on LAN or multiple web pages open, requests made in one place will only be picked up in the page when it next refreshes. (no push)
 
 ## License
 
