@@ -25,7 +25,7 @@ It even has a built in prompt enhancement feature and a cool image browser.<br><
 - custom mixed-model fast upscale flow. It's not the best in the world, but it's the best at that speed!
 - RunMeFirst bootstrap installation and auto-repair.
 - Run it locally or open it to LAN access
-- Model pack system to support custom -Image-Turbo models, VAEs or encoder models.
+- Model pack system to support custom Z-Image-Turbo models, VAEs or encoder models.
 - PNG metadata writing and SQLite gallery indexing.
 - Web gallery with filtering, fullscreen, compare-hold for upscaled images, and queued jobs.
 - CLI workflows for generation, mixed-model upscaling, soak runs, and soak reporting.
@@ -46,15 +46,15 @@ The app is designed to run 100% without runtime internet dependencies once insta
 ## Requirements
 
 - Windows host (primary supported workflow).
-- NVIDIA GPU required.
-- Internet access for first-time setup (Python/dependencies/model downloads(everything is coming from HuggingFace, so you need access to that)).
+- NVIDIA GPU strongly recommended for practical performance (CPU fallback is possible, but very slow).
+- Internet access for first-time setup (Python/dependencies/model downloads; everything is fetched from Hugging Face).
 
 ### CUDA Lane Baseline
 
 - `cu126`: NVIDIA driver `>= 561.17` (20xx/30xx/40xx fallback lane)
 - `cu128`: NVIDIA driver `>= 572.61` (preferred lane; required for 50xx)
 
-12, 16 and 24GB RTX card supported: 20xx, 30xx, 40xx and 50xx sries and up.<br>
+12, 16 and 24GB RTX cards supported: 20xx, 30xx, 40xx and 50xx series and up.<br>
 Tested on 4090, 4080 3090, 3060ti.<br>
 It will work on 8GB cards provided you have enough system RAM, but it will slow down considerably.<br>
 It *should* run purely on CPU thanks to smart offload but you *probably* do not want to do this.
@@ -70,7 +70,7 @@ From repository root:
 `RunMeFirst.bat` will:
 - install Python 3.11 if missing
 - create or repair `.venv`
-- installmatching torch/runtime dependencies based on your detected GPU
+- install matching torch/runtime dependencies based on your detected GPU
 - install Hugging Face CLI + XET support in the environment
 - fetch default model assets from Hugging Face
 - run sanity checks and create a desktop shortcut
@@ -82,6 +82,7 @@ Downloads are performed through Hugging Face CLI (`hf download`) with XET accele
 From repository root:
 
 ```powershell
+.\RunMeFirst.bat
 .\StartWeb.bat
 ```
 <br>
