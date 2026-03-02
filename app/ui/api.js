@@ -63,7 +63,7 @@ const ENDPOINTS = [
   {
     method: "POST",
     path: "/upscale",
-    description: "Upscale + refine an existing gallery image by filename.",
+    description: "Upscale an existing gallery image with x2 + SeedVR2 + 50% blend.",
     request: {
       filename: "justrayzist_YYYYMMDD_hhmmss_000.png",
       pack: "Rayzist_bf16",
@@ -75,6 +75,7 @@ const ENDPOINTS = [
       filename: "justrayzist_YYYYMMDD_hhmmss_001.png",
       mode: "api_upscale",
       source_filename: "justrayzist_YYYYMMDD_hhmmss_000.png",
+      upscale_engine: "x2_seedvr2_blend",
       duration_ms: 23456,
       url: "/images/justrayzist_YYYYMMDD_hhmmss_001.png",
     },

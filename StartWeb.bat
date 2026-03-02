@@ -273,13 +273,19 @@ set "NEEDED_TRANSFORMER=%PACK_ROOT%\weights\Rayzist.v1.0.safetensors"
 set "NEEDED_VAE=%PACK_ROOT%\weights\diffusion_pytorch_model.safetensors"
 set "NEEDED_ENCODER=%PACK_ROOT%\config\text_encoder\model.safetensors"
 set "NEEDED_UPSCALER=%CD%\models\upscaler\2x_RealESRGAN_x2plus.pth"
+set "NEEDED_SEEDVR2_DIT=%CD%\models\seedvr2\seedvr2_ema_3b_fp8_e4m3fn.safetensors"
+set "NEEDED_SEEDVR2_VAE=%CD%\models\seedvr2\ema_vae_fp16.safetensors"
+set "NEEDED_SEEDVR2_RUNTIME=%CD%\models\seedvr2\runtime\ComfyUI-SeedVR2_VideoUpscaler\inference_cli.py"
 set "FETCH_SCRIPT=%CD%\scripts\fetch_model_assets.ps1"
+set "SEEDVR2_RUNTIME_FETCH_SCRIPT=%CD%\scripts\fetch_seedvr2_runtime.ps1"
 set "MISSING_ASSETS=0"
 
 if not exist "!NEEDED_TRANSFORMER!" set "MISSING_ASSETS=1"
 if not exist "!NEEDED_VAE!" set "MISSING_ASSETS=1"
 if not exist "!NEEDED_ENCODER!" set "MISSING_ASSETS=1"
 if not exist "!NEEDED_UPSCALER!" set "MISSING_ASSETS=1"
+if not exist "!NEEDED_SEEDVR2_DIT!" set "MISSING_ASSETS=1"
+if not exist "!NEEDED_SEEDVR2_VAE!" set "MISSING_ASSETS=1"
 
 if !MISSING_ASSETS! EQU 0 exit /b 0
 
@@ -299,6 +305,23 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if not exist "!NEEDED_SEEDVR2_RUNTIME!" (
+  echo.
+  echo Missing SeedVR2 runtime scripts.
+  if not exist "!SEEDVR2_RUNTIME_FETCH_SCRIPT!" (
+    echo Missing SeedVR2 runtime fetch script: !SEEDVR2_RUNTIME_FETCH_SCRIPT!
+    exit /b 1
+  )
+  echo Running SeedVR2 runtime fetch script:
+  echo   !SEEDVR2_RUNTIME_FETCH_SCRIPT!
+  powershell -NoProfile -ExecutionPolicy Bypass -File "!SEEDVR2_RUNTIME_FETCH_SCRIPT!"
+  if errorlevel 1 (
+    echo Failed to fetch SeedVR2 runtime scripts.
+    echo Run .\RunMeFirst.bat to repair setup.
+    exit /b 1
+  )
+)
+
 if not exist "!NEEDED_TRANSFORMER!" (
   echo Missing file after download: !NEEDED_TRANSFORMER!
   exit /b 1
@@ -313,6 +336,18 @@ if not exist "!NEEDED_ENCODER!" (
 )
 if not exist "!NEEDED_UPSCALER!" (
   echo Missing file after download: !NEEDED_UPSCALER!
+  exit /b 1
+)
+if not exist "!NEEDED_SEEDVR2_DIT!" (
+  echo Missing file after download: !NEEDED_SEEDVR2_DIT!
+  exit /b 1
+)
+if not exist "!NEEDED_SEEDVR2_VAE!" (
+  echo Missing file after download: !NEEDED_SEEDVR2_VAE!
+  exit /b 1
+)
+if not exist "!NEEDED_SEEDVR2_RUNTIME!" (
+  echo Missing file after download: !NEEDED_SEEDVR2_RUNTIME!
   exit /b 1
 )
 

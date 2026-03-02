@@ -1,0 +1,6 @@
+einops==0.8.1
+omegaconf==2.3.0
+opencv-python==4.11.0.86
+peft==0.17.0
+rotary-embedding-torch==0.8.6
+tqdm==4.67.1

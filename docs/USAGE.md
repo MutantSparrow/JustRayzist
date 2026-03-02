@@ -30,6 +30,8 @@ This downloads and places:
 - `models/packs/Rayzist_bf16/weights/Rayzist.v1.0.safetensors`
 - `models/packs/Rayzist_bf16/weights/diffusion_pytorch_model.safetensors`
 - `models/packs/Rayzist_bf16/config/text_encoder/model.safetensors`
+- `models/seedvr2/seedvr2_ema_3b_fp8_e4m3fn.safetensors`
+- `models/seedvr2/ema_vae_fp16.safetensors`
 - `models/upscaler/2x_RealESRGAN_x2plus.pth`
 
 ## Validate Environment
@@ -103,6 +105,41 @@ Outputs:
   - `execution_mode` (`full_cuda`, `model_offload`, `sequential_offload`)
   - `cuda_total_bytes`
   - `cuda_reserved_after_load_bytes`
+
+## SeedVR2 Benchmark (A/B)
+Run paired comparisons between `x2plus` baseline and `SeedVR2`:
+```powershell
+python -m app.cli.main seedvr2-benchmark `
+  --input-image outputs/_Upscale_test.png `
+  --profiles high,balanced,constrained `
+  --timeout-seconds 240 `
+  --max-consecutive-failures 3
+```
+Outputs:
+- Paired benchmark PNGs in `outputs/`
+- CSV report in `data/seedvr2_benchmark_<timestamp>.csv`
+- JSONL report in `data/seedvr2_benchmark_<timestamp>.jsonl`
+
+## SeedVR2 + X2 Alpha Blend Benchmark
+Run `x2` and `SeedVR2` passes, then blend `x2` over `SeedVR2` with alpha values:
+```powershell
+python -m app.cli.main seedvr2-blend-benchmark `
+  --profile high `
+  --alphas 25,50,75 `
+  --timeout-seconds 240
+```
+
+Notes:
+- If `--inputs` is omitted, the command auto-selects the latest two `1024x1024` `justrayzist_*.png` images from `outputs/`.
+- Blend formula is `x2 over SeedVR2`: `blend = alpha*x2 + (1-alpha)*seedvr2`.
+
+Outputs:
+- Per source image:
+  - one `x2` PNG
+  - one `SeedVR2` PNG
+  - three blend PNGs (`a25`, `a50`, `a75`)
+- CSV report in `data/seedvr2_blend_benchmark_<timestamp>.csv`
+- JSONL report in `data/seedvr2_blend_benchmark_<timestamp>.jsonl`
 
 ## Soak Testing
 Run repeated generations and track memory drift/recycles:
@@ -180,6 +217,7 @@ Web API:
 - `GET /config`
 - `POST /generate` with JSON `{ "prompt": "...", "width": 1024, "height": 1024, "enhance_prompt": false }`
 - `POST /upscale` with JSON `{ "filename": "justrayzist_....png", "seed": 1234, "scheduler_mode": "euler", "enhance_prompt": false }`
+  - Uses the default production upscale chain in-app: `x2plus + SeedVR2 + 50% blend` (`upscale_engine=x2_seedvr2_blend`).
 - `GET /images?prompt=<keyword>&limit=120&offset=0`
 - `GET /images/{filename}`
 - `GET /model-packs`

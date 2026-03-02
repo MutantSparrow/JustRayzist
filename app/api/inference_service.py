@@ -17,6 +17,7 @@ from app.core.model_registry import (
     load_model_pack_by_name,
 )
 from app.core.worker import GenerationRequest, GenerationSession
+from app.core.upscale_blend import UPSCALE_ENGINE_NAME, upscale_with_x2_seed_blend
 from app.storage import append_generation_metric, save_png_with_metadata
 from app.storage.gallery_index import (
     delete_image,
@@ -237,82 +238,83 @@ class InferenceService:
             source_prompt = str(source_row.get("prompt") or "").strip() or "(missing prompt metadata)"
             preferred_pack = str(source_row.get("model_pack") or "").strip() or None
             resolved_pack_name = pack_name or preferred_pack
-            model_pack = self._resolve_pack(resolved_pack_name)
-            session = self._session_for_pack(model_pack)
+            model_pack_name = (resolved_pack_name or "unknown").strip() or "unknown"
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
 
             with Image.open(source_path) as source_file:
                 source_image = source_file.convert("RGB")
             source_width, source_height = source_image.size
 
-            result = session.upscale_and_refine(
-                input_image=source_image,
-                request=GenerationRequest(
-                    prompt=source_prompt,
-                    width=source_width,
-                    height=source_height,
-                    seed=effective_seed,
-                    scheduler_mode=scheduler_mode,
-                    enhance_prompt=enhance_prompt,
-                ),
+            result = upscale_with_x2_seed_blend(
+                image=source_image,
+                settings=self._settings,
+                runtime_profile=self._settings.runtime_profile.name,
+                seed=effective_seed,
             )
-            final_width, final_height = result.image.size
+            final_width, final_height = result.output_width, result.output_height
             saved_path = save_png_with_metadata(
                 image=result.image,
-                prompt=result.prompt_effective,
+                prompt=source_prompt,
                 settings=self._settings,
                 extra_metadata={
                     "mode": "api_upscale",
-                    "prompt_original": result.prompt_original,
-                    "prompt_effective": result.prompt_effective,
-                    "prompt_enhanced": result.prompt_enhanced,
+                    "prompt_original": source_prompt,
+                    "prompt_effective": source_prompt,
+                    "prompt_enhanced": False,
                     "source_image": str(source_path),
                     "source_filename": safe_filename,
                     "source_width": source_width,
                     "source_height": source_height,
                     "width": final_width,
                     "height": final_height,
-                    "steps": result.steps,
-                    "guidance_scale": result.guidance_scale,
-                    "backend": result.backend,
+                    "steps": 0,
+                    "guidance_scale": 0.0,
+                    "backend": UPSCALE_ENGINE_NAME,
                     "device": result.device,
-                    "model_pack": model_pack.name,
+                    "model_pack": model_pack_name,
                     "duration_ms": result.duration_ms,
-                    "seed": result.seed,
-                    "scheduler_mode": result.scheduler_mode,
-                    "runtime_profile": result.runtime_profile,
-                    "execution_mode": result.execution_mode,
+                    "seed": effective_seed,
+                    "scheduler_mode": scheduler_mode or "euler",
+                    "runtime_profile": self._settings.runtime_profile.name,
+                    "execution_mode": UPSCALE_ENGINE_NAME,
+                    "request_enhance_prompt": bool(enhance_prompt),
+                    **result.telemetry_dict(),
                 },
             )
             append_generation_metric(
                 settings=self._settings,
                 payload={
                     "mode": "api_upscale",
-                    "prompt": result.prompt_effective,
-                    "prompt_original": result.prompt_original,
-                    "prompt_effective": result.prompt_effective,
-                    "prompt_enhanced": result.prompt_enhanced,
+                    "prompt": source_prompt,
+                    "prompt_original": source_prompt,
+                    "prompt_effective": source_prompt,
+                    "prompt_enhanced": False,
                     "source_filename": safe_filename,
                     "source_width": source_width,
                     "source_height": source_height,
                     "width": final_width,
                     "height": final_height,
                     "output_path": str(saved_path),
-                    "model_pack": model_pack.name,
+                    "model_pack": model_pack_name,
+                    "backend": UPSCALE_ENGINE_NAME,
+                    "seed": effective_seed,
+                    "scheduler_mode": scheduler_mode or "euler",
+                    "request_enhance_prompt": bool(enhance_prompt),
                     **result.telemetry_dict(),
                 },
             )
             image_row = index_image(self._settings, saved_path)
             image_row["url"] = f"/images/{image_row['filename']}"
-            image_row["pack"] = model_pack.name
+            image_row["pack"] = model_pack_name
             image_row["duration_ms"] = result.duration_ms
-            image_row["seed"] = result.seed
-            image_row["scheduler_mode"] = result.scheduler_mode
-            image_row["prompt_original"] = result.prompt_original
-            image_row["prompt_effective"] = result.prompt_effective
-            image_row["prompt_enhanced"] = result.prompt_enhanced
-            image_row["runtime_profile"] = result.runtime_profile
-            image_row["execution_mode"] = result.execution_mode
+            image_row["seed"] = effective_seed
+            image_row["scheduler_mode"] = scheduler_mode or "euler"
+            image_row["prompt_original"] = source_prompt
+            image_row["prompt_effective"] = source_prompt
+            image_row["prompt_enhanced"] = False
+            image_row["runtime_profile"] = self._settings.runtime_profile.name
+            image_row["execution_mode"] = UPSCALE_ENGINE_NAME
+            image_row["upscale_engine"] = UPSCALE_ENGINE_NAME
             return image_row
 
     @staticmethod

@@ -171,6 +171,20 @@ $assets = @(
     Sha256 = "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a"
   },
   @{
+    Name = "SeedVR2 3B FP8 DiT checkpoint"
+    RepoId = "themindstudio/SeedVR2-3B-FP8-e4m3fn"
+    RepoFile = "seedvr2_ema_3b_fp8_e4m3fn.safetensors"
+    RelativeOutputPath = "models/seedvr2/seedvr2_ema_3b_fp8_e4m3fn.safetensors"
+    Sha256 = ""
+  },
+  @{
+    Name = "SeedVR2 VAE checkpoint"
+    RepoId = "themindstudio/SeedVR2-3B-FP8-e4m3fn"
+    RepoFile = "ema_vae_fp16.safetensors"
+    RelativeOutputPath = "models/seedvr2/ema_vae_fp16.safetensors"
+    Sha256 = "20678548f420d98d26f11442d3528f8b8c94e57ee046ef93dbb7633da8612ca1"
+  },
+  @{
     Name = "Upscaler checkpoint (RealESRGAN x2plus)"
     RepoId = "imagepipeline/superresolution"
     RepoFile = "RealESRGAN_x2plus.pth"

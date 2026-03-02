@@ -104,29 +104,37 @@ Action:
 - Update NVIDIA driver to meet lane floor.
 - Or use artifact built for another lane.
 
-## Upscale fails: missing upscaler checkpoint
+## Upscale fails: missing SeedVR2 assets/runtime
 Cause:
-- No upscaler checkpoint is bundled in release artifacts.
+- SeedVR2 checkpoints or runtime script are missing.
 
 Action:
 - Fetch defaults from Hugging Face:
   - `powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1`
-- Or launch with `StartWeb.bat` to auto-download default assets (including `2x_RealESRGAN_x2plus.pth`).
-- You can still provide a custom `.pth` or `.safetensors` checkpoint via CLI `--checkpoint`.
+- Fetch SeedVR2 runtime scripts:
+  - `powershell -ExecutionPolicy Bypass -File scripts\fetch_seedvr2_runtime.ps1`
+- Or run full repair:
+  - `.\RunMeFirst.bat`
+- Required SeedVR2 files:
+  - `models\seedvr2\seedvr2_ema_3b_fp8_e4m3fn.safetensors`
+  - `models\seedvr2\ema_vae_fp16.safetensors`
+  - `models\seedvr2\runtime\ComfyUI-SeedVR2_VideoUpscaler\inference_cli.py`
 
 ## Upscale output quality is poor
 Check:
 - Source image may already contain heavy artifacts.
-- Prompt used for refine may be too strong/off-topic.
-- Scheduler/seed combination may be unstable for that image.
+- Different source images can favor more detail from either x2 or SeedVR2 pass.
 
 Action:
-- Keep defaults first (`strength=0.20`, `refine_steps=6`, `scheduler_mode=euler`).
-- If outputs look overcooked, lower refine strength:
-  - `--strength 0.12`
-- If outputs look too soft, increase refine steps modestly:
-  - `--refine-steps 8`
-- Keep adaptive tiling enabled unless you are intentionally tuning tile behavior.
+- Keep default app pipeline first:
+  - `x2plus + SeedVR2 + 50% blend`
+- Verify all required assets exist:
+  - `models\upscaler\2x_RealESRGAN_x2plus.pth`
+  - `models\seedvr2\seedvr2_ema_3b_fp8_e4m3fn.safetensors`
+  - `models\seedvr2\ema_vae_fp16.safetensors`
+  - `models\seedvr2\runtime\ComfyUI-SeedVR2_VideoUpscaler\inference_cli.py`
+- Repair runtime/model assets:
+  - `.\RunMeFirst.bat`
 
 ## Slow first iteration in soak runs
 Expected:

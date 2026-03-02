@@ -280,6 +280,10 @@ function isUpscaledItem(item) {
   return Boolean(resolveSourceFilename(item) || mode.includes("upscale"));
 }
 
+function canUpscaleItem(item) {
+  return !isUpscaledItem(item);
+}
+
 function updateSettingsSummary() {
   const dimensions = parseResolution(resolutionSelectEl.value);
   const pieces = [
@@ -407,6 +411,8 @@ function updateViewerNavState() {
 function applyViewerItemMeta(item) {
   const resolution = item.width && item.height ? `${item.width}x${item.height}` : "unknown";
   const upscaled = isUpscaledItem(item);
+  viewerUpscaleButtonEl.classList.toggle("hidden", upscaled);
+  viewerUpscaleButtonEl.disabled = upscaled;
   if (upscaled) {
     const sourceFilename = resolveSourceFilename(item);
     const compareAvailable = Boolean(sourceFilename);
@@ -669,15 +675,6 @@ function renderImageTile(item, index) {
   download.textContent = "Download";
   download.addEventListener("click", (event) => event.stopPropagation());
 
-  const upscale = document.createElement("button");
-  upscale.className = "tile-upscale";
-  upscale.type = "button";
-  upscale.textContent = "Upscale";
-  upscale.addEventListener("click", (event) => {
-    event.stopPropagation();
-    enqueueUpscaleFromItem(item);
-  });
-
   const del = document.createElement("button");
   del.className = "tile-delete";
   del.type = "button";
@@ -692,7 +689,18 @@ function renderImageTile(item, index) {
     }, "Delete");
   });
 
-  primaryActions.append(download, upscale);
+  primaryActions.append(download);
+  if (canUpscaleItem(item)) {
+    const upscale = document.createElement("button");
+    upscale.className = "tile-upscale";
+    upscale.type = "button";
+    upscale.textContent = "Upscale";
+    upscale.addEventListener("click", (event) => {
+      event.stopPropagation();
+      enqueueUpscaleFromItem(item);
+    });
+    primaryActions.append(upscale);
+  }
   actions.append(primaryActions, del);
   overlay.append(meta, actions);
   tile.append(image, overlay);
@@ -890,6 +898,10 @@ function enqueueGenerationFromPrompt() {
 }
 
 function enqueueUpscaleFromItem(item) {
+  if (!canUpscaleItem(item)) {
+    setStatus("Upscale blocked: source image is already upscaled.", true);
+    return false;
+  }
   const sourceFilename = String(item?.filename || "").trim();
   if (!sourceFilename) {
     setStatus("Upscale failed: invalid source image.", true);

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import csv
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -499,6 +500,876 @@ def upscale_refine(
     if result.prompt_enhanced:
         typer.echo(f"Prompt enhanced: {result.prompt_effective}")
     typer.echo(f"Metrics: {metrics_file}")
+
+
+@cli.command("seedvr2-benchmark")
+def seedvr2_benchmark(
+    input_image: Path = typer.Option(
+        Path("outputs/_Upscale_test.png"),
+        "--input-image",
+        help="Input image used for A/B benchmark runs.",
+    ),
+    checkpoint: Path = typer.Option(
+        Path("models/upscaler/2x_RealESRGAN_x2plus.pth"),
+        "--checkpoint",
+        help="Baseline x2plus checkpoint path for comparison.",
+    ),
+    output_dir: Optional[Path] = typer.Option(
+        None,
+        "--output-dir",
+        help="Destination directory for benchmark outputs. Defaults to outputs/.",
+    ),
+    profiles: str = typer.Option(
+        "high,balanced,constrained",
+        "--profiles",
+        help="Comma-separated profile list to test (high, balanced, constrained).",
+    ),
+    mode: str = typer.Option(
+        "both",
+        "--mode",
+        help="Benchmark mode: cold, warm, or both.",
+    ),
+    runs: int = typer.Option(
+        3,
+        "--runs",
+        min=1,
+        max=20,
+        help="Measured runs per mode/profile.",
+    ),
+    warmup_runs: int = typer.Option(
+        1,
+        "--warmup-runs",
+        min=0,
+        max=10,
+        help="Warmup runs before warm measurements.",
+    ),
+    target_median_seconds: int = typer.Option(
+        45,
+        "--target-median-seconds",
+        min=10,
+        max=600,
+        help="Warm median target for pass/fail evaluation.",
+    ),
+    timeout_seconds: int = typer.Option(
+        240,
+        "--timeout-seconds",
+        min=30,
+        max=3600,
+        help="Per-run timeout for SeedVR2 execution.",
+    ),
+    max_consecutive_failures: int = typer.Option(
+        3,
+        "--max-consecutive-failures",
+        min=1,
+        max=20,
+        help="Abort benchmark after this many consecutive failures.",
+    ),
+) -> None:
+    import gc
+    import statistics
+    import time
+
+    import torch
+    from PIL import Image
+
+    from app.core.seedvr2 import clear_seedvr2_runtime_cache, upscale_with_seedvr2
+    from app.core.upscale import run_upscale_test
+    from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
+
+    seed_settings = load_settings()
+    root = seed_settings.paths.root_dir
+    input_path = _resolve_cli_path(root, input_image)
+    checkpoint_path = _resolve_cli_path(root, checkpoint)
+    if not input_path.exists() or not input_path.is_file():
+        typer.echo(f"Input image not found: {input_path}")
+        raise typer.Exit(code=1)
+    if not checkpoint_path.exists() or not checkpoint_path.is_file():
+        typer.echo(f"Baseline checkpoint not found: {checkpoint_path}")
+        raise typer.Exit(code=1)
+
+    requested_profiles: list[str] = []
+    for entry in profiles.split(","):
+        name = entry.strip().lower()
+        if name and name not in requested_profiles:
+            requested_profiles.append(name)
+    if not requested_profiles:
+        typer.echo("No profiles requested. Provide --profiles high,balanced,constrained")
+        raise typer.Exit(code=1)
+
+    mode_normalized = mode.strip().lower()
+    if mode_normalized not in {"cold", "warm", "both"}:
+        typer.echo("Invalid --mode. Allowed: cold, warm, both")
+        raise typer.Exit(code=1)
+
+    started_utc = datetime.now(timezone.utc)
+    report_key = started_utc.strftime("%Y%m%d_%H%M%S")
+    report_csv = seed_settings.paths.data_dir / f"seedvr2_benchmark_{report_key}.csv"
+    report_jsonl = seed_settings.paths.data_dir / f"seedvr2_benchmark_{report_key}.jsonl"
+    report_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    records: list[dict[str, object]] = []
+    consecutive_failures = 0
+    aborted = False
+    warm_medians_by_profile: dict[str, float] = {}
+
+    for profile_name in requested_profiles:
+        profile_settings = load_settings(profile_name=profile_name)
+        destination_dir = (
+            _resolve_cli_path(root, output_dir) if output_dir else profile_settings.paths.outputs_dir
+        )
+        base_pair_id = uuid4().hex[:10]
+
+        # Baseline x2plus: one run per profile for reference.
+        for engine_name in ("x2plus_baseline",):
+            row: dict[str, object] = {
+                "benchmark_pair_id": base_pair_id,
+                "profile": profile_settings.runtime_profile.name,
+                "engine": engine_name,
+                "run_label": "baseline_1",
+                "status": "pending",
+                "duration_ms": None,
+                "upscale_infer_ms": None,
+                "source_image": str(input_path),
+                "output_path": "",
+                "error": "",
+            }
+            wall_started = time.perf_counter()
+            try:
+                if engine_name == "x2plus_baseline":
+                    baseline = run_upscale_test(
+                        input_image_path=input_path,
+                        checkpoint_path=checkpoint_path,
+                        profile_name=profile_settings.runtime_profile.name,
+                    )
+                    output_image = baseline.image
+                    infer_duration_ms = int(baseline.duration_ms)
+                    telemetry: dict[str, object] = {
+                        "upscale_engine": "x2plus_baseline",
+                        "upscale_model_repo": "",
+                        "upscale_model_revision": "",
+                        "upscale_dtype": baseline.precision,
+                        "upscale_vram_peak_mb": None,
+                        "upscale_infer_ms": infer_duration_ms,
+                        "upscale_success": True,
+                        **baseline.telemetry_dict(),
+                    }
+                else:
+                    with Image.open(input_path) as input_file:
+                        seedvr2 = upscale_with_seedvr2(
+                            image=input_file.convert("RGB"),
+                            settings=profile_settings,
+                            runtime_profile=profile_settings.runtime_profile.name,
+                            timeout_seconds=timeout_seconds,
+                        )
+                    output_image = seedvr2.image
+                    infer_duration_ms = int(seedvr2.infer_ms)
+                    telemetry = seedvr2.telemetry_dict()
+
+                saved_path = save_png_with_metadata(
+                    image=output_image,
+                    prompt=f"SeedVR2 benchmark from {input_path.name}",
+                    settings=profile_settings,
+                    output_path=build_output_path(
+                        destination_dir,
+                        prefix=f"benchmark_{profile_settings.runtime_profile.name}_{engine_name}_{base_pair_id}",
+                    ),
+                    extra_metadata={
+                        "mode": "seedvr2_benchmark",
+                        "benchmark_pair_id": base_pair_id,
+                        "benchmark_engine": engine_name,
+                        "benchmark_run_label": "baseline_1",
+                        "source_image": str(input_path),
+                        "profile": profile_settings.runtime_profile.name,
+                        **telemetry,
+                    },
+                )
+                total_duration_ms = int((time.perf_counter() - wall_started) * 1000)
+                row["status"] = "success"
+                row["duration_ms"] = total_duration_ms
+                row["output_path"] = str(saved_path)
+                row["error"] = ""
+                row["upscale_infer_ms"] = infer_duration_ms
+                append_generation_metric(
+                    settings=profile_settings,
+                    payload={
+                        "mode": "seedvr2_benchmark",
+                        "benchmark_pair_id": base_pair_id,
+                        "benchmark_engine": engine_name,
+                        "benchmark_run_label": "baseline_1",
+                        "profile": profile_settings.runtime_profile.name,
+                        "source_image": str(input_path),
+                        "output_path": str(saved_path),
+                        "duration_ms": total_duration_ms,
+                        **telemetry,
+                    },
+                )
+                consecutive_failures = 0
+            except TimeoutError as exc:
+                total_duration_ms = int((time.perf_counter() - wall_started) * 1000)
+                row["status"] = "timeout"
+                row["duration_ms"] = total_duration_ms
+                row["error"] = str(exc)
+                consecutive_failures += 1
+            except Exception as exc:  # noqa: BLE001
+                total_duration_ms = int((time.perf_counter() - wall_started) * 1000)
+                row["status"] = "error"
+                row["duration_ms"] = total_duration_ms
+                row["error"] = str(exc)
+                consecutive_failures += 1
+            finally:
+                records.append(row)
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            if consecutive_failures >= max_consecutive_failures:
+                aborted = True
+                typer.echo(
+                    "Aborting benchmark after "
+                    f"{consecutive_failures} consecutive failures."
+                )
+                break
+        if aborted:
+            break
+
+        def _record_seedvr2_run(
+            *,
+            run_pair_id: str,
+            run_label: str,
+            reuse_runner: bool,
+        ) -> None:
+            nonlocal consecutive_failures, aborted
+            row: dict[str, object] = {
+                "benchmark_pair_id": run_pair_id,
+                "profile": profile_settings.runtime_profile.name,
+                "engine": "seedvr2",
+                "run_label": run_label,
+                "status": "pending",
+                "duration_ms": None,
+                "upscale_infer_ms": None,
+                "source_image": str(input_path),
+                "output_path": "",
+                "error": "",
+            }
+            wall_started = time.perf_counter()
+            try:
+                with Image.open(input_path) as input_file:
+                    seedvr2 = upscale_with_seedvr2(
+                        image=input_file.convert("RGB"),
+                        settings=profile_settings,
+                        runtime_profile=profile_settings.runtime_profile.name,
+                        timeout_seconds=timeout_seconds,
+                        reuse_runner=reuse_runner,
+                    )
+                output_image = seedvr2.image
+                infer_duration_ms = int(seedvr2.infer_ms)
+                telemetry = seedvr2.telemetry_dict()
+                saved_path = save_png_with_metadata(
+                    image=output_image,
+                    prompt=f"SeedVR2 benchmark from {input_path.name}",
+                    settings=profile_settings,
+                    output_path=build_output_path(
+                        destination_dir,
+                        prefix=(
+                            f"benchmark_{profile_settings.runtime_profile.name}_seedvr2_"
+                            f"{run_label}_{run_pair_id}"
+                        ),
+                    ),
+                    extra_metadata={
+                        "mode": "seedvr2_benchmark",
+                        "benchmark_pair_id": run_pair_id,
+                        "benchmark_engine": "seedvr2",
+                        "benchmark_run_label": run_label,
+                        "source_image": str(input_path),
+                        "profile": profile_settings.runtime_profile.name,
+                        **telemetry,
+                    },
+                )
+                total_duration_ms = int((time.perf_counter() - wall_started) * 1000)
+                row["status"] = "success"
+                row["duration_ms"] = total_duration_ms
+                row["output_path"] = str(saved_path)
+                row["error"] = ""
+                row["upscale_infer_ms"] = infer_duration_ms
+                append_generation_metric(
+                    settings=profile_settings,
+                    payload={
+                        "mode": "seedvr2_benchmark",
+                        "benchmark_pair_id": run_pair_id,
+                        "benchmark_engine": "seedvr2",
+                        "benchmark_run_label": run_label,
+                        "profile": profile_settings.runtime_profile.name,
+                        "source_image": str(input_path),
+                        "output_path": str(saved_path),
+                        "duration_ms": total_duration_ms,
+                        **telemetry,
+                    },
+                )
+                consecutive_failures = 0
+            except TimeoutError as exc:
+                total_duration_ms = int((time.perf_counter() - wall_started) * 1000)
+                row["status"] = "timeout"
+                row["duration_ms"] = total_duration_ms
+                row["error"] = str(exc)
+                consecutive_failures += 1
+            except Exception as exc:  # noqa: BLE001
+                total_duration_ms = int((time.perf_counter() - wall_started) * 1000)
+                row["status"] = "error"
+                row["duration_ms"] = total_duration_ms
+                row["error"] = str(exc)
+                consecutive_failures += 1
+            finally:
+                records.append(row)
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            if consecutive_failures >= max_consecutive_failures:
+                aborted = True
+                typer.echo(
+                    "Aborting benchmark after "
+                    f"{consecutive_failures} consecutive failures."
+                )
+
+        if mode_normalized in {"cold", "both"}:
+            typer.echo(f"Running cold SeedVR2 series for profile '{profile_settings.runtime_profile.name}'...")
+            for run_idx in range(runs):
+                clear_seedvr2_runtime_cache(profile_settings.runtime_profile.name)
+                _record_seedvr2_run(
+                    run_pair_id=uuid4().hex[:10],
+                    run_label=f"cold_{run_idx + 1}",
+                    reuse_runner=False,
+                )
+                if aborted:
+                    break
+
+        if aborted:
+            break
+
+        if mode_normalized in {"warm", "both"}:
+            typer.echo(f"Running warm SeedVR2 series for profile '{profile_settings.runtime_profile.name}'...")
+            clear_seedvr2_runtime_cache(profile_settings.runtime_profile.name)
+            for warmup_idx in range(warmup_runs):
+                _record_seedvr2_run(
+                    run_pair_id=uuid4().hex[:10],
+                    run_label=f"warmup_{warmup_idx + 1}",
+                    reuse_runner=True,
+                )
+                if aborted:
+                    break
+            if aborted:
+                break
+            for run_idx in range(runs):
+                _record_seedvr2_run(
+                    run_pair_id=uuid4().hex[:10],
+                    run_label=f"warm_{run_idx + 1}",
+                    reuse_runner=True,
+                )
+                if aborted:
+                    break
+            if aborted:
+                break
+
+            warm_success_ms = [
+                int(row["duration_ms"])
+                for row in records
+                if row.get("profile") == profile_settings.runtime_profile.name
+                and row.get("engine") == "seedvr2"
+                and str(row.get("run_label", "")).startswith("warm_")
+                and row.get("status") == "success"
+                and row.get("duration_ms") is not None
+            ]
+            if warm_success_ms:
+                warm_medians_by_profile[profile_settings.runtime_profile.name] = float(
+                    statistics.median(warm_success_ms)
+                )
+
+    fieldnames = [
+        "benchmark_pair_id",
+        "profile",
+        "engine",
+        "run_label",
+        "status",
+        "duration_ms",
+        "upscale_infer_ms",
+        "source_image",
+        "output_path",
+        "error",
+    ]
+    with report_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in records:
+            writer.writerow(row)
+
+    with report_jsonl.open("w", encoding="utf-8") as handle:
+        for row in records:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+    typer.echo("")
+    typer.echo("SeedVR2 benchmark results:")
+    typer.echo("profile      engine            run_label      status    duration_ms  output")
+    typer.echo("-----------  ----------------  -------------  --------  -----------  ----------------")
+    for row in records:
+        typer.echo(
+            f"{str(row['profile']):11}  "
+            f"{str(row['engine']):16}  "
+            f"{str(row['run_label']):13}  "
+            f"{str(row['status']):8}  "
+            f"{str(row['duration_ms']):11}  "
+            f"{str(row['output_path'])}"
+        )
+    if warm_medians_by_profile:
+        typer.echo("")
+        typer.echo("Warm median summary:")
+        target_ms = target_median_seconds * 1000
+        for profile_name in requested_profiles:
+            if profile_name not in warm_medians_by_profile:
+                continue
+            median_ms = int(warm_medians_by_profile[profile_name])
+            verdict = "PASS" if median_ms <= target_ms else "FAIL"
+            typer.echo(
+                f"  {profile_name:11} median={median_ms}ms "
+                f"target<={target_ms}ms [{verdict}]"
+            )
+    typer.echo(f"CSV report: {report_csv}")
+    typer.echo(f"JSONL report: {report_jsonl}")
+
+    warm_target_failed = False
+    if mode_normalized in {"warm", "both"}:
+        target_ms = target_median_seconds * 1000
+        for profile_name, median_ms in warm_medians_by_profile.items():
+            if median_ms > target_ms:
+                warm_target_failed = True
+                typer.echo(
+                    f"Warm median target failed for profile '{profile_name}': "
+                    f"{int(median_ms)}ms > {target_ms}ms"
+                )
+    if aborted or any(str(row.get("status")) != "success" for row in records) or warm_target_failed:
+        raise typer.Exit(code=1)
+
+
+@cli.command("seedvr2-blend-benchmark")
+def seedvr2_blend_benchmark(
+    inputs: str = typer.Option(
+        "",
+        "--inputs",
+        help="Comma-separated source image paths. If omitted, auto-selects latest two 1024x1024 justrayzist PNGs.",
+    ),
+    profile: str = typer.Option(
+        "high",
+        "--profile",
+        help="Runtime profile to use for x2 and SeedVR2 passes.",
+    ),
+    checkpoint: Path = typer.Option(
+        Path("models/upscaler/2x_RealESRGAN_x2plus.pth"),
+        "--checkpoint",
+        help="Baseline x2plus checkpoint path.",
+    ),
+    alphas: str = typer.Option(
+        "25,50,75",
+        "--alphas",
+        help="Comma-separated alpha percentages for x2-over-seed blending.",
+    ),
+    output_dir: Optional[Path] = typer.Option(
+        None,
+        "--output-dir",
+        help="Destination directory for benchmark outputs. Defaults to outputs/.",
+    ),
+    timeout_seconds: int = typer.Option(
+        240,
+        "--timeout-seconds",
+        min=30,
+        max=3600,
+        help="Per-run timeout for SeedVR2 execution.",
+    ),
+    max_consecutive_failures: int = typer.Option(
+        3,
+        "--max-consecutive-failures",
+        min=1,
+        max=20,
+        help="Abort benchmark after this many consecutive failures.",
+    ),
+) -> None:
+    import gc
+    import time
+
+    import torch
+    from PIL import Image
+
+    from app.core.seedvr2 import clear_seedvr2_runtime_cache, upscale_with_seedvr2
+    from app.core.upscale import run_upscale_test
+    from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
+
+    def _parse_alpha_list(raw: str) -> list[int]:
+        values: list[int] = []
+        for chunk in raw.split(","):
+            token = chunk.strip()
+            if not token:
+                continue
+            try:
+                parsed = int(token)
+            except ValueError as exc:
+                raise ValueError(f"Invalid alpha value '{token}'. Use integers in [0,100].") from exc
+            if parsed < 0 or parsed > 100:
+                raise ValueError(f"Alpha value out of range: {parsed}. Allowed: 0..100.")
+            if parsed not in values:
+                values.append(parsed)
+        if not values:
+            raise ValueError("No alpha values provided. Example: --alphas 25,50,75")
+        return values
+
+    def _resolve_input_paths(root_dir: Path, raw_inputs: str) -> list[Path]:
+        if raw_inputs.strip():
+            resolved: list[Path] = []
+            for chunk in raw_inputs.split(","):
+                token = chunk.strip()
+                if not token:
+                    continue
+                path = _resolve_cli_path(root_dir, Path(token))
+                if not path.exists() or not path.is_file():
+                    raise ValueError(f"Input image not found: {path}")
+                resolved.append(path)
+            if not resolved:
+                raise ValueError("No valid input images provided in --inputs.")
+            return resolved
+
+        outputs_dir = root_dir / "outputs"
+        candidates = sorted(
+            outputs_dir.glob("justrayzist_*.png"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        selected: list[Path] = []
+        for candidate in candidates:
+            try:
+                with Image.open(candidate) as img:
+                    if img.size == (1024, 1024):
+                        selected.append(candidate)
+            except Exception:
+                continue
+            if len(selected) >= 2:
+                break
+        if len(selected) < 2:
+            raise ValueError(
+                "Unable to auto-select two 1024x1024 images from outputs/. "
+                "Provide --inputs explicitly."
+            )
+        return selected
+
+    seed_settings = load_settings()
+    root = seed_settings.paths.root_dir
+    profile_settings = load_settings(profile_name=profile)
+    destination_dir = (
+        _resolve_cli_path(root, output_dir) if output_dir else profile_settings.paths.outputs_dir
+    )
+
+    checkpoint_path = _resolve_cli_path(root, checkpoint)
+    if not checkpoint_path.exists() or not checkpoint_path.is_file():
+        typer.echo(f"Upscaler checkpoint not found: {checkpoint_path}")
+        raise typer.Exit(code=1)
+
+    try:
+        alpha_values = _parse_alpha_list(alphas)
+        input_paths = _resolve_input_paths(root, inputs)
+    except ValueError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1)
+
+    started_utc = datetime.now(timezone.utc)
+    report_key = started_utc.strftime("%Y%m%d_%H%M%S")
+    report_csv = seed_settings.paths.data_dir / f"seedvr2_blend_benchmark_{report_key}.csv"
+    report_jsonl = seed_settings.paths.data_dir / f"seedvr2_blend_benchmark_{report_key}.jsonl"
+    report_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    records: list[dict[str, object]] = []
+    consecutive_failures = 0
+    aborted = False
+
+    def _record_row(row: dict[str, object]) -> None:
+        nonlocal consecutive_failures, aborted
+        records.append(row)
+        if str(row.get("status")) == "success":
+            consecutive_failures = 0
+        else:
+            consecutive_failures += 1
+            if consecutive_failures >= max_consecutive_failures:
+                aborted = True
+                typer.echo(
+                    "Aborting benchmark after "
+                    f"{consecutive_failures} consecutive failures."
+                )
+
+    for source_path in input_paths:
+        if aborted:
+            break
+
+        run_id = uuid4().hex[:10]
+        source_stem = source_path.stem
+        seed_result = None
+        x2_result = None
+
+        # Stage 1: x2 baseline pass
+        x2_row: dict[str, object] = {
+            "run_id": run_id,
+            "source_image": str(source_path),
+            "profile": profile_settings.runtime_profile.name,
+            "stage": "x2",
+            "alpha_percent": None,
+            "status": "pending",
+            "duration_ms": None,
+            "infer_ms": None,
+            "output_path": "",
+            "error": "",
+        }
+        x2_started = time.perf_counter()
+        try:
+            x2_result = run_upscale_test(
+                input_image_path=source_path,
+                checkpoint_path=checkpoint_path,
+                profile_name=profile_settings.runtime_profile.name,
+            )
+            x2_saved = save_png_with_metadata(
+                image=x2_result.image,
+                prompt=f"Blend benchmark x2 from {source_path.name}",
+                settings=profile_settings,
+                output_path=build_output_path(
+                    destination_dir,
+                    prefix=f"blendbench_{profile_settings.runtime_profile.name}_{source_stem}_{run_id}_x2",
+                ),
+                extra_metadata={
+                    "mode": "seedvr2_blend_benchmark",
+                    "run_id": run_id,
+                    "stage": "x2",
+                    "source_image": str(source_path),
+                    "profile": profile_settings.runtime_profile.name,
+                    **x2_result.telemetry_dict(),
+                },
+            )
+            x2_duration_ms = int((time.perf_counter() - x2_started) * 1000)
+            x2_row["status"] = "success"
+            x2_row["duration_ms"] = x2_duration_ms
+            x2_row["infer_ms"] = int(x2_result.duration_ms)
+            x2_row["output_path"] = str(x2_saved)
+            append_generation_metric(
+                settings=profile_settings,
+                payload={
+                    "mode": "seedvr2_blend_benchmark",
+                    "run_id": run_id,
+                    "stage": "x2",
+                    "source_image": str(source_path),
+                    "output_path": str(x2_saved),
+                    "profile": profile_settings.runtime_profile.name,
+                    "duration_ms": x2_duration_ms,
+                    **x2_result.telemetry_dict(),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            x2_duration_ms = int((time.perf_counter() - x2_started) * 1000)
+            x2_row["status"] = "error"
+            x2_row["duration_ms"] = x2_duration_ms
+            x2_row["error"] = str(exc)
+        finally:
+            _record_row(x2_row)
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        if aborted:
+            break
+
+        # Stage 2: seed pass
+        seed_row: dict[str, object] = {
+            "run_id": run_id,
+            "source_image": str(source_path),
+            "profile": profile_settings.runtime_profile.name,
+            "stage": "seedvr2",
+            "alpha_percent": None,
+            "status": "pending",
+            "duration_ms": None,
+            "infer_ms": None,
+            "output_path": "",
+            "error": "",
+        }
+        seed_started = time.perf_counter()
+        try:
+            clear_seedvr2_runtime_cache(profile_settings.runtime_profile.name)
+            with Image.open(source_path) as source_file:
+                seed_result = upscale_with_seedvr2(
+                    image=source_file.convert("RGB"),
+                    settings=profile_settings,
+                    runtime_profile=profile_settings.runtime_profile.name,
+                    timeout_seconds=timeout_seconds,
+                    reuse_runner=True,
+                )
+            seed_saved = save_png_with_metadata(
+                image=seed_result.image,
+                prompt=f"Blend benchmark seedvr2 from {source_path.name}",
+                settings=profile_settings,
+                output_path=build_output_path(
+                    destination_dir,
+                    prefix=f"blendbench_{profile_settings.runtime_profile.name}_{source_stem}_{run_id}_seedvr2",
+                ),
+                extra_metadata={
+                    "mode": "seedvr2_blend_benchmark",
+                    "run_id": run_id,
+                    "stage": "seedvr2",
+                    "source_image": str(source_path),
+                    "profile": profile_settings.runtime_profile.name,
+                    **seed_result.telemetry_dict(),
+                },
+            )
+            seed_duration_ms = int((time.perf_counter() - seed_started) * 1000)
+            seed_row["status"] = "success"
+            seed_row["duration_ms"] = seed_duration_ms
+            seed_row["infer_ms"] = int(seed_result.infer_ms)
+            seed_row["output_path"] = str(seed_saved)
+            append_generation_metric(
+                settings=profile_settings,
+                payload={
+                    "mode": "seedvr2_blend_benchmark",
+                    "run_id": run_id,
+                    "stage": "seedvr2",
+                    "source_image": str(source_path),
+                    "output_path": str(seed_saved),
+                    "profile": profile_settings.runtime_profile.name,
+                    "duration_ms": seed_duration_ms,
+                    **seed_result.telemetry_dict(),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            seed_duration_ms = int((time.perf_counter() - seed_started) * 1000)
+            seed_row["status"] = "error"
+            seed_row["duration_ms"] = seed_duration_ms
+            seed_row["error"] = str(exc)
+        finally:
+            _record_row(seed_row)
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        if aborted:
+            break
+
+        # Stage 3: blended outputs (x2 over seed)
+        for alpha_percent in alpha_values:
+            blend_row: dict[str, object] = {
+                "run_id": run_id,
+                "source_image": str(source_path),
+                "profile": profile_settings.runtime_profile.name,
+                "stage": "blend",
+                "alpha_percent": alpha_percent,
+                "status": "pending",
+                "duration_ms": None,
+                "infer_ms": None,
+                "output_path": "",
+                "error": "",
+            }
+            blend_started = time.perf_counter()
+            try:
+                if x2_result is None or seed_result is None:
+                    raise RuntimeError("Blend prerequisites missing: x2 and SeedVR2 passes must succeed.")
+                if x2_result.image.size != seed_result.image.size:
+                    raise RuntimeError(
+                        "Blend size mismatch: "
+                        f"x2={x2_result.image.size}, seedvr2={seed_result.image.size}"
+                    )
+                alpha_value = alpha_percent / 100.0
+                blended = Image.blend(seed_result.image, x2_result.image, alpha_value)
+                blend_saved = save_png_with_metadata(
+                    image=blended,
+                    prompt=f"Blend benchmark alpha {alpha_percent}% from {source_path.name}",
+                    settings=profile_settings,
+                    output_path=build_output_path(
+                        destination_dir,
+                        prefix=(
+                            f"blendbench_{profile_settings.runtime_profile.name}_"
+                            f"{source_stem}_{run_id}_a{alpha_percent:02d}"
+                        ),
+                    ),
+                    extra_metadata={
+                        "mode": "seedvr2_blend_benchmark",
+                        "run_id": run_id,
+                        "stage": "blend",
+                        "alpha_percent": alpha_percent,
+                        "source_image": str(source_path),
+                        "profile": profile_settings.runtime_profile.name,
+                        "blend_top": "x2plus_baseline",
+                        "blend_base": "seedvr2",
+                    },
+                )
+                blend_duration_ms = int((time.perf_counter() - blend_started) * 1000)
+                blend_row["status"] = "success"
+                blend_row["duration_ms"] = blend_duration_ms
+                blend_row["output_path"] = str(blend_saved)
+                append_generation_metric(
+                    settings=profile_settings,
+                    payload={
+                        "mode": "seedvr2_blend_benchmark",
+                        "run_id": run_id,
+                        "stage": "blend",
+                        "alpha_percent": alpha_percent,
+                        "source_image": str(source_path),
+                        "output_path": str(blend_saved),
+                        "profile": profile_settings.runtime_profile.name,
+                        "duration_ms": blend_duration_ms,
+                        "blend_top": "x2plus_baseline",
+                        "blend_base": "seedvr2",
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                blend_duration_ms = int((time.perf_counter() - blend_started) * 1000)
+                blend_row["status"] = "error"
+                blend_row["duration_ms"] = blend_duration_ms
+                blend_row["error"] = str(exc)
+            finally:
+                _record_row(blend_row)
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            if aborted:
+                break
+
+    fieldnames = [
+        "run_id",
+        "source_image",
+        "profile",
+        "stage",
+        "alpha_percent",
+        "status",
+        "duration_ms",
+        "infer_ms",
+        "output_path",
+        "error",
+    ]
+    with report_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in records:
+            writer.writerow(row)
+
+    with report_jsonl.open("w", encoding="utf-8") as handle:
+        for row in records:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+    typer.echo("")
+    typer.echo("SeedVR2 blend benchmark results:")
+    typer.echo("stage    alpha  status    duration_ms  source -> output")
+    typer.echo("-------  -----  --------  -----------  ----------------")
+    for row in records:
+        alpha_label = "-" if row.get("alpha_percent") is None else str(row.get("alpha_percent"))
+        typer.echo(
+            f"{str(row['stage']):7}  "
+            f"{alpha_label:5}  "
+            f"{str(row['status']):8}  "
+            f"{str(row['duration_ms']):11}  "
+            f"{Path(str(row['source_image'])).name} -> {str(row['output_path'])}"
+        )
+    typer.echo(f"CSV report: {report_csv}")
+    typer.echo(f"JSONL report: {report_jsonl}")
+
+    if aborted or any(str(row.get("status")) != "success" for row in records):
+        raise typer.Exit(code=1)
 
 
 @cli.command("soak")

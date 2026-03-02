@@ -21,6 +21,8 @@ justrayzist.egg-info/
 models/**/*.safetensors
 models/**/*.gguf
 models/**/*.pth
+models/seedvr2/runtime/
+models/seedvr2/.validation_cache.json
 
 # Local-only roadmap / dev artifacts
 JustRayzist.md

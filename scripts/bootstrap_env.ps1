@@ -11,6 +11,7 @@ $venvPython = Join-Path $venvRoot "Scripts\\python.exe"
 $tmpRoot = Join-Path $projectRoot ".build\\tmp"
 $torchRequirements = Join-Path $projectRoot ("requirements\\torch-" + $Lane + ".txt")
 $runtimeRequirements = Join-Path $projectRoot "requirements\\runtime-lock.txt"
+$seedVr2Requirements = Join-Path $projectRoot "requirements\\seedvr2-lock.txt"
 $devRequirements = Join-Path $projectRoot "requirements\\dev-lock.txt"
 
 New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
@@ -110,6 +111,9 @@ if (-not (Test-Path $torchRequirements)) {
 if (-not (Test-Path $runtimeRequirements)) {
   throw "Missing runtime lock file: $runtimeRequirements"
 }
+if (-not (Test-Path $seedVr2Requirements)) {
+  throw "Missing SeedVR2 lock file: $seedVr2Requirements"
+}
 if (-not (Test-Path $devRequirements)) {
   throw "Missing dev lock file: $devRequirements"
 }
@@ -195,6 +199,7 @@ if ($filteredRuntime.Count -gt 0) {
   Set-Content -Path $runtimeNoDiffusers -Value $filteredRuntime -Encoding ascii
   Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $runtimeNoDiffusers)
 }
+Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $seedVr2Requirements)
 Install-DiffusersWithFallback -PythonPath $venvPython
 Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "-r", $devRequirements)
 Invoke-Checked -Executable $venvPython -Arguments @("-m", "pip", "install", "--no-build-isolation", "--no-deps", "-e", ".") -WorkingDirectory $projectRoot

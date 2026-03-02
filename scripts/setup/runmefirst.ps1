@@ -7,10 +7,14 @@ $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\\..")).Path
 $bootstrapScript = Join-Path $projectRoot "scripts\\bootstrap_env.ps1"
 $fetchScript = Join-Path $projectRoot "scripts\\fetch_model_assets.ps1"
+$fetchSeedVr2RuntimeScript = Join-Path $projectRoot "scripts\\fetch_seedvr2_runtime.ps1"
 $manifestPath = Join-Path $PSScriptRoot "python_manifest.json"
 $startWebPath = Join-Path $projectRoot "StartWeb.bat"
 $venvPython = Join-Path $projectRoot ".venv\\Scripts\\python.exe"
 $releaseLanePath = Join-Path $projectRoot "release_lane.txt"
+$seedVr2RuntimeScript = Join-Path $projectRoot "models\\seedvr2\\runtime\\ComfyUI-SeedVR2_VideoUpscaler\\inference_cli.py"
+$seedVr2DitPath = Join-Path $projectRoot "models\\seedvr2\\seedvr2_ema_3b_fp8_e4m3fn.safetensors"
+$seedVr2VaePath = Join-Path $projectRoot "models\\seedvr2\\ema_vae_fp16.safetensors"
 
 $script:StepCurrent = 0
 $script:StepTotal = 0
@@ -136,6 +140,11 @@ function Test-Python311 {
 
 function Resolve-Python311 {
   $candidateList = New-Object System.Collections.Generic.List[string]
+
+  $localVenvPython = Join-Path $projectRoot ".venv\Scripts\python.exe"
+  if (Test-Path $localVenvPython) {
+    $candidateList.Add($localVenvPython)
+  }
 
   if ($env:JUSTRAYZIST_PYTHON) {
     $candidateList.Add($env:JUSTRAYZIST_PYTHON)
@@ -306,6 +315,20 @@ function Test-EnvironmentHealth {
   if (-not $importProbe.Success) {
     $issues.Add("Core runtime imports failed in .venv (including required ZImage diffusers symbols).")
   }
+  $seedImportProbe = Try-RunPython -PythonExe $venvPython -Code "import cv2,omegaconf,peft,einops,rotary_embedding_torch"
+  if (-not $seedImportProbe.Success) {
+    $issues.Add("SeedVR2 runtime dependencies are missing in .venv.")
+  }
+
+  if (-not (Test-Path $seedVr2RuntimeScript)) {
+    $issues.Add("SeedVR2 runtime script not found.")
+  }
+  if (-not (Test-Path $seedVr2DitPath)) {
+    $issues.Add("SeedVR2 DiT checkpoint not found.")
+  }
+  if (-not (Test-Path $seedVr2VaePath)) {
+    $issues.Add("SeedVR2 VAE checkpoint not found.")
+  }
 
   $previousPreference = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
@@ -371,6 +394,9 @@ try {
   if (-not (Test-Path $fetchScript)) {
     throw "Missing model fetch script: $fetchScript"
   }
+  if (-not (Test-Path $fetchSeedVr2RuntimeScript)) {
+    throw "Missing SeedVR2 runtime fetch script: $fetchSeedVr2RuntimeScript"
+  }
 
   $laneSelection = Get-LaneSelection
   Write-Host $laneSelection.Message -ForegroundColor Cyan
@@ -406,7 +432,7 @@ try {
     Write-Host ""
   }
 
-  Set-StepTotal -Total 7
+  Set-StepTotal -Total 8
   $script:ResolvedPythonExe = Resolve-Python311
 
   Invoke-Step -Title "Record target runtime lane" -Action {
@@ -441,6 +467,14 @@ try {
       "-NoProfile",
       "-ExecutionPolicy", "Bypass",
       "-File", $fetchScript
+    )
+  }
+
+  Invoke-Step -Title "Fetch SeedVR2 runtime scripts" -Action {
+    Invoke-External -Executable "powershell" -Arguments @(
+      "-NoProfile",
+      "-ExecutionPolicy", "Bypass",
+      "-File", $fetchSeedVr2RuntimeScript
     )
   }
 
