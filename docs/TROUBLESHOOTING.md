@@ -127,7 +127,7 @@ Check:
 
 Action:
 - Keep default app pipeline first:
-  - `x2plus + SeedVR2 + 50% blend`
+  - custom mixed-model fast upscale
 - Verify all required assets exist:
   - `models\upscaler\2x_RealESRGAN_x2plus.pth`
   - `models\seedvr2\seedvr2_ema_3b_fp8_e4m3fn.safetensors`

@@ -217,7 +217,7 @@ Web API:
 - `GET /config`
 - `POST /generate` with JSON `{ "prompt": "...", "width": 1024, "height": 1024, "enhance_prompt": false }`
 - `POST /upscale` with JSON `{ "filename": "justrayzist_....png", "seed": 1234, "scheduler_mode": "euler", "enhance_prompt": false }`
-  - Uses the default production upscale chain in-app: `x2plus + SeedVR2 + 50% blend` (`upscale_engine=x2_seedvr2_blend`).
+  - Uses the app default custom mixed-model fast upscale path.
 - `GET /images?prompt=<keyword>&limit=120&offset=0`
 - `GET /images/{filename}`
 - `GET /model-packs`
@@ -293,12 +293,12 @@ Outputs:
 ## Create Release Artifact (Windows)
 Default bootstrap release (small artifact):
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version v0.10.0-beta.02 -Clean
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version vX.Y.Z -Clean
 ```
 
 Optional bundled release (large artifact, offline-style):
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version v0.10.0-beta.02 -Clean
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version vX.Y.Z -Clean
 ```
 
 Useful flags:

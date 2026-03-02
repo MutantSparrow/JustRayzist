@@ -4,9 +4,10 @@ JustRayzist is a Windows-first, offline-first local image generation app built a
 
 - FastAPI web API + browser UI
 - Typer CLI
+- Z-Image Turbo, and more specifically my very own finetune: [Rayzist](https://huggingface.co/MutantSparrow/Ray)
 - local model packs (`.safetensors` / `.gguf`)
 - profile-based runtime behavior for different VRAM classes
-- optional x2 upscaling + img2img refinement flow
+- custom mixed-model fast upscale flow
 - RunMeFirst bootstrap installation and auto-repair
 
 The app is designed to run without runtime internet dependencies once required assets are present locally.
@@ -18,28 +19,9 @@ The app is designed to run without runtime internet dependencies once required a
 - Model pack validation and local path enforcement.
 - PNG metadata writing and SQLite gallery indexing.
 - Web gallery with filtering, fullscreen, compare-hold for upscaled images, and queued jobs.
-- CLI workflows for generation, upscaling/refinement, soak runs, and soak reporting.
+- CLI workflows for generation, mixed-model upscaling, soak runs, and soak reporting.
 - Lane-aware bootstrap packaging (`cu126`, `cu128`) with GPU driver preflight.
 - Release artifacts do not bundle model weights.
-
-## Repository Layout
-
-```text
-.
-|- app/                       # API, CLI, core runtime, storage, UI assets
-|- docs/                      # Usage, packaging, troubleshooting docs
-|- launch/                    # PowerShell launcher helpers
-|- models/                    # Model pack configs and local checkpoint cache
-|- requirements/              # Lane-pinned torch + lock files
-|- scripts/                   # Setup, bootstrap, fetch, release tooling
-|- RunMeFirst.bat             # Setup + repair entrypoint
-|- StartWeb.bat               # Interactive launcher
-|- pyproject.toml
-|- dist/                      # Build/release output
-\- README.md                  # Canonical repo documentation
-```
-
-`dist/` is local build output and is intentionally not source-controlled.
 
 ## Tech Stack
 
@@ -50,7 +32,6 @@ The app is designed to run without runtime internet dependencies once required a
 - Typer
 - Pillow
 - SQLite
-- PowerShell + batch tooling for setup/repair/release
 
 ## Requirements
 
@@ -82,7 +63,7 @@ From repository root:
 powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
 ```
 
-`RunMeFirst.bat` prefetches defaults automatically. `StartWeb.bat` can still auto-fetch missing default assets for `Rayzist_bf16` (including the default upscaler checkpoint).
+`RunMeFirst.bat` prefetches defaults automatically. `StartWeb.bat` can still auto-fetch missing default assets required by the default pack and custom mixed-model fast upscale path.
 Downloads are performed through Hugging Face CLI (`hf download`) with XET acceleration enabled (`HF_XET_HIGH_PERFORMANCE=1`), and each file is SHA256-verified before acceptance.
 
 ## Quick Start
@@ -197,48 +178,17 @@ Content-Type: application/json
 }
 ```
 
+`POST /upscale` uses the app's default custom mixed-model fast upscale path.
+
 ## Release Packaging
 
-Create default bootstrap release artifact:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version v0.10.0-beta.02 -Clean
-```
-
-Optional large offline-style bundled release (web exe):
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version v0.10.0-beta.02 -Clean
-```
-
-Repository readiness check:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release\verify_repo_readiness.ps1
-```
-
-Cleanup legacy artifacts:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release\clean_legacy_artifacts.ps1
-```
+Release packaging docs were moved to:
+- `scripts/release/README.md`
 
 ## CUDA Lane Baseline
 
 - `cu126`: NVIDIA driver `>= 561.17` (20xx/30xx/40xx fallback lane)
 - `cu128`: NVIDIA driver `>= 572.61` (preferred lane; required for 50xx)
-
-## Development Workflow
-
-From repository root:
-
-```powershell
-python -m app.cli.main doctor
-python -m app.cli.main validate-models
-python -m ruff check app
-```
-
-No tracked pytest suite is currently shipped in this repository; rely on doctor/validate-models/lint/smoke checks for clone sanity.
 
 ## Troubleshooting
 
@@ -255,13 +205,20 @@ See:
 - No authentication on local destructive endpoints (`/server/kill`, delete routes).
 - Runtime quality/performance depend on local model pack quality and GPU/driver compatibility.
 
-## Contributing
-
-1. Keep changes behavior-safe and focused.
-2. Validate with lint/tests/smoke checks.
-3. Keep docs aligned with real command behavior.
-4. Prefer small, reviewable commits.
-
 ## License
 
-No license file is currently included in this repository.
+This project is licensed under the Apache License 2.0.
+See the [LICENSE](LICENSE) file for full terms.
+
+## Acknowledgements
+
+Default model assets are provided by the following model owners and repositories:
+
+- MutantSparrow (Ray): https://huggingface.co/MutantSparrow/Ray
+- Tongyi-MAI (Z-Image-Turbo): https://huggingface.co/Tongyi-MAI/Z-Image-Turbo
+- Comfy-Org (z_image_turbo): https://huggingface.co/Comfy-Org/z_image_turbo
+- ByteDance-Seed (SeedVR2-3B original): https://huggingface.co/ByteDance-Seed/SeedVR2-3B
+- themindstudio (SeedVR2-3B FP8 quantized provider): https://huggingface.co/themindstudio/SeedVR2-3B-FP8-e4m3fn
+- imagepipeline (superresolution/x2 upscaler): https://huggingface.co/imagepipeline/superresolution
+
+Model weights remain under their respective upstream licenses and terms.

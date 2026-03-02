@@ -25,7 +25,7 @@ Dependency lock baseline:
 ## Build Commands
 Create bootstrap release artifact (recommended):
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version v0.10.0-beta.02 -Clean
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version vX.Y.Z -Clean
 ```
 
 Optional: build lane binaries for bundled release:
@@ -35,7 +35,7 @@ powershell -ExecutionPolicy Bypass -File scripts\pyinstaller\build_onedir.ps1 -L
 
 Create bundled release artifact (large):
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version v0.10.0-beta.02 -PythonExe .\.venv\Scripts\python.exe -Clean
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version vX.Y.Z -PythonExe .\.venv\Scripts\python.exe -Clean
 ```
 
 If the host Python cannot create virtual environments, add `-UseActivePython`.
