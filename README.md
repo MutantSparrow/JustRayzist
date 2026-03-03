@@ -218,7 +218,6 @@ Default model assets are provided by the following model owners and repositories
 
 - MutantSparrow (Ray): https://huggingface.co/MutantSparrow/Ray
 - Tongyi-MAI (Z-Image-Turbo): https://huggingface.co/Tongyi-MAI/Z-Image-Turbo
-- Comfy-Org (z_image_turbo): https://huggingface.co/Comfy-Org/z_image_turbo
 - ByteDance-Seed (SeedVR2-3B original): https://huggingface.co/ByteDance-Seed/SeedVR2-3B
 - themindstudio (SeedVR2-3B FP8 quantized provider): https://huggingface.co/themindstudio/SeedVR2-3B-FP8-e4m3fn
 - imagepipeline (superresolution/x2 upscaler): https://huggingface.co/imagepipeline/superresolution
