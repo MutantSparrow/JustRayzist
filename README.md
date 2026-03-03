@@ -82,7 +82,6 @@ Downloads are performed through Hugging Face CLI (`hf download`) with XET accele
 From repository root:
 
 ```powershell
-.\RunMeFirst.bat
 .\StartWeb.bat
 ```
 <br>
