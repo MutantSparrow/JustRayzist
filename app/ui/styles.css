@@ -441,6 +441,47 @@ select {
   display: block;
 }
 
+.tile-badges {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.tile-badge {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease;
+}
+
+.tile:hover .tile-badge,
+.tile:focus-within .tile-badge {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.tile-badge svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+
+.tile-badge-upscaled {
+  color: var(--lime);
+}
+
 .tile.generating {
   border-color: #3a3a3a;
 }

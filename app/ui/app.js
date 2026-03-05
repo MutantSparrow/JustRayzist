@@ -695,6 +695,7 @@ function dropMissingGalleryItem(filename) {
 function renderImageTile(item, index) {
   const tile = document.createElement("article");
   tile.className = "tile";
+  const upscaled = isUpscaledItem(item);
 
   const image = document.createElement("img");
   image.src = buildImageUrl(item.filename);
@@ -707,6 +708,18 @@ function renderImageTile(item, index) {
 
   const overlay = document.createElement("div");
   overlay.className = "tile-overlay";
+  const badges = document.createElement("div");
+  badges.className = "tile-badges";
+
+  if (upscaled) {
+    const upscaleBadge = document.createElement("span");
+    upscaleBadge.className = "tile-badge tile-badge-upscaled";
+    upscaleBadge.title = "Upscaled";
+    upscaleBadge.setAttribute("aria-hidden", "true");
+    upscaleBadge.innerHTML =
+      '<svg viewBox="0 0 24 24" focusable="false"><path d="M4 9V4h5v2H6v3H4zm10-5h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 4v-4h2v6h-6v-2h4z"/></svg>';
+    badges.append(upscaleBadge);
+  }
 
   const meta = document.createElement("div");
   meta.className = "tile-meta";
@@ -754,7 +767,7 @@ function renderImageTile(item, index) {
   }
   actions.append(primaryActions, del);
   overlay.append(meta, actions);
-  tile.append(image, overlay);
+  tile.append(image, badges, overlay);
   tile.addEventListener("click", () => showViewer(item, index));
   return tile;
 }
