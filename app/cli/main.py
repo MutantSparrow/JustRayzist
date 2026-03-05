@@ -131,14 +131,28 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(37717, "--port"),
     profile: Optional[str] = typer.Option(None, "--profile"),
+    verbose_logs: bool = typer.Option(
+        False,
+        "--verbose-logs/--quiet-logs",
+        help="Enable verbose HTTP access/dependency logs. Default is quiet logs.",
+    ),
 ) -> None:
     import uvicorn
 
     if profile:
         os.environ["JUSTRAYZIST_PROFILE"] = profile
+    configure_logging(verbose_logs=verbose_logs)
     load_settings(profile_name=profile)
     logging.getLogger(__name__).info("Starting web server on http://%s:%d", host, port)
-    uvicorn.run("app.api.main:app", host=host, port=port, reload=False)
+    uvicorn_log_level = str(os.environ.get("JUSTRAYZIST_LOG_LEVEL", "INFO")).strip().lower()
+    uvicorn.run(
+        "app.api.main:app",
+        host=host,
+        port=port,
+        reload=False,
+        log_level=uvicorn_log_level,
+        access_log=verbose_logs,
+    )
 
 
 @cli.command("generate")
