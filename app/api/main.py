@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import BackgroundTasks, Body, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
@@ -70,6 +70,27 @@ class DeleteConfirmRequest(BaseModel):
     confirm: str = Field(min_length=1, max_length=32)
 
 
+class ImportGalleryRequest(BaseModel):
+    source_id: str = Field(min_length=1, max_length=255)
+    dry_run: bool = Field(default=False)
+
+
+def _resolve_owner_id(client_header: str | None, client_query: str | None = None) -> str:
+    token = str(client_query or client_header or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Missing client id. Send header 'X-JustRayzist-Client' "
+                "or query parameter 'client_id'."
+            ),
+        )
+    try:
+        return InferenceService.sanitize_owner_id(token)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid client id: {exc}") from exc
+
+
 @app.get("/health")
 def health() -> dict:
     return {
@@ -93,9 +114,14 @@ def model_packs() -> dict:
 
 
 @app.post("/generate")
-def generate(payload: GenerateRequest) -> dict:
+def generate(
+    payload: GenerateRequest,
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> dict:
     try:
+        owner_id = _resolve_owner_id(x_justrayzist_client)
         result = inference.generate(
+            owner_id=owner_id,
             prompt=payload.prompt,
             width=payload.width,
             height=payload.height,
@@ -114,9 +140,14 @@ def generate(payload: GenerateRequest) -> dict:
 
 
 @app.post("/upscale")
-def upscale(payload: UpscaleRequest) -> dict:
+def upscale(
+    payload: UpscaleRequest,
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> dict:
     try:
+        owner_id = _resolve_owner_id(x_justrayzist_client)
         result = inference.upscale(
+            owner_id=owner_id,
             filename=payload.filename,
             pack_name=payload.pack,
             seed=payload.seed,
@@ -140,8 +171,11 @@ def images(
     limit: int = Query(default=120, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     newest_first: bool = Query(default=True),
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
 ) -> dict:
+    owner_id = _resolve_owner_id(x_justrayzist_client)
     rows = inference.list_images(
+        owner_id=owner_id,
         prompt_query=prompt,
         limit=limit,
         offset=offset,
@@ -151,13 +185,18 @@ def images(
 
 
 @app.get("/images/{filename}")
-def image_file(filename: str) -> FileResponse:
+def image_file(
+    filename: str,
+    client_id: str | None = Query(default=None),
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> FileResponse:
     try:
+        owner_id = _resolve_owner_id(x_justrayzist_client, client_query=client_id)
         safe_filename = InferenceService.sanitize_filename(filename)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    row = inference.get_image(safe_filename)
+    row = inference.get_image(safe_filename, owner_id=owner_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Image not found.")
 
@@ -171,10 +210,12 @@ def image_file(filename: str) -> FileResponse:
 def gallery_delete(
     payload: DeleteConfirmRequest | None = Body(default=None),
     confirm: str | None = Query(default=None),
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
 ) -> dict:
     confirmation = payload.confirm if payload is not None else (confirm or "")
+    owner_id = _resolve_owner_id(x_justrayzist_client)
     try:
-        result = inference.delete_gallery(confirmation)
+        result = inference.delete_gallery(owner_id=owner_id, confirm_text=confirmation)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
@@ -190,11 +231,13 @@ def image_delete(
     filename: str,
     payload: DeleteConfirmRequest | None = Body(default=None),
     confirm: str | None = Query(default=None),
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
 ) -> dict:
     confirmation = payload.confirm if payload is not None else (confirm or "")
+    owner_id = _resolve_owner_id(x_justrayzist_client)
     try:
         safe_filename = InferenceService.sanitize_filename(filename)
-        result = inference.delete_image(safe_filename, confirmation)
+        result = inference.delete_image(owner_id=owner_id, filename=safe_filename, confirm_text=confirmation)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
@@ -204,6 +247,36 @@ def image_delete(
         "remaining_rows": result.get("remaining_rows", 0),
         "filename": safe_filename,
     }
+
+
+@app.get("/gallery/import-sources")
+def gallery_import_sources(
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> dict:
+    owner_id = _resolve_owner_id(x_justrayzist_client)
+    try:
+        items = inference.list_import_sources(owner_id=owner_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"items": items, "count": len(items)}
+
+
+@app.post("/gallery/import")
+def gallery_import(
+    payload: ImportGalleryRequest,
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> dict:
+    owner_id = _resolve_owner_id(x_justrayzist_client)
+    try:
+        return inference.import_gallery(
+            owner_id=owner_id,
+            source_id=payload.source_id,
+            dry_run=payload.dry_run,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Import failed: {exc}") from exc
 
 
 @app.post("/server/kill")

@@ -2,11 +2,14 @@ const endpointListEl = document.getElementById("endpoint-list");
 const baseUrlEl = document.getElementById("base-url");
 const methodEl = document.getElementById("tester-method");
 const pathEl = document.getElementById("tester-path");
+const clientIdEl = document.getElementById("tester-client-id");
 const bodyEl = document.getElementById("tester-body");
 const sendEl = document.getElementById("tester-send");
 const clearEl = document.getElementById("tester-clear");
 const statusEl = document.getElementById("tester-status");
 const responseEl = document.getElementById("tester-response");
+
+const CLIENT_ID_STORAGE_KEY = "justrayzist.client_id";
 
 const ENDPOINTS = [
   {
@@ -17,10 +20,11 @@ const ENDPOINTS = [
     response: {
       status: "ok",
       app: "JustRayzist",
-      version: "0.1.0",
+      version: "1.0.0",
       profile: "balanced",
       offline_mode: true,
     },
+    requiresClient: false,
   },
   {
     method: "GET",
@@ -28,6 +32,7 @@ const ENDPOINTS = [
     description: "Resolved runtime configuration and paths.",
     request: null,
     response: { app_name: "JustRayzist", runtime_profile: { name: "balanced" } },
+    requiresClient: false,
   },
   {
     method: "GET",
@@ -38,11 +43,12 @@ const ENDPOINTS = [
       count: 1,
       items: [{ name: "Rayzist_bf16", architecture: "z_image_turbo" }],
     },
+    requiresClient: false,
   },
   {
     method: "POST",
     path: "/generate",
-    description: "Generate image from prompt and dimensions.",
+    description: "Generate image from prompt and dimensions (client-scoped gallery).",
     request: {
       prompt: "A cinematic skyline at sunrise",
       width: 1024,
@@ -59,11 +65,12 @@ const ENDPOINTS = [
       duration_ms: 12345,
       url: "/images/justrayzist_YYYYMMDD_hhmmss_000.png",
     },
+    requiresClient: true,
   },
   {
     method: "POST",
     path: "/upscale",
-    description: "Upscale an existing gallery image with x2 + SeedVR2 + 50% blend.",
+    description: "Upscale one image from the current client gallery.",
     request: {
       filename: "justrayzist_YYYYMMDD_hhmmss_000.png",
       pack: "Rayzist_bf16",
@@ -79,11 +86,12 @@ const ENDPOINTS = [
       duration_ms: 23456,
       url: "/images/justrayzist_YYYYMMDD_hhmmss_001.png",
     },
+    requiresClient: true,
   },
   {
     method: "GET",
     path: "/images?prompt=skyline&limit=50&offset=0&newest_first=true",
-    description: "List indexed images with optional filtering/paging.",
+    description: "List images for the current client scope.",
     request: null,
     response: {
       count: 1,
@@ -91,27 +99,57 @@ const ENDPOINTS = [
       offset: 0,
       items: [{ filename: "justrayzist_YYYYMMDD_hhmmss_000.png" }],
     },
+    requiresClient: true,
   },
   {
     method: "GET",
-    path: "/images/{filename}",
-    description: "Download image file by filename.",
+    path: "/images/{filename}?client_id=<client-id>",
+    description: "Download image by filename. Use client query for direct links/img tags.",
     request: null,
     response: "PNG binary response",
+    requiresClient: true,
   },
   {
     method: "DELETE",
     path: "/images/{filename}?confirm=DELETE",
-    description: "Delete one image and its index entry.",
+    description: "Delete one image and its index entry in current client scope.",
     request: { confirm: "DELETE" },
     response: { status: "ok", deleted_files: 1, deleted_rows: 1, filename: "..." },
+    requiresClient: true,
   },
   {
     method: "DELETE",
     path: "/gallery?confirm=DELETE",
-    description: "Delete all gallery images and index entries.",
+    description: "Delete all gallery images for current client scope.",
     request: { confirm: "DELETE" },
     response: { status: "ok", deleted_files: 42, deleted_rows: 42, remaining_rows: 0 },
+    requiresClient: true,
+  },
+  {
+    method: "GET",
+    path: "/gallery/import-sources",
+    description: "List import candidates (legacy root and other userspaces).",
+    request: null,
+    response: {
+      count: 2,
+      items: [{ source_id: "__legacy_root__", image_count: 10 }],
+    },
+    requiresClient: true,
+  },
+  {
+    method: "POST",
+    path: "/gallery/import",
+    description: "Copy PNGs from a source into current client userspace.",
+    request: { source_id: "__legacy_root__", dry_run: false },
+    response: {
+      status: "ok",
+      source_id: "__legacy_root__",
+      target_owner_id: "example_client",
+      imported: 12,
+      skipped: 0,
+      failed: 0,
+    },
+    requiresClient: true,
   },
   {
     method: "POST",
@@ -119,6 +157,7 @@ const ENDPOINTS = [
     description: "Request local server shutdown.",
     request: {},
     response: { status: "ok", message: "Server shutdown initiated." },
+    requiresClient: false,
   },
 ];
 
@@ -137,6 +176,31 @@ function setStatus(text, ok = true) {
   statusEl.className = `status ${ok ? "ok" : "err"}`;
 }
 
+function createClientId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `client_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function getOrCreateClientId() {
+  let clientId = "";
+  try {
+    clientId = String(window.localStorage.getItem(CLIENT_ID_STORAGE_KEY) || "").trim();
+  } catch (_) {
+    clientId = "";
+  }
+  if (clientId) {
+    return clientId;
+  }
+  clientId = createClientId();
+  try {
+    window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId);
+  } catch (_) {
+  }
+  return clientId;
+}
+
 function renderEndpoints() {
   endpointListEl.innerHTML = "";
   ENDPOINTS.forEach((endpoint) => {
@@ -149,7 +213,8 @@ function renderEndpoints() {
 
     const description = document.createElement("div");
     description.className = "description";
-    description.textContent = endpoint.description;
+    const scopeSuffix = endpoint.requiresClient ? " Requires X-JustRayzist-Client." : "";
+    description.textContent = `${endpoint.description}${scopeSuffix}`;
 
     const requestPre = document.createElement("pre");
     requestPre.textContent = endpoint.request == null ? "(no body)" : asJson(endpoint.request);
@@ -193,7 +258,15 @@ async function sendRequest() {
     return;
   }
 
-  const options = { method, headers: {} };
+  const clientId = String(clientIdEl.value || "").trim();
+  const options = {
+    method,
+    headers: {},
+  };
+  if (clientId) {
+    options.headers["X-JustRayzist-Client"] = clientId;
+  }
+
   if (method === "POST" || method === "DELETE") {
     const raw = String(bodyEl.value || "").trim();
     if (raw && raw !== "{}") {
@@ -235,6 +308,7 @@ function clearTester() {
 
 function bootstrap() {
   baseUrlEl.textContent = window.location.origin;
+  clientIdEl.value = getOrCreateClientId();
   renderEndpoints();
   clearTester();
 }
