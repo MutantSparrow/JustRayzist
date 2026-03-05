@@ -18,13 +18,16 @@ from app.core.model_registry import (
 )
 from app.core.worker import GenerationRequest, GenerationSession
 from app.core.upscale_blend import UPSCALE_ENGINE_NAME, upscale_with_x2_seed_blend
-from app.storage import append_generation_metric, save_png_with_metadata
+from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
 from app.storage.gallery_index import (
     delete_image,
     delete_gallery,
     get_image,
+    import_gallery_source,
     index_image,
+    list_import_sources,
     list_images,
+    normalize_owner_id,
     sync_outputs_to_gallery,
 )
 
@@ -52,6 +55,16 @@ class InferenceService:
         self._active_pack_name: str | None = None
         self._active_session: GenerationSession | None = None
 
+    @staticmethod
+    def sanitize_owner_id(owner_id: str) -> str:
+        return normalize_owner_id(owner_id)
+
+    def owner_output_dir(self, owner_id: str) -> Path:
+        safe_owner = self.sanitize_owner_id(owner_id)
+        output_dir = (self._settings.paths.outputs_dir / safe_owner).resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
     def list_model_packs(self) -> list[dict[str, str]]:
         packs: list[dict[str, str]] = []
         for pack_file in discover_model_packs(self._settings.paths.model_packs_dir):
@@ -73,6 +86,7 @@ class InferenceService:
 
     def list_images(
         self,
+        owner_id: str,
         prompt_query: str | None = None,
         limit: int = 100,
         offset: int = 0,
@@ -80,28 +94,50 @@ class InferenceService:
     ) -> list[dict[str, Any]]:
         return list_images(
             settings=self._settings,
+            owner_id=self.sanitize_owner_id(owner_id),
             prompt_query=prompt_query,
             limit=limit,
             offset=offset,
             newest_first=newest_first,
         )
 
-    def get_image(self, filename: str) -> dict[str, Any] | None:
-        return get_image(self._settings, filename)
+    def get_image(self, filename: str, owner_id: str) -> dict[str, Any] | None:
+        return get_image(self._settings, filename, owner_id=self.sanitize_owner_id(owner_id))
 
-    def delete_gallery(self, confirm_text: str) -> dict[str, int]:
+    def delete_gallery(self, owner_id: str, confirm_text: str) -> dict[str, int]:
         normalized = confirm_text.strip()
         if normalized.upper() != "DELETE":
             raise ValueError("Deletion rejected. Type DELETE exactly to confirm.")
         with self._lock:
-            return delete_gallery(self._settings)
+            return delete_gallery(self._settings, owner_id=self.sanitize_owner_id(owner_id))
 
-    def delete_image(self, filename: str, confirm_text: str) -> dict[str, int]:
+    def delete_image(self, owner_id: str, filename: str, confirm_text: str) -> dict[str, int]:
         normalized = confirm_text.strip()
         if normalized.upper() != "DELETE":
             raise ValueError("Deletion rejected. Type DELETE exactly to confirm.")
         with self._lock:
-            return delete_image(self._settings, filename)
+            return delete_image(
+                self._settings,
+                filename,
+                owner_id=self.sanitize_owner_id(owner_id),
+            )
+
+    def list_import_sources(self, owner_id: str) -> list[dict[str, Any]]:
+        return list_import_sources(self._settings, self.sanitize_owner_id(owner_id))
+
+    def import_gallery(
+        self,
+        owner_id: str,
+        source_id: str,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        with self._lock:
+            return import_gallery_source(
+                self._settings,
+                target_owner_id=self.sanitize_owner_id(owner_id),
+                source_id=source_id,
+                dry_run=dry_run,
+            )
 
     def _resolve_pack(self, pack_name: str | None) -> ModelPack:
         requested_pack_name = (pack_name or self._default_pack_name or "").strip()
@@ -140,6 +176,7 @@ class InferenceService:
 
     def generate(
         self,
+        owner_id: str,
         prompt: str,
         width: int,
         height: int,
@@ -149,9 +186,11 @@ class InferenceService:
         enhance_prompt: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
+            safe_owner_id = self.sanitize_owner_id(owner_id)
             model_pack = self._resolve_pack(pack_name)
             session = self._session_for_pack(model_pack)
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
+            output_path = build_output_path(self.owner_output_dir(safe_owner_id))
 
             result = session.generate(
                 GenerationRequest(
@@ -168,7 +207,9 @@ class InferenceService:
                 image=result.image,
                 prompt=result.prompt_effective,
                 settings=self._settings,
+                output_path=output_path,
                 extra_metadata={
+                    "owner_id": safe_owner_id,
                     "prompt_original": result.prompt_original,
                     "prompt_effective": result.prompt_effective,
                     "prompt_enhanced": result.prompt_enhanced,
@@ -197,11 +238,12 @@ class InferenceService:
                     "width": width,
                     "height": height,
                     "output_path": str(saved_path),
+                    "owner_id": safe_owner_id,
                     "model_pack": model_pack.name,
                     **result.telemetry_dict(),
                 },
             )
-            image_row = index_image(self._settings, saved_path)
+            image_row = index_image(self._settings, saved_path, owner_id=safe_owner_id)
             image_row["url"] = f"/images/{image_row['filename']}"
             image_row["pack"] = model_pack.name
             image_row["duration_ms"] = result.duration_ms
@@ -216,6 +258,7 @@ class InferenceService:
 
     def upscale(
         self,
+        owner_id: str,
         filename: str,
         pack_name: str | None = None,
         seed: int | None = None,
@@ -223,8 +266,9 @@ class InferenceService:
         enhance_prompt: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
+            safe_owner_id = self.sanitize_owner_id(owner_id)
             safe_filename = self.sanitize_filename(filename)
-            source_row = get_image(self._settings, safe_filename)
+            source_row = get_image(self._settings, safe_filename, owner_id=safe_owner_id)
             if source_row is None:
                 raise ValueError("Image not found.")
 
@@ -252,11 +296,14 @@ class InferenceService:
                 seed=effective_seed,
             )
             final_width, final_height = result.output_width, result.output_height
+            output_path = build_output_path(self.owner_output_dir(safe_owner_id))
             saved_path = save_png_with_metadata(
                 image=result.image,
                 prompt=source_prompt,
                 settings=self._settings,
+                output_path=output_path,
                 extra_metadata={
+                    "owner_id": safe_owner_id,
                     "mode": "api_upscale",
                     "prompt_original": source_prompt,
                     "prompt_effective": source_prompt,
@@ -295,6 +342,7 @@ class InferenceService:
                     "width": final_width,
                     "height": final_height,
                     "output_path": str(saved_path),
+                    "owner_id": safe_owner_id,
                     "model_pack": model_pack_name,
                     "backend": UPSCALE_ENGINE_NAME,
                     "seed": effective_seed,
@@ -303,7 +351,7 @@ class InferenceService:
                     **result.telemetry_dict(),
                 },
             )
-            image_row = index_image(self._settings, saved_path)
+            image_row = index_image(self._settings, saved_path, owner_id=safe_owner_id)
             image_row["url"] = f"/images/{image_row['filename']}"
             image_row["pack"] = model_pack_name
             image_row["duration_ms"] = result.duration_ms

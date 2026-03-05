@@ -79,7 +79,35 @@ if (missingUi.length) {
   throw new Error(`UI initialization failed. Missing element(s): ${missingUi.join(", ")}`);
 }
 
+const CLIENT_ID_STORAGE_KEY = "justrayzist.client_id";
+
+function createClientId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `client_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function getOrCreateClientId() {
+  let clientId = "";
+  try {
+    clientId = String(window.localStorage.getItem(CLIENT_ID_STORAGE_KEY) || "").trim();
+  } catch (_) {
+    clientId = "";
+  }
+  if (clientId) {
+    return clientId;
+  }
+  clientId = createClientId();
+  try {
+    window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId);
+  } catch (_) {
+  }
+  return clientId;
+}
+
 const state = {
+  clientId: getOrCreateClientId(),
   orientation: "portrait",
   freezeSeed: false,
   dpmSampler: false,
@@ -189,6 +217,20 @@ function formatApiError(payload, fallback = "Request failed.") {
   return fallback;
 }
 
+function buildClientHeaders(existing) {
+  const headers = new Headers(existing || {});
+  headers.set("X-JustRayzist-Client", state.clientId);
+  return headers;
+}
+
+async function apiFetch(path, options = {}) {
+  const requestOptions = {
+    ...options,
+    headers: buildClientHeaders(options.headers),
+  };
+  return fetch(path, requestOptions);
+}
+
 function setSettingsVisible(visible) {
   settingsPanelEl.classList.toggle("open", visible);
   settingsPanelEl.setAttribute("aria-hidden", String(!visible));
@@ -257,7 +299,16 @@ function escapeHtml(value) {
 }
 
 function buildImageUrl(filename) {
-  return `/images/${encodeURIComponent(filename)}?t=${Date.now()}`;
+  const query = new URLSearchParams();
+  query.set("client_id", state.clientId);
+  query.set("t", String(Date.now()));
+  return `/images/${encodeURIComponent(filename)}?${query.toString()}`;
+}
+
+function buildDownloadUrl(filename) {
+  const query = new URLSearchParams();
+  query.set("client_id", state.clientId);
+  return `/images/${encodeURIComponent(filename)}?${query.toString()}`;
 }
 
 function resolveSourceFilename(item) {
@@ -443,7 +494,7 @@ function applyViewerItemMeta(item) {
       `<span>${escapeHtml(pack)}</span>`,
     ].join(" ");
   }
-  viewerDownloadEl.href = `/images/${encodeURIComponent(item.filename)}`;
+  viewerDownloadEl.href = buildDownloadUrl(item.filename);
   viewerDownloadEl.setAttribute("download", item.filename);
 }
 
@@ -644,9 +695,10 @@ function dropMissingGalleryItem(filename) {
 function renderImageTile(item, index) {
   const tile = document.createElement("article");
   tile.className = "tile";
+  const upscaled = isUpscaledItem(item);
 
   const image = document.createElement("img");
-  image.src = `/images/${encodeURIComponent(item.filename)}?t=${Date.now()}`;
+  image.src = buildImageUrl(item.filename);
   image.alt = item.prompt || "Generated image";
   image.loading = "lazy";
   image.addEventListener("error", () => {
@@ -656,6 +708,18 @@ function renderImageTile(item, index) {
 
   const overlay = document.createElement("div");
   overlay.className = "tile-overlay";
+  const badges = document.createElement("div");
+  badges.className = "tile-badges";
+
+  if (upscaled) {
+    const upscaleBadge = document.createElement("span");
+    upscaleBadge.className = "tile-badge tile-badge-upscaled";
+    upscaleBadge.title = "Upscaled";
+    upscaleBadge.setAttribute("aria-hidden", "true");
+    upscaleBadge.innerHTML =
+      '<svg viewBox="0 0 24 24" focusable="false"><path d="M4 9V4h5v2H6v3H4zm10-5h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 4v-4h2v6h-6v-2h4z"/></svg>';
+    badges.append(upscaleBadge);
+  }
 
   const meta = document.createElement("div");
   meta.className = "tile-meta";
@@ -670,7 +734,7 @@ function renderImageTile(item, index) {
 
   const download = document.createElement("a");
   download.className = "tile-download";
-  download.href = `/images/${encodeURIComponent(item.filename)}`;
+  download.href = buildDownloadUrl(item.filename);
   download.setAttribute("download", item.filename);
   download.textContent = "Download";
   download.addEventListener("click", (event) => event.stopPropagation());
@@ -703,7 +767,7 @@ function renderImageTile(item, index) {
   }
   actions.append(primaryActions, del);
   overlay.append(meta, actions);
-  tile.append(image, overlay);
+  tile.append(image, badges, overlay);
   tile.addEventListener("click", () => showViewer(item, index));
   return tile;
 }
@@ -799,7 +863,7 @@ async function loadImages() {
     query.set("prompt", filterValue);
   }
 
-  const response = await fetch(`/images?${query.toString()}`, { cache: "no-store" });
+  const response = await apiFetch(`/images?${query.toString()}`, { cache: "no-store" });
   if (!response.ok) {
     let payload = null;
     try {
@@ -831,7 +895,7 @@ async function deleteImage(filename) {
   }
 
   let payload = null;
-  const response = await fetch(`/images/${encodeURIComponent(filename)}?confirm=DELETE`, {
+  const response = await apiFetch(`/images/${encodeURIComponent(filename)}?confirm=DELETE`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ confirm: "DELETE" }),
@@ -994,7 +1058,7 @@ async function processGenerationQueue() {
               scheduler_mode: job.scheduler_mode,
               enhance_prompt: job.enhance_prompt,
             };
-        const response = await fetch(endpoint, {
+        const response = await apiFetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payloadBody),
@@ -1035,7 +1099,7 @@ async function onDeleteGallery() {
 
   try {
     const encoded = encodeURIComponent(confirmation);
-    const response = await fetch(`/gallery?confirm=${encoded}`, {
+    const response = await apiFetch(`/gallery?confirm=${encoded}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirm: confirmation }),
@@ -1060,7 +1124,7 @@ async function onKillServer() {
   let payload = null;
   startDisconnectEffect();
   try {
-    const response = await fetch("/server/kill", {
+    const response = await apiFetch("/server/kill", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
