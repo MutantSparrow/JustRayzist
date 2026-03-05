@@ -10,6 +10,27 @@ $targetRoot = Join-Path $projectRoot "models\seedvr2\runtime"
 $targetRepo = Join-Path $targetRoot "ComfyUI-SeedVR2_VideoUpscaler"
 $repoUrl = "https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler.git"
 
+function Apply-AllocatorCompatPatch {
+  param(
+    [Parameter(Mandatory = $true)][string]$RuntimeScriptPath
+  )
+
+  $original = Get-Content -Path $RuntimeScriptPath -Raw -Encoding utf8
+  if ($original -notmatch "PYTORCH_CUDA_ALLOC_CONF") {
+    Write-Host "[patch] Runtime allocator env var already compatible."
+    return
+  }
+
+  $updated = $original -replace "PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_ALLOC_CONF"
+  if ($updated -eq $original) {
+    Write-Host "[patch] Runtime allocator env var already compatible."
+    return
+  }
+
+  Set-Content -Path $RuntimeScriptPath -Value $updated -Encoding utf8
+  Write-Host "[patch] Applied allocator env compatibility patch (PYTORCH_ALLOC_CONF)."
+}
+
 function Invoke-Checked {
   param(
     [Parameter(Mandatory = $true)][string]$Executable,
@@ -59,6 +80,8 @@ $runtimeScript = Join-Path $targetRepo "inference_cli.py"
 if (-not (Test-Path $runtimeScript)) {
   throw "SeedVR2 runtime fetch completed but inference_cli.py is missing: $runtimeScript"
 }
+
+Apply-AllocatorCompatPatch -RuntimeScriptPath $runtimeScript
 
 Write-Host "[ok] SeedVR2 runtime ready:"
 Write-Host "  $runtimeScript"

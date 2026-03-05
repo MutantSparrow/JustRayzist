@@ -49,6 +49,10 @@ class BlendUpscaleResult:
     seed_fallback_tier: int
     seed_vae_encode_tiled: bool
     seed_vae_decode_tiled: bool
+    seed_attempt_count: int
+    seed_attempts: list[dict[str, Any]]
+    seed_policy_source: str
+    seed_timeout_hit: bool
     blend_duration_ms: int
 
     def telemetry_dict(self) -> dict[str, Any]:
@@ -72,6 +76,10 @@ class BlendUpscaleResult:
             "upscale_seed_fallback_tier": self.seed_fallback_tier,
             "upscale_seed_vae_encode_tiled": self.seed_vae_encode_tiled,
             "upscale_seed_vae_decode_tiled": self.seed_vae_decode_tiled,
+            "upscale_seed_attempt_count": self.seed_attempt_count,
+            "upscale_seed_attempts": self.seed_attempts,
+            "upscale_seed_policy_source": self.seed_policy_source,
+            "upscale_seed_timeout_hit": self.seed_timeout_hit,
             "upscale_blend_duration_ms": self.blend_duration_ms,
             "upscale_success": True,
         }
@@ -153,5 +161,9 @@ def upscale_with_x2_seed_blend(
         seed_fallback_tier=int(seed_result.fallback_tier),
         seed_vae_encode_tiled=bool(seed_result.vae_encode_tiled),
         seed_vae_decode_tiled=bool(seed_result.vae_decode_tiled),
+        seed_attempt_count=int(seed_result.attempt_count),
+        seed_attempts=list(seed_result.attempts),
+        seed_policy_source=str(seed_result.policy_source),
+        seed_timeout_hit=bool(seed_result.timeout_hit),
         blend_duration_ms=blend_duration_ms,
     )
