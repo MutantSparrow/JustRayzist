@@ -25,6 +25,7 @@ It even has a built in prompt enhancement feature and a cool image browser.<br><
 - custom mixed-model fast upscale flow. It's not the best in the world, but it's the best at that speed!
 - RunMeFirst bootstrap installation and auto-repair.
 - Run it locally or open it to LAN access
+- Multi-user LAN workspaces with per-user gallery isolation and import support.
 - Model pack system to support custom Z-Image-Turbo models, VAEs or encoder models.
 - PNG metadata writing and SQLite gallery indexing.
 - Web gallery with filtering, fullscreen, compare-hold for upscaled images, and queued jobs.
