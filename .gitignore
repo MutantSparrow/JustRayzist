@@ -33,7 +33,6 @@ release_lane.txt
 build/
 *.spec
 StartWeb.7z
-img/latents/
 Prompt.txt
 prompt.txt
 pytest-cache-files-*/
