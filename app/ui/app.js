@@ -354,7 +354,7 @@ function updateSettingsSummary() {
     pieces.push(`Scheduler <span class="summary-value">DPM++ SDE</span>`);
   }
   if (state.randomLatent) {
-    pieces.push(`Latent <span class="summary-value">RANDOM</span>`);
+    pieces.push(`Extra Creative <span class="summary-value">ON (BETA)</span>`);
   }
 
   settingsSummaryEl.innerHTML = pieces
@@ -395,10 +395,10 @@ function updateSchedulerSamplerButton() {
 
 function updateRandomLatentButton() {
   if (state.randomLatent) {
-    randomLatentButtonEl.textContent = "RANDOM LATENT: ON";
+    randomLatentButtonEl.textContent = "EXTRA CREATIVE (BETA): ON";
     randomLatentButtonEl.classList.add("active");
   } else {
-    randomLatentButtonEl.textContent = "RANDOM LATENT: OFF";
+    randomLatentButtonEl.textContent = "EXTRA CREATIVE (BETA): OFF";
     randomLatentButtonEl.classList.remove("active");
   }
 }

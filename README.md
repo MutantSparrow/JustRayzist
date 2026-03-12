@@ -23,6 +23,7 @@ It even has a built in prompt enhancement feature and a cool image browser.<br><
 - local model packs (`.safetensors` / `.gguf`)
 - Runtime profiles `constrained`, `balanced`, `high` support different VRAM classes
 - custom mixed-model fast upscale flow. It's not the best in the world, but it's the best at that speed!
+- Custom experimental mode toggle that manipulate latent space for more creative outputs.
 - RunMeFirst bootstrap installation and auto-repair.
 - Run it locally or open it to LAN access
 - Multi-user LAN workspaces with per-user gallery isolation and import support.
