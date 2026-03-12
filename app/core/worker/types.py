@@ -14,6 +14,7 @@ class GenerationRequest:
     seed: int | None = None
     scheduler_mode: str | None = None
     enhance_prompt: bool = False
+    use_random_latent: bool = False
     refine_strength: float | None = None
     refine_steps: int | None = None
     refine_tile_size: int | None = None

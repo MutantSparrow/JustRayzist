@@ -49,6 +49,7 @@ class GenerateRequest(BaseModel):
     seed: int | None = Field(default=None)
     scheduler_mode: Literal["euler", "dpm"] = Field(default="euler")
     enhance_prompt: bool = Field(default=False)
+    use_random_latent: bool = Field(default=False)
 
     @field_validator("width", "height")
     @classmethod
@@ -129,8 +130,11 @@ def generate(
             seed=payload.seed,
             scheduler_mode=payload.scheduler_mode,
             enhance_prompt=payload.enhance_prompt,
+            use_random_latent=payload.use_random_latent,
         )
     except ModelPackValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ImportError as exc:
         raise HTTPException(status_code=500, detail=f"Missing dependency: {exc}") from exc

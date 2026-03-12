@@ -184,6 +184,7 @@ class InferenceService:
         seed: int | None = None,
         scheduler_mode: str | None = None,
         enhance_prompt: bool = False,
+        use_random_latent: bool = False,
     ) -> dict[str, Any]:
         with self._lock:
             safe_owner_id = self.sanitize_owner_id(owner_id)
@@ -200,6 +201,7 @@ class InferenceService:
                     seed=effective_seed,
                     scheduler_mode=scheduler_mode,
                     enhance_prompt=enhance_prompt,
+                    use_random_latent=use_random_latent,
                 )
             )
 
@@ -225,6 +227,11 @@ class InferenceService:
                     "scheduler_mode": result.scheduler_mode,
                     "runtime_profile": result.runtime_profile,
                     "execution_mode": result.execution_mode,
+                    "use_random_latent": bool(use_random_latent),
+                    "random_latent_file": result.random_latent_file,
+                    "random_latent_alpha": result.random_latent_alpha,
+                    "random_latent_preprocess": result.random_latent_preprocess,
+                    "random_latent_scheduler_forced": result.random_latent_scheduler_forced,
                 },
             )
             append_generation_metric(
@@ -240,6 +247,11 @@ class InferenceService:
                     "output_path": str(saved_path),
                     "owner_id": safe_owner_id,
                     "model_pack": model_pack.name,
+                    "use_random_latent": bool(use_random_latent),
+                    "random_latent_file": result.random_latent_file,
+                    "random_latent_alpha": result.random_latent_alpha,
+                    "random_latent_preprocess": result.random_latent_preprocess,
+                    "random_latent_scheduler_forced": result.random_latent_scheduler_forced,
                     **result.telemetry_dict(),
                 },
             )
@@ -254,6 +266,11 @@ class InferenceService:
             image_row["prompt_enhanced"] = result.prompt_enhanced
             image_row["runtime_profile"] = result.runtime_profile
             image_row["execution_mode"] = result.execution_mode
+            image_row["use_random_latent"] = bool(use_random_latent)
+            image_row["random_latent_file"] = result.random_latent_file
+            image_row["random_latent_alpha"] = result.random_latent_alpha
+            image_row["random_latent_preprocess"] = result.random_latent_preprocess
+            image_row["random_latent_scheduler_forced"] = result.random_latent_scheduler_forced
             return image_row
 
     def upscale(

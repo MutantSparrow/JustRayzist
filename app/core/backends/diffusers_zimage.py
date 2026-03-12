@@ -5,8 +5,10 @@ import math
 import re
 import string
 import inspect
+import random
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -61,6 +63,11 @@ class GenerationResult:
     execution_mode: str | None = None
     cuda_total_bytes: int | None = None
     cuda_reserved_after_load_bytes: int | None = None
+    random_latent_enabled: bool = False
+    random_latent_file: str | None = None
+    random_latent_alpha: float | None = None
+    random_latent_preprocess: str | None = None
+    random_latent_scheduler_forced: bool = False
 
     def telemetry_dict(self) -> dict[str, Any]:
         return {
@@ -103,6 +110,11 @@ class GenerationResult:
             "execution_mode": self.execution_mode,
             "cuda_total_bytes": self.cuda_total_bytes,
             "cuda_reserved_after_load_bytes": self.cuda_reserved_after_load_bytes,
+            "random_latent_enabled": self.random_latent_enabled,
+            "random_latent_file": self.random_latent_file,
+            "random_latent_alpha": self.random_latent_alpha,
+            "random_latent_preprocess": self.random_latent_preprocess,
+            "random_latent_scheduler_forced": self.random_latent_scheduler_forced,
         }
 
 
@@ -131,6 +143,10 @@ class DiffusersZImageBackend:
         "constrained": 512,
     }
     _REFINE_FALLBACK_STEP_FACTORS: tuple[float, ...] = (0.8, 0.64, 0.5)
+    _RANDOM_LATENT_KEY = "latent_tensor"
+    _RANDOM_LATENT_NOISE_MIX = 0.95
+    _RANDOM_LATENT_STD_EPS = 1e-6
+    _RANDOM_LATENT_PREPROCESS = "normalize_mix"
 
     def __init__(self, settings: AppSettings, model_pack: ModelPack):
         self._settings = settings
@@ -415,7 +431,7 @@ class DiffusersZImageBackend:
                 flow_shift=flow_shift,
                 use_dynamic_shifting=True,
                 time_shift_type="exponential",
-                timestep_spacing=current_config.get("timestep_spacing", "linspace"),
+                timestep_spacing="leading",
             )
             is_img2img_pipe = "img2img" in pipe.__class__.__name__.lower()
             if is_img2img_pipe and not hasattr(scheduler, "scale_noise"):
@@ -497,6 +513,169 @@ class DiffusersZImageBackend:
         if seed is None:
             return None
         return torch_module.Generator(device=device).manual_seed(int(seed))
+
+    @staticmethod
+    def _resolve_latent_spatial_shape(pipe: Any, width: int, height: int) -> tuple[int, int]:
+        vae_scale_factor = int(getattr(pipe, "vae_scale_factor", 8) or 8)
+        base = max(1, vae_scale_factor * 2)
+        latent_height = 2 * (int(height) // base)
+        latent_width = 2 * (int(width) // base)
+        if latent_height <= 0 or latent_width <= 0:
+            raise ValueError(
+                f"Unsupported output size for latent injection: {width}x{height} "
+                f"(vae_scale_factor={vae_scale_factor})."
+            )
+        return latent_height, latent_width
+
+    def _list_random_latent_files(self) -> list[Path]:
+        latent_dir = self._settings.paths.root_dir / "img" / "latents"
+        if not latent_dir.exists():
+            raise ValueError(f"Random latent directory not found: {latent_dir}")
+        files = sorted(
+            path
+            for path in latent_dir.rglob("*.latent")
+            if path.is_file()
+        )
+        if not files:
+            raise ValueError(
+                f"No .latent files found in random latent directory: {latent_dir}"
+            )
+        return files
+
+    @staticmethod
+    def _pick_random_latent_file(latent_files: list[Path], seed: int | None) -> Path:
+        if not latent_files:
+            raise ValueError("No latent files available for selection.")
+        if seed is None:
+            index = random.SystemRandom().randrange(len(latent_files))
+        else:
+            index = int(seed) % len(latent_files)
+        return latent_files[index]
+
+    @classmethod
+    def _load_random_latent_tensor(
+        cls,
+        *,
+        latent_file: Path,
+        expected_channels: int,
+        target_height: int,
+        target_width: int,
+        torch_module: Any,
+    ) -> Any:
+        from safetensors.torch import load_file
+
+        try:
+            tensors = load_file(str(latent_file), device="cpu")
+        except Exception as exc:
+            raise ValueError(f"Failed to read latent file '{latent_file.name}': {exc}") from exc
+
+        latent = tensors.get(cls._RANDOM_LATENT_KEY)
+        if latent is None:
+            available = ", ".join(sorted(tensors.keys()))
+            raise ValueError(
+                f"Latent file '{latent_file.name}' is missing '{cls._RANDOM_LATENT_KEY}'. "
+                f"Available keys: {available or '(none)'}."
+            )
+        if getattr(latent, "ndim", 0) != 4:
+            raise ValueError(
+                f"Latent file '{latent_file.name}' must have rank-4 tensor, got shape "
+                f"{tuple(getattr(latent, 'shape', ()))!r}."
+            )
+        if int(latent.shape[0]) != 1:
+            raise ValueError(
+                f"Latent file '{latent_file.name}' must have batch size 1, got {int(latent.shape[0])}."
+            )
+        if int(latent.shape[1]) != int(expected_channels):
+            raise ValueError(
+                f"Latent file '{latent_file.name}' has {int(latent.shape[1])} channels, "
+                f"expected {int(expected_channels)}."
+            )
+        if not torch_module.is_floating_point(latent):
+            latent = latent.float()
+
+        if int(latent.shape[2]) != int(target_height) or int(latent.shape[3]) != int(target_width):
+            latent = torch_module.nn.functional.interpolate(
+                latent,
+                size=(int(target_height), int(target_width)),
+                mode="bilinear",
+                align_corners=False,
+            )
+        return latent.contiguous()
+
+    @classmethod
+    def _normalize_and_mix_random_latent(
+        cls,
+        *,
+        latent_tensor: Any,
+        seed: int | None,
+        torch_module: Any,
+    ) -> tuple[Any, float, str]:
+        # Match diffusion start-noise expectations while preserving latent-file influence.
+        latent = latent_tensor.to(dtype=torch_module.float32, device="cpu")
+        latent_mean = latent.mean(dim=(1, 2, 3), keepdim=True)
+        latent_std = latent.std(dim=(1, 2, 3), keepdim=True, unbiased=False).clamp_min(
+            cls._RANDOM_LATENT_STD_EPS
+        )
+        normalized = (latent - latent_mean) / latent_std
+
+        noise_generator = cls._build_generator(torch_module, "cpu", seed)
+        noise = torch_module.randn(
+            normalized.shape,
+            generator=noise_generator,
+            dtype=normalized.dtype,
+            device=normalized.device,
+        )
+
+        noise_mix = max(0.0, min(1.0, float(cls._RANDOM_LATENT_NOISE_MIX)))
+        latent_mix = 1.0 - noise_mix
+        mixed = (latent_mix * normalized) + (noise_mix * noise)
+        mixed_mean = mixed.mean(dim=(1, 2, 3), keepdim=True)
+        mixed_std = mixed.std(dim=(1, 2, 3), keepdim=True, unbiased=False).clamp_min(
+            cls._RANDOM_LATENT_STD_EPS
+        )
+        mixed = (mixed - mixed_mean) / mixed_std
+        return mixed.contiguous(), noise_mix, cls._RANDOM_LATENT_PREPROCESS
+
+    def _resolve_random_latents(
+        self,
+        *,
+        pipe: Any,
+        request: GenerationRequest,
+        torch_module: Any,
+    ) -> tuple[Any | None, str | None, float | None, str | None]:
+        if not request.use_random_latent:
+            return None, None, None, None
+
+        latent_files = self._list_random_latent_files()
+        latent_file = self._pick_random_latent_file(latent_files, request.seed)
+        latent_height, latent_width = self._resolve_latent_spatial_shape(
+            pipe=pipe,
+            width=request.width,
+            height=request.height,
+        )
+        expected_channels = int(getattr(getattr(pipe, "transformer", None), "in_channels", 16))
+        latent_tensor = self._load_random_latent_tensor(
+            latent_file=latent_file,
+            expected_channels=expected_channels,
+            target_height=latent_height,
+            target_width=latent_width,
+            torch_module=torch_module,
+        )
+        latent_tensor, alpha, preprocess = self._normalize_and_mix_random_latent(
+            latent_tensor=latent_tensor,
+            seed=request.seed,
+            torch_module=torch_module,
+        )
+        LOGGER.info(
+            "Random latent injection enabled: file=%s seed=%s target_latent_shape=%sx%s preprocess=%s alpha=%.3f",
+            latent_file.name,
+            request.seed if request.seed is not None else "none",
+            latent_width,
+            latent_height,
+            preprocess,
+            alpha,
+        )
+        return latent_tensor, latent_file.name, alpha, preprocess
 
     @staticmethod
     def _resolve_module_device(module: Any) -> Any:
@@ -1154,8 +1333,17 @@ class DiffusersZImageBackend:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         loaded = self._ensure_loaded()
         pipe = loaded.pipeline
-        scheduler_mode = self._normalize_scheduler_mode(request.scheduler_mode)
-        scheduler_mode = self._apply_scheduler_mode(pipe, scheduler_mode)
+        requested_scheduler_mode = self._normalize_scheduler_mode(request.scheduler_mode)
+        effective_scheduler_mode = requested_scheduler_mode
+        random_latent_scheduler_forced = False
+        if request.use_random_latent and requested_scheduler_mode != "dpm":
+            effective_scheduler_mode = "dpm"
+            random_latent_scheduler_forced = True
+            LOGGER.info(
+                "Random latent generation forcing scheduler_mode from %s to dpm (DDIM-uniform mapping).",
+                requested_scheduler_mode,
+            )
+        scheduler_mode = self._apply_scheduler_mode(pipe, effective_scheduler_mode)
 
         import torch
 
@@ -1166,6 +1354,16 @@ class DiffusersZImageBackend:
             else self._settings.runtime_profile.guidance_scale_default
         )
         generator = self._build_generator(torch, "cuda" if loaded.device == "cuda" else "cpu", request.seed)
+        (
+            random_latents,
+            random_latent_file,
+            random_latent_alpha,
+            random_latent_preprocess,
+        ) = self._resolve_random_latents(
+            pipe=pipe,
+            request=request,
+            torch_module=torch,
+        )
 
         prompt_original, prompt_effective, prompt_enhanced = self._resolve_effective_prompt(
             pipe=pipe,
@@ -1186,6 +1384,7 @@ class DiffusersZImageBackend:
                 num_inference_steps=steps,
                 guidance_scale=guidance_scale,
                 generator=generator,
+                latents=random_latents,
             )
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -1214,6 +1413,11 @@ class DiffusersZImageBackend:
             execution_mode=self._effective_execution_mode,
             cuda_total_bytes=self._cuda_total_bytes,
             cuda_reserved_after_load_bytes=self._cuda_reserved_after_load_bytes,
+            random_latent_enabled=request.use_random_latent,
+            random_latent_file=random_latent_file,
+            random_latent_alpha=random_latent_alpha,
+            random_latent_preprocess=random_latent_preprocess,
+            random_latent_scheduler_forced=random_latent_scheduler_forced,
         )
 
     def upscale_and_refine(self, input_image: object, request: GenerationRequest) -> GenerationResult:

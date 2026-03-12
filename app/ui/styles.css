@@ -377,6 +377,15 @@ select {
   padding: 10px;
 }
 
+.gallery-count {
+  margin: 0 0 6px;
+  color: var(--lime);
+  font-size: 0.78rem;
+  letter-spacing: 0.35px;
+  font-weight: 700;
+  text-align: left;
+}
+
 .gallery-tools {
   display: grid;
   grid-template-columns: 1fr 170px;
@@ -576,9 +585,9 @@ select {
 }
 
 .tile-upscale:hover {
-  border-color: #ff5bc0;
-  color: #ff5bc0;
-  background: rgba(237, 13, 137, 0.14);
+  border-color: var(--magenta);
+  background: var(--magenta);
+  color: #000;
 }
 
 .tile-delete {
@@ -596,7 +605,8 @@ select {
 
 .tile-delete:hover {
   border-color: var(--danger);
-  background: rgba(255, 59, 59, 0.12);
+  background: var(--danger);
+  color: #000;
 }
 
 .tile-delete svg {
@@ -1008,6 +1018,8 @@ select {
   .generate-button {
     grid-area: generate;
     align-self: start;
+    justify-self: end;
+    transform: none;
   }
 
   .gallery-area {
@@ -1030,6 +1042,7 @@ select {
 
   .generate-button {
     justify-self: end;
+    transform: none;
   }
 
   .gallery-tools {

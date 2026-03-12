@@ -9,11 +9,13 @@ const resolutionSelectEl = document.getElementById("resolution-select");
 const orientationToggleEl = document.getElementById("orientation-toggle");
 const freezeSeedButtonEl = document.getElementById("freeze-seed-button");
 const schedulerSamplerButtonEl = document.getElementById("scheduler-sampler-button");
+const randomLatentButtonEl = document.getElementById("random-latent-button");
 const promptEnhanceButtonEl = document.getElementById("prompt-enhance-button");
 const deleteGalleryButtonEl = document.getElementById("delete-gallery-button");
 const killServerButtonEl = document.getElementById("kill-server-button");
 const filterInputEl = document.getElementById("filter-input");
 const reverseOrderButtonEl = document.getElementById("reverse-order-button");
+const galleryCountEl = document.getElementById("gallery-count");
 const statusLineEl = document.getElementById("status-line");
 const galleryEl = document.getElementById("gallery");
 const emptyStateEl = document.getElementById("empty-state");
@@ -47,11 +49,13 @@ const requiredUi = [
   ["orientation-toggle", orientationToggleEl],
   ["freeze-seed-button", freezeSeedButtonEl],
   ["scheduler-sampler-button", schedulerSamplerButtonEl],
+  ["random-latent-button", randomLatentButtonEl],
   ["prompt-enhance-button", promptEnhanceButtonEl],
   ["delete-gallery-button", deleteGalleryButtonEl],
   ["kill-server-button", killServerButtonEl],
   ["filter-input", filterInputEl],
   ["reverse-order-button", reverseOrderButtonEl],
+  ["gallery-count", galleryCountEl],
   ["status-line", statusLineEl],
   ["gallery", galleryEl],
   ["empty-state", emptyStateEl],
@@ -111,6 +115,7 @@ const state = {
   orientation: "portrait",
   freezeSeed: false,
   dpmSampler: false,
+  randomLatent: false,
   promptEnhance: true,
   currentSeed: null,
   newestFirst: true,
@@ -148,7 +153,7 @@ function updateTopbarOffset() {
   const promptRect = promptInputEl.getBoundingClientRect();
   const promptTop = Math.max(0, Math.round(promptRect.top - topbarRect.top));
   const buttonTop = Math.max(0, Math.round(generateButtonEl.offsetTop));
-  const generateShift = promptTop - buttonTop;
+  const generateShift = window.innerWidth <= 960 ? 0 : promptTop - buttonTop;
   document.documentElement.style.setProperty("--topbar-offset", `${offset}px`);
   document.documentElement.style.setProperty("--generate-shift", `${generateShift}px`);
   if (isSettingsOpen()) {
@@ -346,7 +351,10 @@ function updateSettingsSummary() {
     pieces.push(`Seed <span class="summary-value">${state.currentSeed}</span>`);
   }
   if (state.dpmSampler) {
-    pieces.push(`Scheduler <span class="summary-value">DPM</span>`);
+    pieces.push(`Scheduler <span class="summary-value">DPM++ SDE</span>`);
+  }
+  if (state.randomLatent) {
+    pieces.push(`Latent <span class="summary-value">RANDOM</span>`);
   }
 
   settingsSummaryEl.innerHTML = pieces
@@ -377,11 +385,21 @@ function updateFreezeSeedButton() {
 
 function updateSchedulerSamplerButton() {
   if (state.dpmSampler) {
-    schedulerSamplerButtonEl.textContent = "SCHEDULER/SAMPLER: ON (DPM)";
+    schedulerSamplerButtonEl.textContent = "SCHEDULER/SAMPLER: ON (DPM++ SDE + DDIM-UNIFORM)";
     schedulerSamplerButtonEl.classList.add("active");
   } else {
     schedulerSamplerButtonEl.textContent = "SCHEDULER/SAMPLER: OFF (EULER)";
     schedulerSamplerButtonEl.classList.remove("active");
+  }
+}
+
+function updateRandomLatentButton() {
+  if (state.randomLatent) {
+    randomLatentButtonEl.textContent = "RANDOM LATENT: ON";
+    randomLatentButtonEl.classList.add("active");
+  } else {
+    randomLatentButtonEl.textContent = "RANDOM LATENT: OFF";
+    randomLatentButtonEl.classList.remove("active");
   }
 }
 
@@ -776,6 +794,7 @@ function renderGallery() {
   galleryEl.innerHTML = "";
   const pending = [...state.pendingJobs];
   const items = [...state.galleryItems];
+  updateGalleryCount(items.length);
   const hasContent = pending.length > 0 || items.length > 0;
   emptyStateEl.classList.toggle("hidden", hasContent);
   if (!hasContent) return;
@@ -796,6 +815,11 @@ function renderGallery() {
   for (const job of pending) {
     galleryEl.append(renderPendingTile(job));
   }
+}
+
+function updateGalleryCount(imageCount = state.galleryItems.length) {
+  const count = Math.max(0, Number(imageCount) || 0);
+  galleryCountEl.textContent = count === 1 ? "1 image" : `${count} images`;
 }
 
 function toTimestamp(item) {
@@ -943,6 +967,7 @@ function enqueueGenerationFromPrompt() {
     seed,
     scheduler_mode: state.dpmSampler ? "dpm" : "euler",
     enhance_prompt: state.promptEnhance,
+    use_random_latent: state.randomLatent,
   };
 
   state.queue.push(job);
@@ -1057,6 +1082,7 @@ async function processGenerationQueue() {
               seed: job.seed,
               scheduler_mode: job.scheduler_mode,
               enhance_prompt: job.enhance_prompt,
+              use_random_latent: Boolean(job.use_random_latent),
             };
         const response = await apiFetch(endpoint, {
           method: "POST",
@@ -1179,6 +1205,12 @@ function toggleSchedulerSampler() {
   updateSettingsSummary();
 }
 
+function toggleRandomLatent() {
+  state.randomLatent = !state.randomLatent;
+  updateRandomLatentButton();
+  updateSettingsSummary();
+}
+
 function togglePromptEnhance() {
   state.promptEnhance = !state.promptEnhance;
   updatePromptEnhanceButton();
@@ -1234,6 +1266,7 @@ async function bootstrap() {
     applyOrientationButtonState();
     updateFreezeSeedButton();
     updateSchedulerSamplerButton();
+    updateRandomLatentButton();
     updatePromptEnhanceButton();
     updateSettingsSummary();
     updateViewerNavState();
@@ -1251,6 +1284,7 @@ generateButtonEl.addEventListener("click", () => {
 });
 freezeSeedButtonEl.addEventListener("click", toggleFreezeSeed);
 schedulerSamplerButtonEl.addEventListener("click", toggleSchedulerSampler);
+randomLatentButtonEl.addEventListener("click", toggleRandomLatent);
 promptEnhanceButtonEl.addEventListener("click", togglePromptEnhance);
 
 document.addEventListener("click", (event) => {
