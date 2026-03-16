@@ -12,6 +12,7 @@ from app.config.settings import AppSettings
 
 LEGACY_OWNER_ID = "legacy"
 LEGACY_IMPORT_SOURCE_ID = "__legacy_root__"
+MANAGED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 _WINDOWS_RESERVED_NAMES = {
     "con",
     "prn",
@@ -85,6 +86,42 @@ def _owner_id_from_output_path(settings: AppSettings, raw_path: Any) -> str:
         return normalize_owner_id(first_segment)
     except ValueError:
         return LEGACY_OWNER_ID
+
+
+def _owner_output_dir(settings: AppSettings, owner_id: str) -> Path:
+    outputs_dir = settings.paths.outputs_dir.resolve()
+    owner_dir = (outputs_dir / normalize_owner_id(owner_id)).resolve()
+    try:
+        owner_dir.relative_to(outputs_dir)
+    except ValueError as exc:
+        raise ValueError("Owner output directory is outside managed outputs directory.") from exc
+    return owner_dir
+
+
+def _iter_managed_images(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    return [
+        path
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() in MANAGED_IMAGE_SUFFIXES
+    ]
+
+
+def _remove_empty_parents(path: Path, stop_at: Path) -> None:
+    current = path.resolve()
+    boundary = stop_at.resolve()
+    while current != boundary:
+        if not current.exists() or not current.is_dir():
+            current = current.parent
+            continue
+        try:
+            next(current.iterdir())
+        except StopIteration:
+            current.rmdir()
+            current = current.parent
+            continue
+        break
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -561,17 +598,16 @@ def delete_gallery(settings: AppSettings, owner_id: str | None = None) -> dict[s
                 remaining_rows = int(verify_row["total"])
         conn.commit()
 
-    if not scoped_owner:
-        for image_path in outputs_dir.rglob("*"):
-            if not image_path.is_file():
-                continue
-            if image_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
-                continue
-            try:
-                image_path.unlink()
-                deleted_files += 1
-            except OSError:
-                continue
+    cleanup_root = _owner_output_dir(settings, scoped_owner) if scoped_owner else outputs_dir.resolve()
+    for image_path in _iter_managed_images(cleanup_root):
+        try:
+            image_path.unlink()
+            deleted_files += 1
+        except OSError:
+            continue
+
+    if scoped_owner:
+        _remove_empty_parents(cleanup_root, outputs_dir.resolve())
 
     return {
         "deleted_files": deleted_files,

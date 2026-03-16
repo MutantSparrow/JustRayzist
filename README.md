@@ -1,5 +1,5 @@
 # JustRayzist
-<img width="1900" height="921" alt="image" src="https://github.com/user-attachments/assets/8ade356b-d74b-43bd-b983-06befb5fc230" />
+<img width="1900" alt="JustRayzist gallery overview" src="readme_images/gallery_view.png" />
 
 
 <br>Not feeling like ComfyUI? Too broke to get a monthly sub to an image platform?<br>
@@ -9,10 +9,9 @@ Got 35GB of space on a drive somewhere and an RTX card? <br>
 A lightweight, easy to install and easier to run app that just runs.<br>
 Built around my Z-Image-Turbo finetune, it gives you a fast image generation platform, available through a local web page, command line or via local API so your favorite AI agents can use it.<br>
 It generates images up to 1536x1536 and can upscale up to double that in less than a minute. <br>
-It even has a built in prompt enhancement feature and a cool image browser.<br><br>
-<img height="200" alt="image" src="https://github.com/user-attachments/assets/8d4374d7-e2f3-48a7-89d2-514ecf19abc3" />
-<img height="200" alt="image" src="https://github.com/user-attachments/assets/8ae8c35c-dfab-4e4f-95d2-cf4780957095" />
-
+It even has a built in prompt enhancement feature, a proper image browser, importable client galleries, and an Extra Creative mode when you want it to get a little weird.<br><br>
+<img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
+<img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
 
 ## Specs
@@ -23,17 +22,21 @@ It even has a built in prompt enhancement feature and a cool image browser.<br><
 - local model packs (`.safetensors` / `.gguf`)
 - Runtime profiles `constrained`, `balanced`, `high` support different VRAM classes
 - custom mixed-model fast upscale flow. It's not the best in the world, but it's the best at that speed!
-- Custom experimental mode toggle that manipulate latent space for more creative outputs.
-- RunMeFirst bootstrap installation and auto-repair.
+- Extra Creative (beta) mode for more unpredictable latent-space outputs
+- RunMeFirst bootstrap installation and auto-repair
 - Run it locally or open it to LAN access
-- Multi-user LAN workspaces with per-user gallery isolation and import support.
-- Model pack system to support custom Z-Image-Turbo models, VAEs or encoder models.
-- PNG metadata writing and SQLite gallery indexing.
-- Web gallery with filtering, fullscreen, compare-hold for upscaled images, and queued jobs.
-- CLI workflows for generation, mixed-model upscaling, soak runs, and soak reporting.
-- Lane-aware bootstrap packaging (`cu126`, `cu128`) with GPU driver preflight.
+- Multi-user LAN workspaces with per-user gallery isolation and import support
+- Model pack system to support custom Z-Image-Turbo models, VAEs or encoder models
+- PNG metadata writing and SQLite gallery indexing
+- Web gallery with filtering, fullscreen, compare-hold for upscaled images, queued jobs, and `/API` testing page
+- CLI workflows for generation, mixed-model upscaling, soak runs, soak reporting, and SeedVR2 benchmarks
+- Lane-aware bootstrap packaging (`cu126`, `cu128`) with GPU driver preflight
 
 The app is designed to run 100% without runtime internet dependencies once installed locally.
+
+<p align="center">
+  <img width="900" alt="Extra Creative mode example" src="readme_images/extra_creative_mode.png" />
+</p>
 
 ## Tech Stack
 
@@ -57,7 +60,7 @@ The app is designed to run 100% without runtime internet dependencies once insta
 - `cu128`: NVIDIA driver `>= 572.61` (preferred lane; required for 50xx)
 
 12, 16 and 24GB RTX cards supported: 20xx, 30xx, 40xx and 50xx series and up.<br>
-Tested on 4090, 4080 3090, 3060ti.<br>
+Tested on 4090, 4080, 3090, 3060 Ti.<br>
 It will work on 8GB cards provided you have enough system RAM, but it will slow down considerably.<br>
 It *should* run purely on CPU thanks to smart offload but you *probably* do not want to do this.
 
@@ -106,6 +109,7 @@ Environment variables (used for CLI)
 - `JUSTRAYZIST_OFFLINE`: `1` (default) enables offline env guards.
 - `JUSTRAYZIST_ENV`: environment label (`dev` default).
 - `JUSTRAYZIST_PYTHON`: optional interpreter override for source-mode launcher.
+- `JUSTRAYZIST_LISTEN`: set `1` to force LAN listen mode from `StartWeb.bat`.
 - `JUSTRAYZIST_SKIP_GPU_PREFLIGHT`: set `1` to bypass lane/driver preflight in packaged mode.
 <br><br>
 
@@ -143,9 +147,20 @@ python -m app.cli.main soak-report --list-sessions
 python -m app.cli.main soak-report --session-id <session_id>
 ```
 
+There are also dedicated benchmark commands if you want to poke at the SeedVR2 paths:
+
+```powershell
+python -m app.cli.main seedvr2-benchmark --profiles high,balanced,constrained
+python -m app.cli.main seedvr2-blend-benchmark --profile high --alphas 25,50,75
+```
+
 ## API Summary
 
 Base URL: `http://127.0.0.1:37717`
+
+Supported generation cap: `1536x1536`.
+Client-scoped routes require `X-JustRayzist-Client`.
+Direct image fetches can use `?client_id=<client-id>` if you are linking them into a page or tool.
 
 - `GET /health`
 - `GET /config`
@@ -156,6 +171,8 @@ Base URL: `http://127.0.0.1:37717`
 - `GET /images/{filename}`
 - `DELETE /images/{filename}?confirm=DELETE`
 - `DELETE /gallery?confirm=DELETE`
+- `GET /gallery/import-sources`
+- `POST /gallery/import`
 - `POST /server/kill`
 - `GET /API` (interactive API documentation + tester)
 
@@ -163,6 +180,7 @@ Base URL: `http://127.0.0.1:37717`
 
 ```http
 POST /generate
+X-JustRayzist-Client: desktop-client
 Content-Type: application/json
 
 {
@@ -172,7 +190,8 @@ Content-Type: application/json
   "pack": "Rayzist_bf16",
   "seed": 123456,
   "scheduler_mode": "euler",
-  "enhance_prompt": false
+  "enhance_prompt": false,
+  "use_random_latent": false
 }
 ```
 
@@ -180,6 +199,7 @@ Content-Type: application/json
 
 ```http
 POST /upscale
+X-JustRayzist-Client: desktop-client
 Content-Type: application/json
 
 {
@@ -205,7 +225,8 @@ See:
 ## Known Limitations
 
 - Windows-first launcher/build flow.
-- No authentication on local destructive endpoints (`/server/kill`, delete routes).
+- No authentication on client-scoped gallery endpoints, so keep LAN use to trusted machines.
+- `/server/kill` is a destructive local control endpoint and should not be exposed beyond trusted networks.
 - Runtime quality/performance depend on local model pack quality and GPU/driver compatibility.
 - With multiple users on LAN or multiple web pages open, requests made in one place will only be picked up in the page when it next refreshes. (no push)
 

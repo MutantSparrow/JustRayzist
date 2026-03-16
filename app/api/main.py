@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -19,6 +20,7 @@ from app.api.inference_service import InferenceService
 from app.storage.gallery_index import ensure_gallery_schema
 
 configure_logging()
+LOGGER = logging.getLogger(__name__)
 settings = load_settings()
 inference = InferenceService(settings=settings)
 
@@ -132,6 +134,8 @@ def generate(
             enhance_prompt=payload.enhance_prompt,
             use_random_latent=payload.use_random_latent,
         )
+    except HTTPException:
+        raise
     except ModelPackValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
@@ -139,7 +143,8 @@ def generate(
     except ImportError as exc:
         raise HTTPException(status_code=500, detail=f"Missing dependency: {exc}") from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Generation failed: {exc}") from exc
+        LOGGER.exception("Unhandled generation error.")
+        raise HTTPException(status_code=500, detail="Generation failed.") from exc
     return result
 
 
@@ -158,6 +163,8 @@ def upscale(
             scheduler_mode=payload.scheduler_mode,
             enhance_prompt=payload.enhance_prompt,
         )
+    except HTTPException:
+        raise
     except ModelPackValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
@@ -165,7 +172,8 @@ def upscale(
     except ImportError as exc:
         raise HTTPException(status_code=500, detail=f"Missing dependency: {exc}") from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Upscale failed: {exc}") from exc
+        LOGGER.exception("Unhandled upscale error.")
+        raise HTTPException(status_code=500, detail="Upscale failed.") from exc
     return result
 
 
@@ -277,10 +285,13 @@ def gallery_import(
             source_id=payload.source_id,
             dry_run=payload.dry_run,
         )
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Import failed: {exc}") from exc
+        LOGGER.exception("Unhandled gallery import error.")
+        raise HTTPException(status_code=500, detail="Import failed.") from exc
 
 
 @app.post("/server/kill")

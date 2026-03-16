@@ -1,71 +1,83 @@
-# Packaging and Compatibility
+# Packaging
 
 ## Packaging Strategy
-- Default packaging format: bootstrap runtime bundle (no embedded Python/CUDA binaries)
-- Optional packaging format: PyInstaller `--onedir` (`bundled` mode)
-- Models are never bundled in artifacts.
-- Runtime entrypoints:
-  - `RunMeFirst.bat` (setup/repair)
-  - `StartWeb.bat` (launch app)
 
-Runtime model acquisition:
-- `RunMeFirst.bat` prefetches default assets from Hugging Face.
-- `StartWeb.bat` still auto-downloads missing default assets if needed.
-- `scripts/fetch_model_assets.ps1` can prefetch all defaults (including upscaler checkpoint) before first run.
-- Download backend is Hugging Face CLI (`hf download`) with XET acceleration enabled.
-- Downloaded assets are verified via SHA256.
+The repository supports two Windows packaging flows:
 
-Dependency lock baseline:
-- `requirements/runtime-lock.txt`
-- `requirements/dev-lock.txt`
-- `requirements/build-lock.txt`
-- `requirements/torch-cu126.txt`
-- `requirements/torch-cu128.txt`
+- `bootstrap`: ships the app, scripts, and metadata without bundling Python/CUDA runtime payloads
+- `bundled`: adds PyInstaller one-dir binaries for the CLI and web entrypoints
 
-## Build Commands
-Create bootstrap release artifact (recommended):
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version vX.Y.Z -Clean
-```
+Model weights are not bundled in either mode.
 
-Optional: build lane binaries for bundled release:
+## Main Scripts
+
+- `scripts\pyinstaller\build_onedir.ps1`
+- `scripts\release\package_release.ps1`
+- `scripts\release\verify_repo_readiness.ps1`
+- `scripts\release\clean_legacy_artifacts.ps1`
+
+## Build One-Dir Binaries
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
 ```
 
-Create bundled release artifact (large):
+Useful flags:
+
+- `-Lane cu126|cu128`
+- `-PythonExe C:\Path\To\python.exe`
+- `-SkipDependencyInstall`
+
+## Create a Bootstrap Release
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version vX.Y.Z -PythonExe .\.venv\Scripts\python.exe -Clean
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version v0.1.0 -Clean
 ```
 
-If the host Python cannot create virtual environments, add `-UseActivePython`.
-If dependencies are already present in the selected interpreter, add `-SkipDependencyInstall`.
+## Create a Bundled Release
 
-Cleanup legacy dist outputs:
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\release\clean_legacy_artifacts.ps1
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version v0.1.0 -Clean
 ```
 
-Repository readiness check:
+Useful flags:
+
+- `-UseActivePython`
+- `-SkipDependencyInstall`
+- `-SkipBuild`
+- `-IncludeCliBinary`
+- `-NoZip`
+
+## Repository Readiness Check
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\release\verify_repo_readiness.ps1
 ```
 
-## CUDA/Driver Baseline
-As of `2026-02-27`:
+## Cleanup Legacy Release Artifacts
 
-- Lane `cu126`
-  - PyTorch wheels: `torch==2.9.1`, `torchvision==0.24.1`, `torchaudio==2.9.1`
-  - Driver floor: `561.17`
-  - Intended GPUs: 20xx/30xx/40xx fallback lane
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\release\clean_legacy_artifacts.ps1
+```
 
-- Lane `cu128`
-  - PyTorch wheels: `torch==2.9.1`, `torchvision==0.24.1`, `torchaudio==2.9.1`
-  - Driver floor: `572.61`
-  - Intended GPUs: preferred lane for 20xx/30xx/40xx; required for 50xx
+## Runtime Asset Policy
 
-Pinned lane wheel sets are defined in:
-- `requirements/torch-cu126.txt`
-- `requirements/torch-cu128.txt`
+- `RunMeFirst.bat` is the primary setup and repair path
+- `StartWeb.bat` can auto-fetch the default `Rayzist_bf16` assets when they are missing
+- downloads use Hugging Face CLI with XET acceleration
+- fetched assets are SHA256-verified before acceptance
 
-`StartWeb.bat` reads `release_lane.txt` and enforces lane-specific GPU preflight at launch.
+## CUDA / Driver Baseline
+
+- `cu126`: driver `>= 561.17`
+- `cu128`: driver `>= 572.61`
+
+`StartWeb.bat` reads `release_lane.txt` when present and applies lane-specific GPU preflight checks.
+
+## Expected Outputs
+
+Typical packaging outputs are written under `dist/`, including:
+
+- release folders such as `dist\JustRayzist_win64_cu128_v0.1.0_bootstrap`
+- optional zip archives for release distribution
+- PyInstaller one-dir build folders under `dist\pyinstaller\`
