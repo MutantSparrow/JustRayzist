@@ -15,6 +15,21 @@ Actions:
 python -m app.cli.main validate-models
 ```
 
+## `UpdateApp.bat` fails
+
+Check:
+
+- the folder is a packaged release, not a git checkout
+- internet access to GitHub is available
+- a matching release asset exists for your current lane and mode
+
+Actions:
+
+```powershell
+.\UpdateApp.bat
+```
+
+If the updater says no matching asset was found, download the correct release package for your lane manually.
 ## `Missing client id` from the API
 
 Cause:

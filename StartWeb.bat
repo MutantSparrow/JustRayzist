@@ -14,23 +14,34 @@ set "PYTHONHOME="
 set "PYTHONPATH="
 set "PYTHONNOUSERSITE=1"
 
+echo.
+echo JustRayzist Launcher Bootstrap
+echo ==============================
+echo Detecting runtime...
+echo.
+
 set "WEB_EXE=%CD%\bin\web\justrayzist-web.exe"
 set "RUN_MODE="
 set "PYTHON_EXE="
 if exist "!WEB_EXE!" (
+  echo Packaged web runtime found:
+  echo   !WEB_EXE!
   set "RUN_MODE=exe"
 ) else (
-  if defined JUSTRAYZIST_PYTHON call :try_source_python "%JUSTRAYZIST_PYTHON%"
-  if not defined PYTHON_EXE call :try_source_python "%CD%\.venv\Scripts\python.exe"
-  if not defined PYTHON_EXE call :try_source_python "%CD%\.venv\python.exe"
-  if not defined PYTHON_EXE call :try_source_python "python"
+  echo Packaged web runtime not found.
+  echo Checking local Python environment. This can take a while on slower hardware...
+  echo.
+  if defined JUSTRAYZIST_PYTHON call :try_source_python "%JUSTRAYZIST_PYTHON%" "JUSTRAYZIST_PYTHON"
+  if not defined PYTHON_EXE call :try_source_python "%CD%\.venv\Scripts\python.exe" ".venv\\Scripts\\python.exe"
+  if not defined PYTHON_EXE call :try_source_python "%CD%\.venv\python.exe" ".venv\\python.exe"
+  if not defined PYTHON_EXE call :try_source_python "python" "PATH python"
   if not defined PYTHON_EXE call :try_python_launcher_paths
   if not defined PYTHON_EXE (
     echo.
     echo No packaged web executable found with a usable source Python runtime.
     echo Checked packaged path:
     echo   !WEB_EXE!
-    echo Checked source interpreter candidates - requires dependencies and ZImage diffusers symbols:
+    echo Checked source interpreter candidates - requires launcher/server dependencies and core model packages:
     if defined JUSTRAYZIST_PYTHON echo   JUSTRAYZIST_PYTHON=!JUSTRAYZIST_PYTHON!
     echo   %CD%\.venv\Scripts\python.exe
     echo   %CD%\.venv\python.exe
@@ -41,9 +52,14 @@ if exist "!WEB_EXE!" (
     echo.
     echo Manual fallback:
     echo   powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1
+    echo.
+    echo The delay before this message came from validating Python startup dependencies.
     set "EXIT_CODE=1"
     goto :after_run
   )
+  echo.
+  echo Source Python runtime ready:
+  echo   !PYTHON_EXE!
   set "RUN_MODE=python"
 )
 
@@ -221,13 +237,23 @@ goto :eof
 
 :try_source_python
 set "CANDIDATE=%~1"
+set "CANDIDATE_LABEL=%~2"
+if not defined CANDIDATE_LABEL set "CANDIDATE_LABEL=%~1"
+echo [runtime] Checking !CANDIDATE_LABEL!
 if /I "%CANDIDATE%"=="python" goto :check_source_candidate
-if not exist "%CANDIDATE%" goto :eof
+if not exist "%CANDIDATE%" (
+  echo [runtime]   not found
+  goto :eof
+)
 
 :check_source_candidate
-"%CANDIDATE%" -c "import typer,fastapi,uvicorn,PIL,torch,diffusers,transformers,accelerate,safetensors; from diffusers import ZImagePipeline, ZImageTransformer2DModel, ZImageImg2ImgPipeline" >nul 2>&1
-if errorlevel 1 goto :eof
+"%CANDIDATE%" -c "import importlib.util,sys,typer,fastapi,uvicorn,PIL,safetensors,app.api.main; required=('torch','diffusers','transformers','accelerate'); missing=[name for name in required if importlib.util.find_spec(name) is None]; sys.exit(','.join(missing) if missing else 0)" >nul 2>&1
+if errorlevel 1 (
+  echo [runtime]   not usable
+  goto :eof
+)
 set "PYTHON_EXE=%CANDIDATE%"
+echo [runtime]   usable
 goto :eof
 
 :try_python_launcher_paths
@@ -236,7 +262,7 @@ for /f "tokens=* delims=" %%L in ('py -0p 2^>nul') do (
   set "PY_LAST="
   for %%P in (!PY_LINE!) do set "PY_LAST=%%P"
   if defined PY_LAST (
-    call :try_source_python "!PY_LAST!"
+    call :try_source_python "!PY_LAST!" "py launcher: !PY_LAST!"
     if defined PYTHON_EXE goto :eof
   )
 )

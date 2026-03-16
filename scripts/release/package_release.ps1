@@ -67,6 +67,7 @@ function Copy-CommonReleaseContent {
   Invoke-RobocopySafe -Source (Join-Path $RootDir "docs") -Destination (Join-Path $ReleaseDir "docs")
   Invoke-RobocopySafe -Source (Join-Path $RootDir "img") -Destination (Join-Path $ReleaseDir "img")
   Invoke-RobocopySafe -Source (Join-Path $RootDir "launch") -Destination (Join-Path $ReleaseDir "launch")
+  Invoke-RobocopySafe -Source (Join-Path $RootDir "readme_images") -Destination (Join-Path $ReleaseDir "readme_images")
   Invoke-RobocopySafe -Source (Join-Path $RootDir "requirements") -Destination (Join-Path $ReleaseDir "requirements")
   Invoke-RobocopySafe -Source (Join-Path $RootDir "scripts") -Destination (Join-Path $ReleaseDir "scripts")
   Invoke-RobocopySafe -Source (Join-Path $RootDir "models\\packs") -Destination (Join-Path $ReleaseDir "models\\packs") -ExtraArgs @(
@@ -78,8 +79,10 @@ function Copy-CommonReleaseContent {
 
   Copy-Item (Join-Path $RootDir "StartWeb.bat") -Destination (Join-Path $ReleaseDir "StartWeb.bat") -Force
   Copy-Item (Join-Path $RootDir "RunMeFirst.bat") -Destination (Join-Path $ReleaseDir "RunMeFirst.bat") -Force
+  Copy-Item (Join-Path $RootDir "UpdateApp.bat") -Destination (Join-Path $ReleaseDir "UpdateApp.bat") -Force
   Copy-Item (Join-Path $RootDir "README.md") -Destination (Join-Path $ReleaseDir "README.md") -Force
   Copy-Item (Join-Path $RootDir "pyproject.toml") -Destination (Join-Path $ReleaseDir "pyproject.toml") -Force
+  Copy-Item (Join-Path $RootDir "LICENSE") -Destination (Join-Path $ReleaseDir "LICENSE") -Force
 }
 
 $rootDir = (Resolve-Path (Join-Path $PSScriptRoot "..\\..")).Path
@@ -120,6 +123,13 @@ if ($Mode -eq "bundled") {
 Copy-CommonReleaseContent -RootDir $rootDir -ReleaseDir $releaseDir
 
 Set-Content -Path (Join-Path $releaseDir "release_lane.txt") -Value $Lane -Encoding ascii
+([ordered]@{
+  app_name = "JustRayzist"
+  version = $Version
+  lane = $Lane
+  mode = $Mode
+  generated_at = (Get-Date).ToString("s")
+} | ConvertTo-Json) | Set-Content -Path (Join-Path $releaseDir "release_manifest.json") -Encoding ascii
 Set-Content -Path (Join-Path $releaseDir "cuda_baseline.json") -Value @"
 {
   "generated_at": "$(Get-Date -Format s)",

@@ -7,7 +7,7 @@ The repository supports two Windows packaging flows:
 - `bootstrap`: ships the app, scripts, and metadata without bundling Python/CUDA runtime payloads
 - `bundled`: adds PyInstaller one-dir binaries for the CLI and web entrypoints
 
-Model weights are not bundled in either mode.
+Model weights are not bundled in either mode. Packaged releases also include `UpdateApp.bat`, `scripts\update_release.ps1`, `release_manifest.json`, and the local README image assets so installs can update in place from GitHub releases.
 
 ## Main Scripts
 
@@ -15,6 +15,7 @@ Model weights are not bundled in either mode.
 - `scripts\release\package_release.ps1`
 - `scripts\release\verify_repo_readiness.ps1`
 - `scripts\release\clean_legacy_artifacts.ps1`
+- `scripts\update_release.ps1`
 
 ## Build One-Dir Binaries
 

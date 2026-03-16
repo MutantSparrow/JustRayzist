@@ -6,21 +6,28 @@ $rootDir = (Resolve-Path (Join-Path $PSScriptRoot "..\\..")).Path
 $requiredPaths = @(
   "pyproject.toml",
   "README.md",
+  "LICENSE",
   "RunMeFirst.bat",
   "StartWeb.bat",
+  "UpdateApp.bat",
   "scripts\\bootstrap_env.ps1",
   "scripts\\fetch_model_assets.ps1",
   "scripts\\setup\\runmefirst.ps1",
   "scripts\\setup\\python_manifest.json",
   "scripts\\pyinstaller\\build_onedir.ps1",
   "scripts\\release\\package_release.ps1",
+  "scripts\\update_release.ps1",
   "requirements\\runtime-lock.txt",
   "requirements\\dev-lock.txt",
   "requirements\\build-lock.txt",
   "requirements\\torch-cu126.txt",
   "requirements\\torch-cu128.txt",
   "models\\packs\\modelpack.yaml.example",
-  "models\\upscaler\\README.md"
+  "models\\upscaler\\README.md",
+  "readme_images\\gallery_view.png",
+  "readme_images\\upscale_1.png",
+  "readme_images\\upscale_2.png",
+  "readme_images\\extra_creative_mode.png"
 )
 
 $errors = New-Object System.Collections.Generic.List[string]
@@ -48,7 +55,7 @@ foreach ($pattern in $trackedModelPatterns) {
   }
 }
 
-& git -C $rootDir check-ignore -q dist
+& git -C $rootDir check-ignore -q dist/
 if ($LASTEXITCODE -ne 0) {
   $warnings.Add("'dist' is not ignored by git; local artifacts may be accidentally committed.")
 }

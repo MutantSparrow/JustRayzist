@@ -99,6 +99,15 @@ Launcher flow:
 3. Select if the server will listen to LAN connections.
 4. Open `http://127.0.0.1:37717/`.
 
+## Update Packaged Install
+
+If you are using a packaged release folder instead of a git checkout, run:
+
+```powershell
+.\UpdateApp.bat
+```
+
+It checks the latest matching GitHub release for your current lane and mode, then updates the app in place without touching `models/`, `outputs/`, `data/`, `.venv/`, or your local lane marker.
 ## CLI Usage
 
 Environment variables (used for CLI)

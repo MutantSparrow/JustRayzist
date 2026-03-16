@@ -24,6 +24,15 @@ powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe C:
 powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1
 ```
 
+## Update a Packaged Install
+
+If you are running from a packaged release folder, not a git checkout:
+
+```powershell
+.\UpdateApp.bat
+```
+
+The updater preserves `models/`, `outputs/`, `data/`, `.venv/`, and `release_lane.txt` while replacing the shipped app files from the latest matching GitHub release.
 ## Sanity Checks
 
 ```powershell
