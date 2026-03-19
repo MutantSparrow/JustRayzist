@@ -8,7 +8,6 @@ import inspect
 import random
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -24,7 +23,7 @@ from app.core.memory import (
 from app.core.model_registry import ModelPack
 from app.core.pipeline_factory import LoadedZImagePipeline, build_zimage_pipeline
 from app.core.upscale import upscale_image
-from app.core.worker.types import GenerationRequest
+from app.core.worker.types import GenerationRequest, resolve_procedural_creativity
 
 LOGGER = logging.getLogger(__name__)
 
@@ -63,11 +62,12 @@ class GenerationResult:
     execution_mode: str | None = None
     cuda_total_bytes: int | None = None
     cuda_reserved_after_load_bytes: int | None = None
-    random_latent_enabled: bool = False
-    random_latent_file: str | None = None
-    random_latent_alpha: float | None = None
-    random_latent_preprocess: str | None = None
-    random_latent_scheduler_forced: bool = False
+    procedural_latent_enabled: bool = False
+    procedural_creativity: int = 0
+    procedural_latent_recipe: str | None = None
+    procedural_latent_alpha: float | None = None
+    procedural_latent_preprocess: str | None = None
+    procedural_latent_scheduler_forced: bool = False
 
     def telemetry_dict(self) -> dict[str, Any]:
         return {
@@ -110,15 +110,20 @@ class GenerationResult:
             "execution_mode": self.execution_mode,
             "cuda_total_bytes": self.cuda_total_bytes,
             "cuda_reserved_after_load_bytes": self.cuda_reserved_after_load_bytes,
-            "random_latent_enabled": self.random_latent_enabled,
-            "random_latent_file": self.random_latent_file,
-            "random_latent_alpha": self.random_latent_alpha,
-            "random_latent_preprocess": self.random_latent_preprocess,
-            "random_latent_scheduler_forced": self.random_latent_scheduler_forced,
+            "procedural_latent_enabled": self.procedural_latent_enabled,
+            "procedural_creativity": self.procedural_creativity,
+            "procedural_latent_recipe": self.procedural_latent_recipe,
+            "procedural_latent_alpha": self.procedural_latent_alpha,
+            "procedural_latent_preprocess": self.procedural_latent_preprocess,
+            "procedural_latent_scheduler_forced": self.procedural_latent_scheduler_forced,
         }
 
 
 class DiffusersZImageBackend:
+    _SCHEDULER_EULER = "euler"
+    _SCHEDULER_DPM_MANUAL = "dpm"
+    _SCHEDULER_DPM_EXP_LIGHT = "dpm_exp_light"
+    _SCHEDULER_DPM_DDIM = "dpm_ddim"
     _HIGH_MODE_AUTO = "auto"
     _HIGH_MODE_FULL_CUDA = "full_cuda"
     _HIGH_MODE_MODEL_OFFLOAD = "model_offload"
@@ -143,10 +148,11 @@ class DiffusersZImageBackend:
         "constrained": 512,
     }
     _REFINE_FALLBACK_STEP_FACTORS: tuple[float, ...] = (0.8, 0.64, 0.5)
-    _RANDOM_LATENT_KEY = "latent_tensor"
-    _RANDOM_LATENT_NOISE_MIX = 0.95
     _RANDOM_LATENT_STD_EPS = 1e-6
-    _RANDOM_LATENT_PREPROCESS = "normalize_mix"
+    _PROCEDURAL_LATENT_NOISE_MIX = 0.95
+    _PROCEDURAL_LATENT_NOISE_MIX_LEVEL3 = 0.91
+    _PROCEDURAL_LATENT_PREPROCESS = "procedural_normalize_mix"
+    _PROCEDURAL_LATENT_RECIPE_VERSION = "proc_v4"
 
     def __init__(self, settings: AppSettings, model_pack: ModelPack):
         self._settings = settings
@@ -306,7 +312,7 @@ class DiffusersZImageBackend:
             reserved_after if reserved_after is not None else reserved_bytes
         )
         after_ratio = self._ratio(self._cuda_reserved_after_load_bytes, self._cuda_total_bytes)
-        LOGGER.info(
+        LOGGER.debug(
             "Execution mode initialized: profile=%s mode=%s startup_reserved_ratio=%s reserved_after_load_ratio=%s total_vram_bytes=%s reserved_after_load_bytes=%s",
             profile_name,
             self._effective_execution_mode,
@@ -390,13 +396,28 @@ class DiffusersZImageBackend:
             )
 
     @staticmethod
-    def _normalize_scheduler_mode(mode: str | None) -> str:
+    def _normalize_scheduler_mode(mode: str | None) -> str | None:
         if mode is None:
-            return "euler"
+            return None
         normalized = str(mode).strip().lower()
         if normalized not in {"euler", "dpm"}:
             raise ValueError("Unsupported scheduler_mode. Use 'euler' or 'dpm'.")
         return normalized
+
+    @classmethod
+    def _resolve_generate_scheduler_mode(
+        cls,
+        *,
+        requested_mode: str | None,
+        procedural_creativity: int,
+    ) -> tuple[str, bool]:
+        if requested_mode is not None:
+            return requested_mode, False
+        if procedural_creativity <= 1:
+            return cls._SCHEDULER_EULER, False
+        if procedural_creativity == 2:
+            return cls._SCHEDULER_DPM_EXP_LIGHT, False
+        return cls._SCHEDULER_DPM_DDIM, False
 
     def _apply_scheduler_mode(self, pipe: Any, mode: str) -> str:
         pipe_id = id(pipe)
@@ -418,21 +439,36 @@ class DiffusersZImageBackend:
                 use_dynamic_shifting=current_config.get("use_dynamic_shifting", False),
             )
 
-        if mode == "dpm":
-            flow_shift = current_config.get("flow_shift")
-            if flow_shift is None:
-                flow_shift = current_config.get("shift", 3.0)
-            scheduler = DPMSolverMultistepScheduler.from_config(
-                current_config,
-                algorithm_type="sde-dpmsolver++",
-                solver_order=2,
-                prediction_type="flow_prediction",
-                use_flow_sigmas=True,
-                flow_shift=flow_shift,
-                use_dynamic_shifting=True,
-                time_shift_type="exponential",
-                timestep_spacing="leading",
-            )
+        if mode in {
+            self._SCHEDULER_DPM_MANUAL,
+            self._SCHEDULER_DPM_EXP_LIGHT,
+            self._SCHEDULER_DPM_DDIM,
+        }:
+            base_flow_shift = current_config.get("flow_shift")
+            if base_flow_shift is None:
+                base_flow_shift = current_config.get("shift", 3.0)
+            dpm_kwargs: dict[str, Any] = {
+                "algorithm_type": "sde-dpmsolver++",
+                "solver_order": 2,
+                "prediction_type": "flow_prediction",
+                "use_flow_sigmas": True,
+            }
+            if mode == self._SCHEDULER_DPM_EXP_LIGHT:
+                dpm_kwargs["flow_shift"] = min(float(base_flow_shift), 1.75)
+                dpm_kwargs["use_dynamic_shifting"] = True
+                dpm_kwargs["time_shift_type"] = "exponential"
+                dpm_kwargs["timestep_spacing"] = "leading"
+            elif mode == self._SCHEDULER_DPM_DDIM:
+                dpm_kwargs["flow_shift"] = max(float(base_flow_shift), 3.0)
+                dpm_kwargs["use_dynamic_shifting"] = True
+                dpm_kwargs["time_shift_type"] = "exponential"
+                dpm_kwargs["timestep_spacing"] = "leading"
+            else:
+                dpm_kwargs["flow_shift"] = float(base_flow_shift)
+                dpm_kwargs["use_dynamic_shifting"] = True
+                dpm_kwargs["time_shift_type"] = "exponential"
+                dpm_kwargs["timestep_spacing"] = "leading"
+            scheduler = DPMSolverMultistepScheduler.from_config(current_config, **dpm_kwargs)
             is_img2img_pipe = "img2img" in pipe.__class__.__name__.lower()
             if is_img2img_pipe and not hasattr(scheduler, "scale_noise"):
                 LOGGER.warning(
@@ -447,9 +483,9 @@ class DiffusersZImageBackend:
         pipe.scheduler = scheduler
         self._active_scheduler_mode_by_pipe[pipe_id] = mode
         if mode != requested_mode:
-            LOGGER.info("Scheduler mode requested=%s applied=%s", requested_mode, mode)
+            LOGGER.debug("Scheduler mode requested=%s applied=%s", requested_mode, mode)
         else:
-            LOGGER.info("Scheduler mode set to %s", mode)
+            LOGGER.debug("Scheduler mode set to %s", mode)
         return mode
 
     def _ensure_loaded(self) -> LoadedZImagePipeline:
@@ -492,7 +528,7 @@ class DiffusersZImageBackend:
                 target_mode = self._default_execution_mode_for_profile()
             applied_mode = self._apply_pipe_execution_mode(pipe, target_mode)
             if applied_mode != target_mode:
-                LOGGER.info(
+                LOGGER.debug(
                     "Img2img pipe execution mode adjusted from %s to %s.",
                     target_mode,
                     applied_mode,
@@ -527,88 +563,15 @@ class DiffusersZImageBackend:
             )
         return latent_height, latent_width
 
-    def _list_random_latent_files(self) -> list[Path]:
-        latent_dir = self._settings.paths.root_dir / "img" / "latents"
-        if not latent_dir.exists():
-            raise ValueError(f"Random latent directory not found: {latent_dir}")
-        files = sorted(
-            path
-            for path in latent_dir.rglob("*.latent")
-            if path.is_file()
-        )
-        if not files:
-            raise ValueError(
-                f"No .latent files found in random latent directory: {latent_dir}"
-            )
-        return files
-
-    @staticmethod
-    def _pick_random_latent_file(latent_files: list[Path], seed: int | None) -> Path:
-        if not latent_files:
-            raise ValueError("No latent files available for selection.")
-        if seed is None:
-            index = random.SystemRandom().randrange(len(latent_files))
-        else:
-            index = int(seed) % len(latent_files)
-        return latent_files[index]
-
     @classmethod
-    def _load_random_latent_tensor(
-        cls,
-        *,
-        latent_file: Path,
-        expected_channels: int,
-        target_height: int,
-        target_width: int,
-        torch_module: Any,
-    ) -> Any:
-        from safetensors.torch import load_file
-
-        try:
-            tensors = load_file(str(latent_file), device="cpu")
-        except Exception as exc:
-            raise ValueError(f"Failed to read latent file '{latent_file.name}': {exc}") from exc
-
-        latent = tensors.get(cls._RANDOM_LATENT_KEY)
-        if latent is None:
-            available = ", ".join(sorted(tensors.keys()))
-            raise ValueError(
-                f"Latent file '{latent_file.name}' is missing '{cls._RANDOM_LATENT_KEY}'. "
-                f"Available keys: {available or '(none)'}."
-            )
-        if getattr(latent, "ndim", 0) != 4:
-            raise ValueError(
-                f"Latent file '{latent_file.name}' must have rank-4 tensor, got shape "
-                f"{tuple(getattr(latent, 'shape', ()))!r}."
-            )
-        if int(latent.shape[0]) != 1:
-            raise ValueError(
-                f"Latent file '{latent_file.name}' must have batch size 1, got {int(latent.shape[0])}."
-            )
-        if int(latent.shape[1]) != int(expected_channels):
-            raise ValueError(
-                f"Latent file '{latent_file.name}' has {int(latent.shape[1])} channels, "
-                f"expected {int(expected_channels)}."
-            )
-        if not torch_module.is_floating_point(latent):
-            latent = latent.float()
-
-        if int(latent.shape[2]) != int(target_height) or int(latent.shape[3]) != int(target_width):
-            latent = torch_module.nn.functional.interpolate(
-                latent,
-                size=(int(target_height), int(target_width)),
-                mode="bilinear",
-                align_corners=False,
-            )
-        return latent.contiguous()
-
-    @classmethod
-    def _normalize_and_mix_random_latent(
+    def _normalize_and_mix_latent(
         cls,
         *,
         latent_tensor: Any,
         seed: int | None,
         torch_module: Any,
+        noise_mix: float,
+        preprocess: str,
     ) -> tuple[Any, float, str]:
         # Match diffusion start-noise expectations while preserving latent-file influence.
         latent = latent_tensor.to(dtype=torch_module.float32, device="cpu")
@@ -626,7 +589,7 @@ class DiffusersZImageBackend:
             device=normalized.device,
         )
 
-        noise_mix = max(0.0, min(1.0, float(cls._RANDOM_LATENT_NOISE_MIX)))
+        noise_mix = max(0.0, min(1.0, float(noise_mix)))
         latent_mix = 1.0 - noise_mix
         mixed = (latent_mix * normalized) + (noise_mix * noise)
         mixed_mean = mixed.mean(dim=(1, 2, 3), keepdim=True)
@@ -634,48 +597,918 @@ class DiffusersZImageBackend:
             cls._RANDOM_LATENT_STD_EPS
         )
         mixed = (mixed - mixed_mean) / mixed_std
-        return mixed.contiguous(), noise_mix, cls._RANDOM_LATENT_PREPROCESS
+        return mixed.contiguous(), noise_mix, preprocess
 
-    def _resolve_random_latents(
+    @staticmethod
+    def _sample_scalar(
+        torch_module: Any,
+        *,
+        generator: Any,
+        low: float,
+        high: float,
+    ) -> float:
+        value = torch_module.rand((1,), generator=generator, dtype=torch_module.float32).item()
+        return float(low + ((high - low) * value))
+
+    @staticmethod
+    def _sample_int(
+        torch_module: Any,
+        *,
+        generator: Any,
+        low: int,
+        high: int,
+    ) -> int:
+        return int(
+            torch_module.randint(
+                int(low),
+                int(high) + 1,
+                (1,),
+                generator=generator,
+                dtype=torch_module.int64,
+            ).item()
+        )
+
+    @staticmethod
+    def _blur2d(torch_module: Any, tensor: Any, kernel_size: int) -> Any:
+        kernel = max(1, int(kernel_size))
+        if kernel <= 1:
+            return tensor
+        if kernel % 2 == 0:
+            kernel += 1
+        pad = kernel // 2
+        padded = torch_module.nn.functional.pad(tensor, (pad, pad, pad, pad), mode="reflect")
+        return torch_module.nn.functional.avg_pool2d(padded, kernel_size=kernel, stride=1)
+
+    @classmethod
+    def _build_grain_stack(
+        cls,
+        *,
+        torch_module: Any,
+        generator: Any,
+        channels: int,
+        target_height: int,
+        target_width: int,
+        base_divisor: int,
+        blur_kernel: int,
+        micro_freq_low: float,
+        micro_freq_high: float,
+    ) -> Any:
+        base_h = max(6, target_height // max(2, int(base_divisor)))
+        base_w = max(6, target_width // max(2, int(base_divisor)))
+        base = torch_module.nn.functional.interpolate(
+            torch_module.randn((1, channels, base_h, base_w), generator=generator, dtype=torch_module.float32),
+            size=(target_height, target_width),
+            mode="bicubic",
+            align_corners=False,
+        )
+        fine = torch_module.randn(
+            (1, channels, target_height, target_width),
+            generator=generator,
+            dtype=torch_module.float32,
+        )
+        fine = fine - cls._blur2d(torch_module, fine, blur_kernel + 2)
+        fine = cls._blur2d(torch_module, fine, blur_kernel)
+
+        yy = torch_module.linspace(-1.0, 1.0, target_height, dtype=torch_module.float32).view(1, 1, target_height, 1)
+        xx = torch_module.linspace(-1.0, 1.0, target_width, dtype=torch_module.float32).view(1, 1, 1, target_width)
+        theta = torch_module.rand((1, channels, 1, 1), generator=generator, dtype=torch_module.float32) * (
+            2.0 * math.pi
+        )
+        freq = micro_freq_low + (
+            torch_module.rand((1, channels, 1, 1), generator=generator, dtype=torch_module.float32)
+            * (micro_freq_high - micro_freq_low)
+        )
+        phase = torch_module.rand((1, channels, 1, 1), generator=generator, dtype=torch_module.float32) * (
+            2.0 * math.pi
+        )
+        micro = torch_module.sin((freq * ((torch_module.cos(theta) * xx) + (torch_module.sin(theta) * yy))) + phase)
+        micro = micro + 0.5 * torch_module.cos((freq * 0.73 * xx) - phase)
+        return (0.55 * base) + (0.30 * fine) + (0.15 * micro)
+
+    @classmethod
+    def _build_level3_shape_bands(
+        cls,
+        *,
+        torch_module: Any,
+        generator: Any,
+        target_height: int,
+        target_width: int,
+        warped_x: Any,
+        warped_y: Any,
+        shape_count: int,
+        clean_noise_gain: float,
+        soft_blur_kernel: int,
+    ) -> tuple[Any, int]:
+        band_fields = torch_module.zeros((1, 3, target_height, target_width), dtype=torch_module.float32)
+        applied_shapes = 0
+        families = ("circle", "diamond", "box", "triangle", "wedge")
+        dominant_band = cls._sample_int(torch_module, generator=generator, low=0, high=2)
+        for shape_index in range(int(shape_count)):
+            family = families[shape_index % len(families)]
+            band_index = (
+                dominant_band
+                if shape_index < max(1, int(shape_count) - 1)
+                else cls._sample_int(torch_module, generator=generator, low=0, high=2)
+            )
+            center_x = cls._sample_scalar(torch_module, generator=generator, low=-0.60, high=0.60)
+            center_y = cls._sample_scalar(torch_module, generator=generator, low=-0.60, high=0.60)
+            scale_x = cls._sample_scalar(torch_module, generator=generator, low=0.42, high=1.05)
+            scale_y = cls._sample_scalar(torch_module, generator=generator, low=0.42, high=1.05)
+            rotation = cls._sample_scalar(torch_module, generator=generator, low=0.0, high=2.0 * math.pi)
+            amplitude = cls._sample_scalar(torch_module, generator=generator, low=-1.45, high=1.45)
+            if band_index == dominant_band:
+                amplitude *= 1.18
+            is_hard = (shape_index % 3) != 1
+            hardness = cls._sample_scalar(
+                torch_module,
+                generator=generator,
+                low=8.0 if is_hard else 2.2,
+                high=16.0 if is_hard else 4.6,
+            )
+
+            local_x = warped_x - center_x
+            local_y = warped_y - center_y
+            cos_r = math.cos(rotation)
+            sin_r = math.sin(rotation)
+            rot_x = ((cos_r * local_x) + (sin_r * local_y)) / max(scale_x, 1e-3)
+            rot_y = ((-sin_r * local_x) + (cos_r * local_y)) / max(scale_y, 1e-3)
+
+            if family == "circle":
+                raw_field = 1.0 - torch_module.sqrt((rot_x**2) + (rot_y**2) + 1e-6)
+            elif family == "diamond":
+                raw_field = 1.0 - (rot_x.abs() + rot_y.abs())
+            elif family == "box":
+                raw_field = 1.0 - torch_module.maximum(rot_x.abs(), rot_y.abs())
+            elif family == "triangle":
+                ax, ay = 0.0, -1.0
+                bx, by = -1.0, 1.0
+                cx, cy = 1.0, 1.0
+                denom = ((by - cy) * (ax - cx)) + ((cx - bx) * (ay - cy))
+                w1 = (((by - cy) * (rot_x - cx)) + ((cx - bx) * (rot_y - cy))) / denom
+                w2 = (((cy - ay) * (rot_x - cx)) + ((ax - cx) * (rot_y - cy))) / denom
+                w3 = 1.0 - w1 - w2
+                raw_field = torch_module.minimum(torch_module.minimum(w1, w2), w3)
+            else:
+                radius = torch_module.sqrt((rot_x**2) + (rot_y**2) + 1e-6)
+                angle = torch_module.atan2(rot_y, rot_x)
+                center_angle = cls._sample_scalar(torch_module, generator=generator, low=-math.pi, high=math.pi)
+                width = cls._sample_scalar(torch_module, generator=generator, low=0.45, high=1.35)
+                angular_delta = torch_module.atan2(
+                    torch_module.sin(angle - center_angle),
+                    torch_module.cos(angle - center_angle),
+                ).abs()
+                raw_field = torch_module.minimum(1.0 - radius, width - angular_delta)
+
+            shaped = torch_module.tanh(hardness * raw_field)
+            if not is_hard:
+                shaped = cls._blur2d(torch_module, shaped, soft_blur_kernel)
+            contribution = amplitude * shaped
+            current_band = band_fields[:, band_index : band_index + 1, :, :]
+            if is_hard or band_index == dominant_band:
+                band_fields[:, band_index : band_index + 1, :, :] = torch_module.where(
+                    contribution.abs() >= current_band.abs(),
+                    contribution,
+                    current_band,
+                )
+            else:
+                band_fields[:, band_index : band_index + 1, :, :] = current_band + contribution
+            applied_shapes += 1
+
+        clean_noise = torch_module.randn(
+            (1, 3, target_height, target_width),
+            generator=generator,
+            dtype=torch_module.float32,
+        )
+        clean_noise = cls._blur2d(torch_module, clean_noise, soft_blur_kernel)
+        band_fields = band_fields + (clean_noise_gain * clean_noise)
+        band_fields = (0.92 * band_fields) + (0.08 * cls._blur2d(torch_module, band_fields, soft_blur_kernel + 2))
+        return band_fields, applied_shapes
+
+    @staticmethod
+    def _quantize_level3_band_fields(
+        torch_module: Any,
+        *,
+        band_fields: Any,
+    ) -> tuple[Any, int]:
+        palette = torch_module.tensor(
+            [
+                [1.00, 1.00, 1.00],    # white
+                [-1.00, -1.00, -1.00], # black
+                [1.00, -0.88, -0.92],  # red
+                [-0.94, 1.00, 1.00],   # cyan
+                [1.00, 0.96, -0.90],   # yellow
+                [-0.92, -0.88, 1.00],  # blue
+            ],
+            dtype=torch_module.float32,
+        )
+        normalized = torch_module.tanh(1.55 * band_fields[:, :3, :, :])
+        palette_view = palette.view(1, 6, 3, 1, 1)
+        distances = ((normalized.unsqueeze(1) - palette_view) ** 2).sum(dim=2)
+        labels = distances.argmin(dim=1)
+        one_hot = torch_module.nn.functional.one_hot(labels, num_classes=6).permute(0, 3, 1, 2).to(
+            dtype=torch_module.float32
+        )
+        quantized = torch_module.einsum("bkhw,kc->bchw", one_hot, palette)
+        return quantized.contiguous(), int(palette.shape[0])
+
+    @classmethod
+    def _build_rigid_primitive_mask(
+        cls,
+        *,
+        torch_module: Any,
+        generator: Any,
+        coords_x: Any,
+        coords_y: Any,
+        family: str,
+        center_x: float,
+        center_y: float,
+        scale_x: float,
+        scale_y: float,
+        rotation: float,
+    ) -> Any:
+        local_x = coords_x - center_x
+        local_y = coords_y - center_y
+        cos_r = math.cos(rotation)
+        sin_r = math.sin(rotation)
+        rot_x = ((cos_r * local_x) + (sin_r * local_y)) / max(scale_x, 1e-3)
+        rot_y = ((-sin_r * local_x) + (cos_r * local_y)) / max(scale_y, 1e-3)
+
+        if family == "circle":
+            raw_field = 1.0 - torch_module.sqrt((rot_x**2) + (rot_y**2) + 1e-6)
+        elif family == "box":
+            raw_field = 1.0 - torch_module.maximum(rot_x.abs(), rot_y.abs())
+        elif family == "triangle":
+            ax, ay = 0.0, -1.0
+            bx, by = -1.0, 1.0
+            cx, cy = 1.0, 1.0
+            denom = ((by - cy) * (ax - cx)) + ((cx - bx) * (ay - cy))
+            w1 = (((by - cy) * (rot_x - cx)) + ((cx - bx) * (rot_y - cy))) / denom
+            w2 = (((cy - ay) * (rot_x - cx)) + ((ax - cx) * (rot_y - cy))) / denom
+            w3 = 1.0 - w1 - w2
+            raw_field = torch_module.minimum(torch_module.minimum(w1, w2), w3)
+        elif family == "trapeze":
+            top_half = cls._sample_scalar(torch_module, generator=generator, low=0.28, high=0.72)
+            y_norm = (rot_y + 1.0) * 0.5
+            half_width = top_half + ((1.0 - top_half) * y_norm)
+            raw_field = torch_module.minimum(1.0 - rot_y.abs(), half_width - rot_x.abs())
+        elif family == "lozenge":
+            raw_field = 1.0 - ((0.78 * rot_x.abs()) + (1.22 * rot_y.abs()))
+        else:
+            raise ValueError(f"Unsupported primitive family: {family}")
+
+        return (raw_field >= 0.0).to(dtype=torch_module.float32)
+
+    @classmethod
+    def _apply_level3_final_overlays(
+        cls,
+        *,
+        torch_module: Any,
+        generator: Any,
+        latent: Any,
+        coords_x: Any,
+        coords_y: Any,
+        overlay_count: int,
+    ) -> tuple[Any, int]:
+        overlaid = latent.clone()
+        families = ("circle", "box", "triangle", "trapeze", "lozenge")
+        applied = 0
+
+        for index in range(int(overlay_count)):
+            family = families[index % len(families)]
+            center_x = cls._sample_scalar(torch_module, generator=generator, low=-0.58, high=0.58)
+            center_y = cls._sample_scalar(torch_module, generator=generator, low=-0.58, high=0.58)
+            scale_x = cls._sample_scalar(torch_module, generator=generator, low=0.30, high=0.82)
+            scale_y = cls._sample_scalar(torch_module, generator=generator, low=0.30, high=0.82)
+            rotation = cls._sample_scalar(torch_module, generator=generator, low=0.0, high=2.0 * math.pi)
+            alpha = cls._sample_scalar(torch_module, generator=generator, low=0.70, high=0.85)
+            polarity = 1.0 if cls._sample_int(torch_module, generator=generator, low=0, high=1) == 1 else -1.0
+            mask = cls._build_rigid_primitive_mask(
+                torch_module=torch_module,
+                generator=generator,
+                coords_x=coords_x,
+                coords_y=coords_y,
+                family=family,
+                center_x=center_x,
+                center_y=center_y,
+                scale_x=scale_x,
+                scale_y=scale_y,
+                rotation=rotation,
+            )
+            if mask.max().item() <= 0.0:
+                continue
+
+            alpha_mask = alpha * mask
+            target_value = polarity * torch_module.ones_like(overlaid)
+            overlaid = (1.0 - alpha_mask) * overlaid + (alpha_mask * target_value)
+            applied += 1
+
+        return overlaid.contiguous(), applied
+
+    @classmethod
+    def _procedural_profile(cls, creativity: int) -> dict[str, Any]:
+        profiles: dict[int, dict[str, Any]] = {
+            1: {
+                "warp": (0.04, 0.12),
+                "low_gain": (0.26, 0.46),
+                "mid_gain": (0.16, 0.34),
+                "stripe_gain": (0.03, 0.09),
+                "stripe_freq": (2.6, 6.4),
+                "flow_gain": (0.03, 0.09),
+                "flow_freq": (3.0, 7.2),
+                "blob_count": (1, 2),
+                "blob_sigma": (0.18, 0.40),
+                "blob_amplitude": (-0.45, 0.45),
+                "blob_gain": (0.03, 0.10),
+                "channel_gain": (0.94, 1.06),
+                "channel_weight": (0.92, 1.08),
+                "mono_mix": (0.84, 0.95),
+                "sign_flip_prob": 0.05,
+                "blotch_gain": (0.0, 0.03),
+                "ring_gain": (0.0, 0.02),
+                "split_gain": (0.0, 0.02),
+                "low_div": 16,
+                "mid_div": 4,
+                "warp_div": 9,
+                "blotch_div": 3,
+                "band_div": 6,
+                "band_gain": (0.0, 0.02),
+                "band_sharpness": (1.1, 1.8),
+                "grain_base_div": 10,
+                "grain_blur_kernel": 3,
+                "grain_freq": (8.0, 16.0),
+                "grain_gain": (0.24, 0.42),
+                "contrast_power": (1.02, 1.12),
+            },
+            2: {
+                "warp": (0.10, 0.24),
+                "low_gain": (0.55, 0.90),
+                "mid_gain": (0.18, 0.40),
+                "stripe_gain": (0.08, 0.24),
+                "stripe_freq": (1.5, 6.0),
+                "flow_gain": (0.08, 0.20),
+                "flow_freq": (2.0, 6.5),
+                "blob_count": (3, 5),
+                "blob_sigma": (0.22, 0.60),
+                "blob_amplitude": (-1.0, 1.0),
+                "blob_gain": (0.14, 0.40),
+                "channel_gain": (0.72, 1.32),
+                "channel_weight": (0.70, 1.35),
+                "mono_mix": (0.10, 0.25),
+                "sign_flip_prob": 0.35,
+                "blotch_gain": (0.18, 0.42),
+                "ring_gain": (0.0, 0.10),
+                "split_gain": (0.0, 0.12),
+                "low_div": 12,
+                "mid_div": 6,
+                "warp_div": 10,
+                "blotch_div": 6,
+                "band_div": 9,
+                "band_gain": (0.06, 0.22),
+                "band_sharpness": (1.6, 2.6),
+                "cell_count": (10, 18),
+                "cell_gain": (0.06, 0.16),
+                "cell_amplitude": (-0.85, 0.85),
+                "contrast_power": (1.10, 1.26),
+            },
+            3: {
+                "warp": (0.24, 0.42),
+                "low_gain": (0.75, 1.15),
+                "mid_gain": (0.22, 0.55),
+                "stripe_gain": (0.16, 0.42),
+                "stripe_freq": (1.0, 7.5),
+                "flow_gain": (0.14, 0.34),
+                "flow_freq": (2.0, 7.5),
+                "blob_count": (4, 8),
+                "blob_sigma": (0.28, 0.82),
+                "blob_amplitude": (-1.4, 1.4),
+                "blob_gain": (0.28, 0.70),
+                "channel_gain": (0.45, 1.85),
+                "channel_weight": (0.45, 1.75),
+                "mono_mix": (0.00, 0.06),
+                "sign_flip_prob": 0.72,
+                "blotch_gain": (0.46, 0.96),
+                "ring_gain": (0.18, 0.45),
+                "split_gain": (0.28, 0.68),
+                "low_div": 9,
+                "mid_div": 7,
+                "warp_div": 12,
+                "blotch_div": 12,
+                "band_div": 14,
+                "band_gain": (0.28, 0.70),
+                "band_sharpness": (2.4, 4.0),
+                "shape_count": (1, 3),
+                "shape_gain": (1.02, 1.55),
+                "shape_noise_gain": (0.00, 0.02),
+                "shape_blur_kernel": (3, 3),
+                "overlay_count": (1, 3),
+                "contrast_power": (1.35, 1.72),
+            },
+        }
+        if creativity not in profiles:
+            raise ValueError("procedural_creativity must be between 1 and 3.")
+        return profiles[creativity]
+
+    @classmethod
+    def _build_procedural_latent_tensor(
+        cls,
+        *,
+        expected_channels: int,
+        target_height: int,
+        target_width: int,
+        seed: int | None,
+        creativity: int,
+        torch_module: Any,
+    ) -> tuple[Any, str]:
+        profile = cls._procedural_profile(creativity)
+        base_seed = int(seed if seed is not None else random.SystemRandom().randrange(1, 2_147_483_647))
+        generator = cls._build_generator(torch_module, "cpu", base_seed ^ 0x5A17C0DE)
+        if generator is None:
+            generator = cls._build_generator(
+                torch_module,
+                "cpu",
+                random.SystemRandom().randrange(1, 2_147_483_647),
+            )
+
+        latent_shape = (1, int(expected_channels), int(target_height), int(target_width))
+        latent = torch_module.zeros(latent_shape, dtype=torch_module.float32, device="cpu")
+
+        yy = torch_module.linspace(-1.0, 1.0, target_height, dtype=torch_module.float32).view(1, 1, target_height, 1)
+        xx = torch_module.linspace(-1.0, 1.0, target_width, dtype=torch_module.float32).view(1, 1, 1, target_width)
+
+        low_h = max(4, target_height // int(profile["low_div"]))
+        low_w = max(4, target_width // int(profile["low_div"]))
+        mid_h = max(8, target_height // int(profile["mid_div"]))
+        mid_w = max(8, target_width // int(profile["mid_div"]))
+        warp_h = max(6, target_height // int(profile["warp_div"]))
+        warp_w = max(6, target_width // int(profile["warp_div"]))
+
+        low_noise = torch_module.nn.functional.interpolate(
+            torch_module.randn((1, expected_channels, low_h, low_w), generator=generator, dtype=torch_module.float32),
+            size=(target_height, target_width),
+            mode="bicubic",
+            align_corners=False,
+        )
+        mid_noise = torch_module.nn.functional.interpolate(
+            torch_module.randn((1, expected_channels, mid_h, mid_w), generator=generator, dtype=torch_module.float32),
+            size=(target_height, target_width),
+            mode="bicubic",
+            align_corners=False,
+        )
+        warp_x = torch_module.nn.functional.interpolate(
+            torch_module.randn((1, 1, warp_h, warp_w), generator=generator, dtype=torch_module.float32),
+            size=(target_height, target_width),
+            mode="bicubic",
+            align_corners=False,
+        ).tanh()
+        warp_y = torch_module.nn.functional.interpolate(
+            torch_module.randn((1, 1, warp_h, warp_w), generator=generator, dtype=torch_module.float32),
+            size=(target_height, target_width),
+            mode="bicubic",
+            align_corners=False,
+        ).tanh()
+
+        warp_strength = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["warp"][0],
+            high=profile["warp"][1],
+        )
+        warped_x = xx + (warp_strength * warp_x)
+        warped_y = yy + (warp_strength * warp_y)
+
+        low_gain = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["low_gain"][0],
+            high=profile["low_gain"][1],
+        )
+        mid_gain = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["mid_gain"][0],
+            high=profile["mid_gain"][1],
+        )
+        latent = latent + (low_gain * low_noise) + (mid_gain * mid_noise)
+
+        theta = torch_module.rand((1, expected_channels, 1, 1), generator=generator, dtype=torch_module.float32) * (
+            2.0 * math.pi
+        )
+        stripe_freq = (
+            profile["stripe_freq"][0]
+            + (
+                torch_module.rand((1, expected_channels, 1, 1), generator=generator, dtype=torch_module.float32)
+                * (profile["stripe_freq"][1] - profile["stripe_freq"][0])
+            )
+        )
+        stripe_phase = torch_module.rand(
+            (1, expected_channels, 1, 1),
+            generator=generator,
+            dtype=torch_module.float32,
+        ) * (2.0 * math.pi)
+        stripe_wave = torch_module.sin(
+            (stripe_freq * ((torch_module.cos(theta) * warped_x) + (torch_module.sin(theta) * warped_y)))
+            + stripe_phase
+        )
+        stripe_gain = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["stripe_gain"][0],
+            high=profile["stripe_gain"][1],
+        )
+        latent = latent + (stripe_gain * stripe_wave)
+
+        flow_freq_x = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["flow_freq"][0],
+            high=profile["flow_freq"][1],
+        )
+        flow_freq_y = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["flow_freq"][0],
+            high=profile["flow_freq"][1],
+        )
+        flow_phase_x = cls._sample_scalar(torch_module, generator=generator, low=0.0, high=2.0 * math.pi)
+        flow_phase_y = cls._sample_scalar(torch_module, generator=generator, low=0.0, high=2.0 * math.pi)
+        channel_phase = torch_module.rand(
+            (1, expected_channels, 1, 1),
+            generator=generator,
+            dtype=torch_module.float32,
+        ) * (2.0 * math.pi)
+        flow_wave = torch_module.sin((flow_freq_x * warped_x) + flow_phase_x + channel_phase) + torch_module.cos(
+            (flow_freq_y * warped_y) + flow_phase_y - channel_phase
+        )
+        flow_gain = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["flow_gain"][0],
+            high=profile["flow_gain"][1],
+        )
+        latent = latent + (flow_gain * flow_wave)
+
+        blob_count = cls._sample_int(
+            torch_module,
+            generator=generator,
+            low=profile["blob_count"][0],
+            high=profile["blob_count"][1],
+        )
+        blob_field = torch_module.zeros((1, 1, target_height, target_width), dtype=torch_module.float32)
+        for _ in range(blob_count):
+            center_x = cls._sample_scalar(torch_module, generator=generator, low=-0.80, high=0.80)
+            center_y = cls._sample_scalar(torch_module, generator=generator, low=-0.80, high=0.80)
+            sigma = cls._sample_scalar(
+                torch_module,
+                generator=generator,
+                low=profile["blob_sigma"][0],
+                high=profile["blob_sigma"][1],
+            )
+            amplitude = cls._sample_scalar(
+                torch_module,
+                generator=generator,
+                low=profile["blob_amplitude"][0],
+                high=profile["blob_amplitude"][1],
+            )
+            distance_sq = ((warped_x - center_x) ** 2) + ((warped_y - center_y) ** 2)
+            blob_field = blob_field + (amplitude * torch_module.exp(-distance_sq / max(0.02, 2.0 * sigma * sigma)))
+        blob_gain = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["blob_gain"][0],
+            high=profile["blob_gain"][1],
+        )
+        blob_channel_weight = (
+            profile["channel_weight"][0]
+            + (
+                torch_module.rand((1, expected_channels, 1, 1), generator=generator, dtype=torch_module.float32)
+                * (profile["channel_weight"][1] - profile["channel_weight"][0])
+            )
+        )
+        latent = latent + (blob_gain * blob_field * blob_channel_weight)
+
+        blotch_h = max(4, target_height // int(profile["blotch_div"]))
+        blotch_w = max(4, target_width // int(profile["blotch_div"]))
+        blotch_field = torch_module.nn.functional.interpolate(
+            torch_module.randn((1, 1, blotch_h, blotch_w), generator=generator, dtype=torch_module.float32),
+            size=(target_height, target_width),
+            mode="bicubic",
+            align_corners=False,
+        ).tanh()
+        blotch_gain = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["blotch_gain"][0],
+            high=profile["blotch_gain"][1],
+        )
+        latent = latent + (blotch_gain * blotch_field * blob_channel_weight)
+
+        cell_count = 0
+        grain_gain = 0.0
+        shape_count = 0
+        shape_gain = 0.0
+        quantized_palette_size = 0
+        overlay_count = 0
+
+        if creativity == 1:
+            grain_stack = cls._build_grain_stack(
+                torch_module=torch_module,
+                generator=generator,
+                channels=expected_channels,
+                target_height=target_height,
+                target_width=target_width,
+                base_divisor=int(profile["grain_base_div"]),
+                blur_kernel=int(profile["grain_blur_kernel"]),
+                micro_freq_low=profile["grain_freq"][0],
+                micro_freq_high=profile["grain_freq"][1],
+            )
+            grain_gain = cls._sample_scalar(
+                torch_module,
+                generator=generator,
+                low=profile["grain_gain"][0],
+                high=profile["grain_gain"][1],
+            )
+            latent = latent + (grain_gain * grain_stack)
+            band_fields = torch_module.zeros((1, 3, target_height, target_width), dtype=torch_module.float32)
+        elif creativity == 3:
+            sampled_shape_count = cls._sample_int(
+                torch_module,
+                generator=generator,
+                low=profile["shape_count"][0],
+                high=profile["shape_count"][1],
+            )
+            shape_noise_gain = cls._sample_scalar(
+                torch_module,
+                generator=generator,
+                low=profile["shape_noise_gain"][0],
+                high=profile["shape_noise_gain"][1],
+            )
+            shape_blur_kernel = cls._sample_int(
+                torch_module,
+                generator=generator,
+                low=profile["shape_blur_kernel"][0],
+                high=profile["shape_blur_kernel"][1],
+            )
+            band_fields, shape_count = cls._build_level3_shape_bands(
+                torch_module=torch_module,
+                generator=generator,
+                target_height=target_height,
+                target_width=target_width,
+                warped_x=warped_x,
+                warped_y=warped_y,
+                shape_count=sampled_shape_count,
+                clean_noise_gain=shape_noise_gain,
+                soft_blur_kernel=shape_blur_kernel,
+            )
+            band_fields, quantized_palette_size = cls._quantize_level3_band_fields(torch_module, band_fields=band_fields)
+            sampled_overlay_count = cls._sample_int(
+                torch_module,
+                generator=generator,
+                low=profile["overlay_count"][0],
+                high=profile["overlay_count"][1],
+            )
+            overlay_count = sampled_overlay_count
+            shape_gain = cls._sample_scalar(
+                torch_module,
+                generator=generator,
+                low=profile["shape_gain"][0],
+                high=profile["shape_gain"][1],
+            )
+        else:
+            cell_count = cls._sample_int(
+                torch_module,
+                generator=generator,
+                low=profile["cell_count"][0],
+                high=profile["cell_count"][1],
+            )
+            cell_distances: list[Any] = []
+            cell_values: list[float] = []
+            for _ in range(cell_count):
+                center_x = cls._sample_scalar(torch_module, generator=generator, low=-0.95, high=0.95)
+                center_y = cls._sample_scalar(torch_module, generator=generator, low=-0.95, high=0.95)
+                cell_distances.append(((warped_x - center_x) ** 2) + ((warped_y - center_y) ** 2))
+                cell_values.append(
+                    cls._sample_scalar(
+                        torch_module,
+                        generator=generator,
+                        low=profile["cell_amplitude"][0],
+                        high=profile["cell_amplitude"][1],
+                    )
+                )
+            cell_distance_stack = torch_module.cat(cell_distances, dim=1)
+            nearest_cell = cell_distance_stack.argmin(dim=1, keepdim=True)
+            cell_value_tensor = torch_module.tensor(cell_values, dtype=torch_module.float32).view(1, cell_count, 1, 1)
+            cell_field = torch_module.gather(
+                cell_value_tensor.expand(1, cell_count, target_height, target_width),
+                dim=1,
+                index=nearest_cell,
+            )
+            cell_gain = cls._sample_scalar(
+                torch_module,
+                generator=generator,
+                low=profile["cell_gain"][0],
+                high=profile["cell_gain"][1],
+            )
+            latent = latent + (cell_gain * cell_field)
+
+            band_h = max(3, target_height // int(profile["band_div"]))
+            band_w = max(3, target_width // int(profile["band_div"]))
+            band_fields = torch_module.nn.functional.interpolate(
+                torch_module.randn((1, 3, band_h, band_w), generator=generator, dtype=torch_module.float32),
+                size=(target_height, target_width),
+                mode="bicubic",
+                align_corners=False,
+            )
+            band_sharpness = cls._sample_scalar(
+                torch_module,
+                generator=generator,
+                low=profile["band_sharpness"][0],
+                high=profile["band_sharpness"][1],
+            )
+            band_fields = torch_module.tanh(band_sharpness * band_fields)
+
+        band_gain = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["band_gain"][0],
+            high=profile["band_gain"][1],
+        )
+        band_slices = ((0, 5), (5, 10), (10, expected_channels))
+        for band_index, (start, end) in enumerate(band_slices):
+            if start >= expected_channels:
+                break
+            end = min(end, expected_channels)
+            latent[:, start:end, :, :] = (
+                latent[:, start:end, :, :]
+                + (
+                    (band_gain if creativity != 3 else shape_gain)
+                    * band_fields[:, band_index : band_index + 1, :, :]
+                )
+            )
+
+        ring_gain = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["ring_gain"][0],
+            high=profile["ring_gain"][1],
+        )
+        if ring_gain > 0.0:
+            ring_count = 2 if creativity >= 3 else 1
+            ring_field = torch_module.zeros((1, 1, target_height, target_width), dtype=torch_module.float32)
+            for _ in range(ring_count):
+                center_x = cls._sample_scalar(torch_module, generator=generator, low=-0.75, high=0.75)
+                center_y = cls._sample_scalar(torch_module, generator=generator, low=-0.75, high=0.75)
+                sigma = cls._sample_scalar(torch_module, generator=generator, low=0.22, high=0.72)
+                ring_freq = cls._sample_scalar(
+                    torch_module,
+                    generator=generator,
+                    low=1.2,
+                    high=3.4 if creativity >= 3 else 2.4,
+                )
+                radius = torch_module.sqrt(((warped_x - center_x) ** 2) + ((warped_y - center_y) ** 2))
+                envelope = torch_module.exp(-(radius**2) / max(0.04, 2.0 * sigma * sigma))
+                ring_field = ring_field + (torch_module.cos((radius * ring_freq * math.pi)) * envelope)
+            latent = latent + (ring_gain * ring_field * blob_channel_weight)
+
+        split_gain = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["split_gain"][0],
+            high=profile["split_gain"][1],
+        )
+        if split_gain > 0.0:
+            split_theta = cls._sample_scalar(torch_module, generator=generator, low=0.0, high=2.0 * math.pi)
+            split_bias = cls._sample_scalar(torch_module, generator=generator, low=-0.35, high=0.35)
+            split_sharpness = 4.0 if creativity >= 3 else 2.2
+            split_plane = (
+                (torch_module.cos(torch_module.tensor(split_theta)) * warped_x)
+                + (torch_module.sin(torch_module.tensor(split_theta)) * warped_y)
+                + split_bias
+            )
+            split_field = torch_module.tanh(split_sharpness * split_plane)
+            latent = latent + (split_gain * split_field * blob_channel_weight)
+
+        channel_gain = (
+            profile["channel_gain"][0]
+            + (
+                torch_module.rand((1, expected_channels, 1, 1), generator=generator, dtype=torch_module.float32)
+                * (profile["channel_gain"][1] - profile["channel_gain"][0])
+            )
+        )
+        sign_flip_prob = float(profile["sign_flip_prob"])
+        channel_sign = torch_module.where(
+            torch_module.rand((1, expected_channels, 1, 1), generator=generator, dtype=torch_module.float32)
+            < sign_flip_prob,
+            -torch_module.ones((1, expected_channels, 1, 1), dtype=torch_module.float32),
+            torch_module.ones((1, expected_channels, 1, 1), dtype=torch_module.float32),
+        )
+        latent = latent * channel_gain * channel_sign
+
+        mono_mix = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["mono_mix"][0],
+            high=profile["mono_mix"][1],
+        )
+        if mono_mix > 0.0:
+            mono_field = latent.mean(dim=1, keepdim=True).expand_as(latent)
+            latent = (mono_mix * mono_field) + ((1.0 - mono_mix) * latent)
+
+        contrast_power = cls._sample_scalar(
+            torch_module,
+            generator=generator,
+            low=profile["contrast_power"][0],
+            high=profile["contrast_power"][1],
+        )
+        latent = torch_module.sign(latent) * torch_module.pow(latent.abs().clamp_min(1e-6), contrast_power)
+
+        if creativity == 3 and overlay_count > 0:
+            latent, overlay_count = cls._apply_level3_final_overlays(
+                torch_module=torch_module,
+                generator=generator,
+                latent=latent,
+                coords_x=xx,
+                coords_y=yy,
+                overlay_count=overlay_count,
+            )
+
+        band_perms: list[Any] = []
+        for start, end in band_slices:
+            if start >= expected_channels:
+                break
+            end = min(end, expected_channels)
+            band_perms.append(torch_module.randperm(end - start, generator=generator, dtype=torch_module.int64) + start)
+        perm = torch_module.cat(band_perms, dim=0)
+        latent = latent[:, perm, :, :].contiguous()
+
+        recipe = (
+            f"{cls._PROCEDURAL_LATENT_RECIPE_VERSION}"
+            f"/lvl{creativity}"
+            f"/warp{warp_strength:.2f}"
+            f"/low{low_gain:.2f}"
+            f"/mid{mid_gain:.2f}"
+            f"/stripe{stripe_gain:.2f}"
+            f"/flow{flow_gain:.2f}"
+            f"/blobs{blob_count}"
+            f"/grain{grain_gain:.2f}"
+            f"/cells{cell_count}"
+            f"/shapes{shape_count}"
+            f"/quant{quantized_palette_size}"
+            f"/overlay_final{overlay_count}"
+            f"/mono{mono_mix:.2f}"
+            f"/blotch{blotch_gain:.2f}"
+            f"/band{band_gain if creativity != 3 else shape_gain:.2f}"
+            f"/ring{ring_gain:.2f}"
+            f"/split{split_gain:.2f}"
+        )
+        return latent.contiguous(), recipe
+
+    def _resolve_procedural_latents(
         self,
         *,
         pipe: Any,
         request: GenerationRequest,
         torch_module: Any,
     ) -> tuple[Any | None, str | None, float | None, str | None]:
-        if not request.use_random_latent:
+        creativity = resolve_procedural_creativity(procedural_creativity=request.procedural_creativity)
+        if creativity <= 0:
             return None, None, None, None
 
-        latent_files = self._list_random_latent_files()
-        latent_file = self._pick_random_latent_file(latent_files, request.seed)
         latent_height, latent_width = self._resolve_latent_spatial_shape(
             pipe=pipe,
             width=request.width,
             height=request.height,
         )
         expected_channels = int(getattr(getattr(pipe, "transformer", None), "in_channels", 16))
-        latent_tensor = self._load_random_latent_tensor(
-            latent_file=latent_file,
+        latent_tensor, recipe = self._build_procedural_latent_tensor(
             expected_channels=expected_channels,
             target_height=latent_height,
             target_width=latent_width,
+            seed=request.seed,
+            creativity=creativity,
             torch_module=torch_module,
         )
-        latent_tensor, alpha, preprocess = self._normalize_and_mix_random_latent(
+        noise_mix = (
+            self._PROCEDURAL_LATENT_NOISE_MIX_LEVEL3
+            if creativity >= 3
+            else self._PROCEDURAL_LATENT_NOISE_MIX
+        )
+        latent_tensor, alpha, preprocess = self._normalize_and_mix_latent(
             latent_tensor=latent_tensor,
             seed=request.seed,
             torch_module=torch_module,
+            noise_mix=noise_mix,
+            preprocess=self._PROCEDURAL_LATENT_PREPROCESS,
         )
-        LOGGER.info(
-            "Random latent injection enabled: file=%s seed=%s target_latent_shape=%sx%s preprocess=%s alpha=%.3f",
-            latent_file.name,
+        LOGGER.debug(
+            "Procedural latent injection enabled: recipe=%s seed=%s target_latent_shape=%sx%s preprocess=%s alpha=%.3f",
+            recipe,
             request.seed if request.seed is not None else "none",
             latent_width,
             latent_height,
             preprocess,
             alpha,
         )
-        return latent_tensor, latent_file.name, alpha, preprocess
+        return latent_tensor, recipe, alpha, preprocess
 
     @staticmethod
     def _resolve_module_device(module: Any) -> Any:
@@ -805,7 +1638,7 @@ class DiffusersZImageBackend:
         tokenizer = getattr(pipe, "tokenizer", None)
         text_encoder = getattr(pipe, "text_encoder", None)
         if tokenizer is None or text_encoder is None:
-            LOGGER.info("Prompt enhancement skipped: text_encoder/tokenizer unavailable.")
+            LOGGER.debug("Prompt enhancement skipped: text_encoder/tokenizer unavailable.")
             return prompt
 
         rewrite_input = self._build_rewrite_prompt(tokenizer, prompt)
@@ -850,7 +1683,7 @@ class DiffusersZImageBackend:
             "too_few_letters",
         }
         if rejection_reason in retryable_reasons:
-            LOGGER.info(
+            LOGGER.debug(
                 "Prompt enhancement retrying with sampled decode after %s.",
                 rejection_reason,
             )
@@ -873,7 +1706,7 @@ class DiffusersZImageBackend:
             rejection_reason = retry_reason
 
         if rejection_reason in {"empty", "too_short", "shorter_than_input", "unchanged"}:
-            LOGGER.info(
+            LOGGER.debug(
                 "Prompt enhancement skipped (%s); using original prompt.",
                 rejection_reason,
             )
@@ -895,7 +1728,7 @@ class DiffusersZImageBackend:
             return False
         try:
             pipe.enable_model_cpu_offload()
-            LOGGER.info(
+            LOGGER.debug(
                 "Switched to model CPU offload for prompt enhancement (sequential offload is restored before image generation)."
             )
             return True
@@ -1333,16 +2166,14 @@ class DiffusersZImageBackend:
     def generate(self, request: GenerationRequest) -> GenerationResult:
         loaded = self._ensure_loaded()
         pipe = loaded.pipeline
+        effective_procedural_creativity = resolve_procedural_creativity(
+            procedural_creativity=request.procedural_creativity
+        )
         requested_scheduler_mode = self._normalize_scheduler_mode(request.scheduler_mode)
-        effective_scheduler_mode = requested_scheduler_mode
-        random_latent_scheduler_forced = False
-        if request.use_random_latent and requested_scheduler_mode != "dpm":
-            effective_scheduler_mode = "dpm"
-            random_latent_scheduler_forced = True
-            LOGGER.info(
-                "Random latent generation forcing scheduler_mode from %s to dpm (DDIM-uniform mapping).",
-                requested_scheduler_mode,
-            )
+        effective_scheduler_mode, procedural_latent_scheduler_forced = self._resolve_generate_scheduler_mode(
+            requested_mode=requested_scheduler_mode,
+            procedural_creativity=effective_procedural_creativity,
+        )
         scheduler_mode = self._apply_scheduler_mode(pipe, effective_scheduler_mode)
 
         import torch
@@ -1354,16 +2185,21 @@ class DiffusersZImageBackend:
             else self._settings.runtime_profile.guidance_scale_default
         )
         generator = self._build_generator(torch, "cuda" if loaded.device == "cuda" else "cpu", request.seed)
-        (
-            random_latents,
-            random_latent_file,
-            random_latent_alpha,
-            random_latent_preprocess,
-        ) = self._resolve_random_latents(
-            pipe=pipe,
-            request=request,
-            torch_module=torch,
-        )
+        procedural_latents = None
+        procedural_latent_recipe = None
+        procedural_latent_alpha = None
+        procedural_latent_preprocess = None
+        if effective_procedural_creativity > 0:
+            (
+                procedural_latents,
+                procedural_latent_recipe,
+                procedural_latent_alpha,
+                procedural_latent_preprocess,
+            ) = self._resolve_procedural_latents(
+                pipe=pipe,
+                request=request,
+                torch_module=torch,
+            )
 
         prompt_original, prompt_effective, prompt_enhanced = self._resolve_effective_prompt(
             pipe=pipe,
@@ -1384,7 +2220,7 @@ class DiffusersZImageBackend:
                 num_inference_steps=steps,
                 guidance_scale=guidance_scale,
                 generator=generator,
-                latents=random_latents,
+                latents=procedural_latents,
             )
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -1413,11 +2249,12 @@ class DiffusersZImageBackend:
             execution_mode=self._effective_execution_mode,
             cuda_total_bytes=self._cuda_total_bytes,
             cuda_reserved_after_load_bytes=self._cuda_reserved_after_load_bytes,
-            random_latent_enabled=request.use_random_latent,
-            random_latent_file=random_latent_file,
-            random_latent_alpha=random_latent_alpha,
-            random_latent_preprocess=random_latent_preprocess,
-            random_latent_scheduler_forced=random_latent_scheduler_forced,
+            procedural_latent_enabled=effective_procedural_creativity > 0,
+            procedural_creativity=effective_procedural_creativity,
+            procedural_latent_recipe=procedural_latent_recipe,
+            procedural_latent_alpha=procedural_latent_alpha,
+            procedural_latent_preprocess=procedural_latent_preprocess,
+            procedural_latent_scheduler_forced=procedural_latent_scheduler_forced,
         )
 
     def upscale_and_refine(self, input_image: object, request: GenerationRequest) -> GenerationResult:
@@ -1427,7 +2264,7 @@ class DiffusersZImageBackend:
         loaded = self._ensure_loaded()
         txt_pipe = loaded.pipeline
         img_pipe = self._ensure_img2img_pipe()
-        scheduler_mode = self._normalize_scheduler_mode(request.scheduler_mode)
+        scheduler_mode = self._normalize_scheduler_mode(request.scheduler_mode) or self._SCHEDULER_EULER
         scheduler_mode = self._apply_scheduler_mode(img_pipe, scheduler_mode)
 
         import torch

@@ -60,7 +60,7 @@ def _load_text_encoder_from_gguf(
 
     common_kwargs = {
         "local_files_only": local_files_only,
-        "torch_dtype": dtype,
+        "dtype": dtype,
         "gguf_file": staged_name,
         "output_loading_info": True,
     }
@@ -73,7 +73,7 @@ def _load_text_encoder_from_gguf(
     for loader_name, loader in loaders:
         model = None
         try:
-            LOGGER.info(
+            LOGGER.debug(
                 "Loading text encoder GGUF with %s from %s (file=%s)",
                 loader_name,
                 config_dir,
@@ -90,7 +90,7 @@ def _load_text_encoder_from_gguf(
                         f"{loader_name} rejected due to high missing ratio "
                         f"({len(missing)}/{total}, {missing_ratio:.1%})."
                     )
-                LOGGER.info(
+                LOGGER.debug(
                     "Accepted text encoder GGUF loader %s (missing=%d/%d).",
                     loader_name,
                     len(missing),
@@ -205,7 +205,7 @@ def build_zimage_pipeline(pack: ModelPack, profile: RuntimeProfile) -> LoadedZIm
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = _resolve_dtype(torch, device)
     kwargs: dict[str, Any] = {
-        "torch_dtype": dtype,
+        "dtype": dtype,
         "local_files_only": True,
     }
 
@@ -219,7 +219,7 @@ def build_zimage_pipeline(pack: ModelPack, profile: RuntimeProfile) -> LoadedZIm
         )
 
     if transformer_component and transformer_component.file_format == "gguf":
-        LOGGER.info(
+        LOGGER.debug(
             "Loading transformer component from %s (%s)",
             transformer_component.path,
             transformer_component.file_format,
@@ -229,14 +229,14 @@ def build_zimage_pipeline(pack: ModelPack, profile: RuntimeProfile) -> LoadedZIm
             str(transformer_component.path),
             quantization_config=quantization_config,
             config=str(pack.pipeline_config_dir / "transformer"),
-            torch_dtype=dtype,
+            dtype=dtype,
             local_files_only=True,
         )
         kwargs["transformer"] = transformer
     elif transformer_component and transformer_component.file_format == "safetensors":
-        LOGGER.info("Loading transformer component from %s", transformer_component.path)
+        LOGGER.debug("Loading transformer component from %s", transformer_component.path)
         if _is_prefixed_fused_zimage_transformer(transformer_component.path):
-            LOGGER.info("Detected fused/prefixed Z-Image checkpoint format; applying key conversion.")
+            LOGGER.debug("Detected fused/prefixed Z-Image checkpoint format; applying key conversion.")
             transformer = _load_prefixed_fused_zimage_transformer(
                 checkpoint_path=transformer_component.path,
                 config_dir=pack.pipeline_config_dir / "transformer",
@@ -246,32 +246,32 @@ def build_zimage_pipeline(pack: ModelPack, profile: RuntimeProfile) -> LoadedZIm
             transformer = ZImageTransformer2DModel.from_single_file(
                 str(transformer_component.path),
                 config=str(pack.pipeline_config_dir / "transformer"),
-                torch_dtype=dtype,
+                dtype=dtype,
                 local_files_only=True,
             )
         transformer = transformer.to(dtype=dtype)
         kwargs["transformer"] = transformer
 
     if vae_component and vae_component.file_format == "gguf":
-        LOGGER.info("Loading VAE component from %s (%s)", vae_component.path, vae_component.file_format)
+        LOGGER.debug("Loading VAE component from %s (%s)", vae_component.path, vae_component.file_format)
         quantization_config = GGUFQuantizationConfig(compute_dtype=dtype)
         try:
             vae = AutoencoderKL.from_single_file(
                 str(vae_component.path),
                 quantization_config=quantization_config,
                 config=str(pack.pipeline_config_dir / "vae"),
-                torch_dtype=dtype,
+                dtype=dtype,
                 local_files_only=True,
             )
         except Exception as exc:
             raise ValueError(f"Failed to load GGUF VAE component: {exc}") from exc
         kwargs["vae"] = vae
     elif vae_component and vae_component.file_format == "safetensors":
-        LOGGER.info("Loading VAE component from %s", vae_component.path)
+        LOGGER.debug("Loading VAE component from %s", vae_component.path)
         vae = AutoencoderKL.from_single_file(
             str(vae_component.path),
             config=str(pack.pipeline_config_dir / "vae"),
-            torch_dtype=dtype,
+            dtype=dtype,
             local_files_only=True,
         )
         kwargs["vae"] = vae
@@ -284,7 +284,7 @@ def build_zimage_pipeline(pack: ModelPack, profile: RuntimeProfile) -> LoadedZIm
             local_files_only=True,
         )
 
-    LOGGER.info("Building Z-Image pipeline from local config: %s", pack.pipeline_config_dir)
+    LOGGER.debug("Building Z-Image pipeline from local config: %s", pack.pipeline_config_dir)
     pipeline = ZImagePipeline.from_pretrained(str(pack.pipeline_config_dir), **kwargs)
     if hasattr(pipeline, "set_progress_bar_config"):
         pipeline.set_progress_bar_config(disable=True)

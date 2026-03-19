@@ -80,17 +80,11 @@
     </div>
 
     <div class="setting-group">
-      <label>Scheduler/Sampler</label>
-      <button id="scheduler-sampler-button" class="toggle-seed-button" type="button">
-        SCHEDULER/SAMPLER: OFF (EULER)
-      </button>
-    </div>
-
-    <div class="setting-group">
-      <label>Extra Creative (beta)</label>
-      <button id="random-latent-button" class="toggle-seed-button" type="button">
-        EXTRA CREATIVE (BETA): OFF
-      </button>
+      <label for="procedural-latent-slider">Creative Mode</label>
+      <div class="slider-setting">
+        <input id="procedural-latent-slider" class="slider-setting-input" type="range" min="0" max="3" step="1" value="0" />
+        <div id="procedural-latent-value" class="slider-setting-value">OFF</div>
+      </div>
     </div>
 
     <div class="setting-group">
@@ -109,8 +103,37 @@
   <main class="gallery-area">
     <p id="gallery-count" class="gallery-count">0 images</p>
     <section class="gallery-tools">
-      <input id="filter-input" type="text" placeholder="Filter by prompt keywords">
-      <button id="reverse-order-button" class="reverse-button" type="button">Newest First</button>
+      <div class="gallery-tools-left">
+        <input id="filter-input" type="text" placeholder="Filter by prompt keywords">
+        <button id="reverse-order-button" class="reverse-button" type="button">Newest First</button>
+      </div>
+      <div class="gallery-tools-right">
+        <div class="gallery-density" aria-label="Images per row">
+          <span class="gallery-density-icon gallery-density-icon-small" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <rect x="6" y="6" width="5" height="5"></rect>
+              <rect x="13" y="6" width="5" height="5"></rect>
+              <rect x="6" y="13" width="5" height="5"></rect>
+              <rect x="13" y="13" width="5" height="5"></rect>
+            </svg>
+          </span>
+          <input id="gallery-density-slider" class="gallery-density-slider" type="range" min="3" max="8" step="1" value="4" aria-label="Images per row">
+          <span class="gallery-density-icon gallery-density-icon-large" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <rect x="4" y="4" width="16" height="16"></rect>
+            </svg>
+          </span>
+        </div>
+        <button id="multi-select-toggle" class="reverse-button" type="button" aria-pressed="false">Multiselection</button>
+        <div id="multi-select-actions" class="multi-select-actions hidden" aria-live="polite">
+          <span id="multi-select-count" class="multi-select-count">0 selected</span>
+          <button id="bulk-upscale-button" class="tile-upscale" type="button" disabled>Queue Upscale</button>
+          <button id="bulk-download-button" class="tile-download" type="button" disabled>Download ZIP</button>
+          <button id="bulk-delete-button" class="tile-delete bulk-delete-button" type="button" disabled aria-label="Delete selected images" title="Delete selected images">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 7h2v8h-2v-8zm4 0h2v8h-2v-8zM7 10h2v8H7v-8z"/></svg>
+          </button>
+        </div>
+      </div>
     </section>
     <p id="status-line" class="status-line">Ready.</p>
     <section id="gallery" class="gallery"></section>
@@ -145,6 +168,18 @@
       <div class="confirm-actions">
         <button id="confirm-modal-cancel" class="close-button" type="button">Cancel</button>
         <button id="confirm-modal-confirm" class="danger-button" type="button">Delete</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="zip-progress-modal" class="confirm-modal hidden" aria-hidden="true">
+    <div class="confirm-dialog zip-progress-dialog">
+      <p class="confirm-message">Zipping in progress</p>
+      <div class="zip-progress-body">
+        <div class="tile-spinner zip-progress-spinner">Preparing ZIP...</div>
+      </div>
+      <div class="confirm-actions">
+        <button id="zip-progress-cancel" class="close-button" type="button">Cancel</button>
       </div>
     </div>
   </section>

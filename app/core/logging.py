@@ -11,6 +11,10 @@ LOG_LEVEL_ENV = "JUSTRAYZIST_LOG_LEVEL"
 VERBOSE_LOGS_ENV = "JUSTRAYZIST_VERBOSE_LOGS"
 NOISY_LIBRARY_LOGGERS = (
     "uvicorn.access",
+    "diffusers",
+    "transformers",
+    "accelerate",
+    "torch",
     "httpx",
     "httpcore",
     "urllib3",

@@ -4,6 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def resolve_procedural_creativity(*, procedural_creativity: int | None = 0) -> int:
+    level = int(procedural_creativity or 0)
+    if level < 0 or level > 3:
+        raise ValueError("procedural_creativity must be between 0 and 3.")
+    return level
+
+
 @dataclass(frozen=True)
 class GenerationRequest:
     prompt: str
@@ -14,7 +21,7 @@ class GenerationRequest:
     seed: int | None = None
     scheduler_mode: str | None = None
     enhance_prompt: bool = False
-    use_random_latent: bool = False
+    procedural_creativity: int = 0
     refine_strength: float | None = None
     refine_steps: int | None = None
     refine_tile_size: int | None = None

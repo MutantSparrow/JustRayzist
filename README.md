@@ -9,7 +9,7 @@ Got 35GB of space on a drive somewhere and an RTX card? <br>
 A lightweight, easy to install and easier to run app that just runs.<br>
 Built around my Z-Image-Turbo finetune, it gives you a fast image generation platform, available through a local web page, command line or via local API so your favorite AI agents can use it.<br>
 It generates images up to 1536x1536 and can upscale up to double that in less than a minute. <br>
-It even has a built in prompt enhancement feature, a proper image browser, importable client galleries, and an Extra Creative mode when you want it to get a little weird.<br><br>
+It even has a built in prompt enhancement feature, a proper image browser, importable client galleries, and a Creative Mode slider when you want it to get a little weird.<br><br>
 <img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
 <img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
@@ -22,20 +22,20 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 - local model packs (`.safetensors` / `.gguf`)
 - Runtime profiles `constrained`, `balanced`, `high` support different VRAM classes
 - custom mixed-model fast upscale flow. It's not the best in the world, but it's the best at that speed!
-- Extra Creative (beta) mode for more unpredictable latent-space outputs
+- Creative Mode slider (`0-3`) for Light, Medium, and Extreme generation variants
 - RunMeFirst bootstrap installation and auto-repair
 - Run it locally or open it to LAN access
 - Multi-user LAN workspaces with per-user gallery isolation and import support
 - Model pack system to support custom Z-Image-Turbo models, VAEs or encoder models
 - PNG metadata writing and SQLite gallery indexing
 - Web gallery with filtering, fullscreen, compare-hold for upscaled images, queued jobs, and `/API` testing page
-- CLI workflows for generation, mixed-model upscaling, soak runs, soak reporting, and SeedVR2 benchmarks
+- CLI workflows for generation, mixed-model upscaling, soak runs, soak reporting, SeedVR2 benchmarks, and procedural latent previews
 - Lane-aware bootstrap packaging (`cu126`, `cu128`) with GPU driver preflight
 
 The app is designed to run 100% without runtime internet dependencies once installed locally.
 
 <p align="center">
-  <img width="900" alt="Extra Creative mode example" src="readme_images/extra_creative_mode.png" />
+  <img width="900" alt="Creative Mode example" src="readme_images/extra_creative_mode.png" />
 </p>
 
 ## Tech Stack
@@ -163,12 +163,20 @@ python -m app.cli.main seedvr2-benchmark --profiles high,balanced,constrained
 python -m app.cli.main seedvr2-blend-benchmark --profile high --alphas 25,50,75
 ```
 
+Procedural latent preview:
+
+```powershell
+python -m app.cli.main procedural-latent-preview --count 16 --seed-start 1 --creativity 2
+```
+
 ## API Summary
 
 Base URL: `http://127.0.0.1:37717`
 
 Supported generation cap: `1536x1536`.
 Client-scoped routes require `X-JustRayzist-Client`.
+Use `procedural_creativity` (`0-3`) to control Creative Mode.
+In the main UI, scheduler behavior is derived automatically from Creative Mode. `scheduler_mode` remains optional for raw API and CLI calls.
 Direct image fetches can use `?client_id=<client-id>` if you are linking them into a page or tool.
 
 - `GET /health`
@@ -200,7 +208,26 @@ Content-Type: application/json
   "seed": 123456,
   "scheduler_mode": "euler",
   "enhance_prompt": false,
-  "use_random_latent": false
+  "procedural_creativity": 0
+}
+```
+
+### API Example: Creative Mode
+
+```http
+POST /generate
+X-JustRayzist-Client: desktop-client
+Content-Type: application/json
+
+{
+  "prompt": "A cinematic skyline at sunrise",
+  "width": 1024,
+  "height": 1024,
+  "pack": "Rayzist_bf16",
+  "seed": 123456,
+  "scheduler_mode": "dpm",
+  "enhance_prompt": false,
+  "procedural_creativity": 2
 }
 ```
 

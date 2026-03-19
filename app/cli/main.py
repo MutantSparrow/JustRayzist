@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import csv
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -69,6 +70,178 @@ def _resolve_cli_path(root: Path, candidate: Path) -> Path:
     if candidate.is_absolute():
         return candidate
     return (root / candidate).resolve()
+
+
+def _preview_output_dir(root: Path, stem: str) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    path = root / stem / timestamp
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _latent_stats(tensor) -> dict[str, float]:
+    return {
+        "mean": float(tensor.mean().item()),
+        "std": float(tensor.std(unbiased=False).item()),
+        "min": float(tensor.min().item()),
+        "max": float(tensor.max().item()),
+    }
+
+
+def _normalize_tensor_to_uint8(tensor, *, low_quantile: float = 0.02, high_quantile: float = 0.98):
+    import torch
+
+    channel = tensor.detach().to(dtype=torch.float32, device="cpu")
+    flat = channel.reshape(-1)
+    low = float(torch.quantile(flat, low_quantile).item())
+    high = float(torch.quantile(flat, high_quantile).item())
+    if not math.isfinite(low) or not math.isfinite(high) or high <= low:
+        low = float(channel.min().item())
+        high = float(channel.max().item())
+    if not math.isfinite(low) or not math.isfinite(high) or high <= low:
+        normalized = torch.zeros_like(channel, dtype=torch.float32)
+    else:
+        normalized = ((channel - low) / (high - low)).clamp(0.0, 1.0)
+    return (normalized * 255.0).round().to(dtype=torch.uint8)
+
+
+def _build_latent_composite_image(latent_tensor, size: int):
+    from PIL import Image
+    import torch
+
+    latent = latent_tensor.detach().to(dtype=torch.float32, device="cpu").squeeze(0)
+    groups = (
+        latent[0:5].mean(dim=0),
+        latent[5:10].mean(dim=0),
+        latent[10:16].mean(dim=0),
+    )
+    rgb = torch.stack(
+        [_normalize_tensor_to_uint8(channel) for channel in groups],
+        dim=-1,
+    ).numpy()
+    image = Image.fromarray(rgb, mode="RGB")
+    return image.resize((size, size), Image.Resampling.NEAREST)
+
+
+def _build_latent_channel_grid_image(latent_tensor, tile_size: int):
+    from PIL import Image, ImageDraw, ImageFont
+
+    latent = latent_tensor.detach().to(dtype=latent_tensor.dtype, device="cpu").squeeze(0)
+    channels = int(latent.shape[0])
+    columns = 4
+    rows = int(math.ceil(channels / columns))
+    label_h = 16
+    canvas = Image.new("RGB", (columns * tile_size, rows * (tile_size + label_h)), color=(18, 20, 24))
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.load_default()
+
+    for index in range(channels):
+        row = index // columns
+        col = index % columns
+        x = col * tile_size
+        y = row * (tile_size + label_h)
+        tile = _normalize_tensor_to_uint8(latent[index]).numpy()
+        image = Image.fromarray(tile, mode="L").convert("RGB")
+        image = image.resize((tile_size, tile_size), Image.Resampling.NEAREST)
+        canvas.paste(image, (x, y))
+        draw.text((x + 4, y + tile_size + 2), f"ch {index:02d}", fill=(210, 210, 210), font=font)
+    return canvas
+
+
+def _draw_wrapped_text(draw, text: str, *, x: int, y: int, width: int, fill, font, line_height: int) -> int:
+    words = text.split()
+    if not words:
+        return y
+    current = words[0]
+    lines: list[str] = []
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        if draw.textlength(candidate, font=font) <= width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    for line in lines:
+        draw.text((x, y), line, fill=fill, font=font)
+        y += line_height
+    return y
+
+
+def _build_procedural_preview_panel(
+    *,
+    seed: int,
+    creativity: int,
+    recipe: str,
+    width: int,
+    height: int,
+    raw_latent,
+    mixed_latent,
+):
+    from PIL import Image, ImageDraw, ImageFont
+
+    composite_size = 320
+    grid_tile_size = 72
+    panel_w = 760
+    panel_h = 420
+    bg = (18, 20, 24)
+    fg = (240, 240, 240)
+    subtle = (170, 175, 184)
+    panel = Image.new("RGB", (panel_w, panel_h), color=bg)
+    draw = ImageDraw.Draw(panel)
+    font = ImageFont.load_default()
+    small_font = ImageFont.load_default()
+
+    composite = _build_latent_composite_image(raw_latent, composite_size)
+    grid = _build_latent_channel_grid_image(raw_latent, grid_tile_size)
+    panel.paste(composite, (20, 54))
+    panel.paste(grid, (380, 54))
+
+    draw.text(
+        (20, 16),
+        f"Procedural latent preview | creativity {creativity} | seed {seed} | output {width}x{height}",
+        fill=fg,
+        font=font,
+    )
+    draw.text((20, 34), recipe, fill=subtle, font=small_font)
+    draw.text((20, 382), f"raw: {_latent_stats(raw_latent)}", fill=subtle, font=small_font)
+    draw.text((380, 382), f"mixed: {_latent_stats(mixed_latent)}", fill=subtle, font=small_font)
+    return panel, composite
+
+
+def _build_preview_contact_sheet(entries: list[dict], *, title: str):
+    from PIL import Image, ImageDraw, ImageFont
+
+    columns = min(4, max(1, len(entries)))
+    rows = int(math.ceil(len(entries) / columns))
+    thumb_size = 220
+    gutter = 18
+    label_h = 58
+    header_h = 54
+    width = gutter + (columns * (thumb_size + gutter))
+    height = header_h + gutter + rows * (thumb_size + label_h + gutter)
+    bg = (18, 20, 24)
+    fg = (240, 240, 240)
+    subtle = (170, 175, 184)
+    sheet = Image.new("RGB", (width, height), color=bg)
+    draw = ImageDraw.Draw(sheet)
+    font = ImageFont.load_default()
+    small_font = ImageFont.load_default()
+
+    draw.text((gutter, 18), title, fill=fg, font=font)
+    for index, entry in enumerate(entries):
+        row = index // columns
+        col = index % columns
+        x = gutter + col * (thumb_size + gutter)
+        y = header_h + gutter + row * (thumb_size + label_h + gutter)
+        thumb = entry["composite"].resize((thumb_size, thumb_size), Image.Resampling.NEAREST)
+        sheet.paste(thumb, (x, y))
+        draw.rectangle((x - 1, y - 1, x + thumb_size, y + thumb_size), outline=(65, 70, 80), width=1)
+        draw.text((x, y + thumb_size + 8), f"seed {entry['seed']}", fill=fg, font=font)
+        recipe = str(entry["recipe"])
+        short_recipe = recipe if len(recipe) <= 36 else f"{recipe[:33]}..."
+        draw.text((x, y + thumb_size + 24), short_recipe, fill=subtle, font=small_font)
+    return sheet
 
 
 @cli.callback()
@@ -241,6 +414,130 @@ def generate(
     if result.prompt_enhanced:
         typer.echo(f"Prompt enhanced: {result.prompt_effective}")
     typer.echo(f"Metrics: {metrics_file}")
+
+
+@cli.command("procedural-latent-preview")
+def procedural_latent_preview(
+    width: int = typer.Option(1024, "--width"),
+    height: int = typer.Option(1024, "--height"),
+    count: int = typer.Option(16, "--count", min=1, max=64),
+    seed_start: int = typer.Option(1, "--seed-start"),
+    creativity: int = typer.Option(1, "--creativity", min=1, max=3),
+    output_dir: Optional[Path] = typer.Option(None, "--output-dir"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+) -> None:
+    import torch
+
+    from app.core.backends.diffusers_zimage import DiffusersZImageBackend
+
+    if width <= 0 or height <= 0:
+        typer.echo("Width and height must be positive.")
+        raise typer.Exit(code=1)
+
+    settings = load_settings(profile_name=profile)
+    root_output = settings.paths.outputs_dir.resolve()
+    resolved_output_dir = (
+        _resolve_cli_path(Path.cwd(), output_dir)
+        if output_dir is not None
+        else _preview_output_dir(root_output, "procedural-latent-preview")
+    )
+    resolved_output_dir.mkdir(parents=True, exist_ok=True)
+
+    latent_pipe_stub = type("LatentPipeStub", (), {"vae_scale_factor": 8})()
+    latent_height, latent_width = DiffusersZImageBackend._resolve_latent_spatial_shape(
+        latent_pipe_stub,
+        width=width,
+        height=height,
+    )
+
+    entries: list[dict[str, object]] = []
+    manifest_items: list[dict[str, object]] = []
+    typer.echo(
+        f"Generating {count} procedural latent previews at creativity {creativity} "
+        f"for output {width}x{height} "
+        f"(latent {latent_width}x{latent_height}) into {resolved_output_dir}"
+    )
+
+    for seed in range(int(seed_start), int(seed_start) + int(count)):
+        raw_latent, recipe = DiffusersZImageBackend._build_procedural_latent_tensor(
+            expected_channels=16,
+            target_height=latent_height,
+            target_width=latent_width,
+            seed=seed,
+            creativity=creativity,
+            torch_module=torch,
+        )
+        mixed_latent, alpha, preprocess = DiffusersZImageBackend._normalize_and_mix_latent(
+            latent_tensor=raw_latent,
+            seed=seed,
+            torch_module=torch,
+            noise_mix=DiffusersZImageBackend._PROCEDURAL_LATENT_NOISE_MIX,
+            preprocess=DiffusersZImageBackend._PROCEDURAL_LATENT_PREPROCESS,
+        )
+        panel, composite = _build_procedural_preview_panel(
+            seed=seed,
+            creativity=creativity,
+            recipe=recipe,
+            width=width,
+            height=height,
+            raw_latent=raw_latent,
+            mixed_latent=mixed_latent,
+        )
+        preview_path = resolved_output_dir / f"seed_{seed:06d}_preview.png"
+        panel.save(preview_path, format="PNG")
+        manifest_items.append(
+            {
+                "seed": seed,
+                "recipe": recipe,
+                "latent_shape": list(raw_latent.shape),
+                "creativity": creativity,
+                "width": width,
+                "height": height,
+                "raw_stats": _latent_stats(raw_latent),
+                "mixed_stats": _latent_stats(mixed_latent),
+                "mixed_alpha": alpha,
+                "mixed_preprocess": preprocess,
+                "preview_path": str(preview_path),
+            }
+        )
+        entries.append(
+            {
+                "seed": seed,
+                "creativity": creativity,
+                "recipe": recipe,
+                "composite": composite,
+            }
+        )
+        typer.echo(f"[OK] seed {seed}: {preview_path.name} | {recipe}")
+
+    contact_sheet = _build_preview_contact_sheet(
+        entries,
+        title=f"Procedural latent preview | creativity {creativity} | {count} seeds | {width}x{height}",
+    )
+    contact_sheet_path = resolved_output_dir / "contact_sheet.png"
+    contact_sheet.save(contact_sheet_path, format="PNG")
+
+    manifest_path = resolved_output_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "count": count,
+                "seed_start": seed_start,
+                "creativity": creativity,
+                "width": width,
+                "height": height,
+                "latent_width": latent_width,
+                "latent_height": latent_height,
+                "items": manifest_items,
+                "contact_sheet": str(contact_sheet_path),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    typer.echo(f"Contact sheet: {contact_sheet_path}")
+    typer.echo(f"Manifest: {manifest_path}")
 
 
 @cli.command("upscale-test")

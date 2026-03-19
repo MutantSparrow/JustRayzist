@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import io
 import logging
 import os
 import threading
 import time
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -49,9 +51,9 @@ class GenerateRequest(BaseModel):
     height: int = Field(default=1024, ge=64, le=2048)
     pack: str | None = Field(default=None)
     seed: int | None = Field(default=None)
-    scheduler_mode: Literal["euler", "dpm"] = Field(default="euler")
+    scheduler_mode: Literal["euler", "dpm"] | None = Field(default=None)
     enhance_prompt: bool = Field(default=False)
-    use_random_latent: bool = Field(default=False)
+    procedural_creativity: int = Field(default=0, ge=0, le=3)
 
     @field_validator("width", "height")
     @classmethod
@@ -60,12 +62,11 @@ class GenerateRequest(BaseModel):
             raise ValueError("Dimension must be a multiple of 16.")
         return value
 
-
 class UpscaleRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     pack: str | None = Field(default=None)
     seed: int | None = Field(default=None)
-    scheduler_mode: Literal["euler", "dpm"] = Field(default="euler")
+    scheduler_mode: Literal["euler", "dpm"] | None = Field(default=None)
     enhance_prompt: bool = Field(default=False)
 
 
@@ -76,6 +77,20 @@ class DeleteConfirmRequest(BaseModel):
 class ImportGalleryRequest(BaseModel):
     source_id: str = Field(min_length=1, max_length=255)
     dry_run: bool = Field(default=False)
+
+
+class BulkDownloadRequest(BaseModel):
+    filenames: list[str] = Field(min_length=1, max_length=200)
+
+    @field_validator("filenames")
+    @classmethod
+    def _validate_filenames(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("At least one filename is required.")
+        cleaned = [str(item or "").strip() for item in value if str(item or "").strip()]
+        if not cleaned:
+            raise ValueError("At least one filename is required.")
+        return cleaned
 
 
 def _resolve_owner_id(client_header: str | None, client_query: str | None = None) -> str:
@@ -132,7 +147,7 @@ def generate(
             seed=payload.seed,
             scheduler_mode=payload.scheduler_mode,
             enhance_prompt=payload.enhance_prompt,
-            use_random_latent=payload.use_random_latent,
+            procedural_creativity=payload.procedural_creativity,
         )
     except HTTPException:
         raise
@@ -216,6 +231,28 @@ def image_file(
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Image file not found on disk.")
     return FileResponse(image_path, media_type="image/png", filename=safe_filename)
+
+
+@app.post("/images/download-zip")
+def image_download_zip(
+    payload: BulkDownloadRequest,
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> StreamingResponse:
+    owner_id = _resolve_owner_id(x_justrayzist_client)
+    try:
+        files = inference.resolve_download_images(owner_id=owner_id, filenames=payload.filenames)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        for safe_filename, image_path in files:
+            zip_file.write(image_path, arcname=safe_filename)
+    archive.seek(0)
+
+    owner_label = owner_id or "gallery"
+    headers = {"Content-Disposition": f'attachment; filename="{owner_label}_selection.zip"'}
+    return StreamingResponse(archive, media_type="application/zip", headers=headers)
 
 
 @app.delete("/gallery")

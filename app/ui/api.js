@@ -57,7 +57,7 @@ const ENDPOINTS = [
       seed: 123456,
       scheduler_mode: "euler",
       enhance_prompt: false,
-      use_random_latent: false,
+      procedural_creativity: 0,
     },
     response: {
       filename: "justrayzist_YYYYMMDD_hhmmss_000.png",

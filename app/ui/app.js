@@ -8,13 +8,20 @@ const settingsSummaryEl = document.getElementById("settings-summary");
 const resolutionSelectEl = document.getElementById("resolution-select");
 const orientationToggleEl = document.getElementById("orientation-toggle");
 const freezeSeedButtonEl = document.getElementById("freeze-seed-button");
-const schedulerSamplerButtonEl = document.getElementById("scheduler-sampler-button");
-const randomLatentButtonEl = document.getElementById("random-latent-button");
+const proceduralLatentSliderEl = document.getElementById("procedural-latent-slider");
+const proceduralLatentValueEl = document.getElementById("procedural-latent-value");
 const promptEnhanceButtonEl = document.getElementById("prompt-enhance-button");
 const deleteGalleryButtonEl = document.getElementById("delete-gallery-button");
 const killServerButtonEl = document.getElementById("kill-server-button");
 const filterInputEl = document.getElementById("filter-input");
 const reverseOrderButtonEl = document.getElementById("reverse-order-button");
+const galleryDensitySliderEl = document.getElementById("gallery-density-slider");
+const multiSelectToggleEl = document.getElementById("multi-select-toggle");
+const multiSelectActionsEl = document.getElementById("multi-select-actions");
+const multiSelectCountEl = document.getElementById("multi-select-count");
+const bulkUpscaleButtonEl = document.getElementById("bulk-upscale-button");
+const bulkDownloadButtonEl = document.getElementById("bulk-download-button");
+const bulkDeleteButtonEl = document.getElementById("bulk-delete-button");
 const galleryCountEl = document.getElementById("gallery-count");
 const statusLineEl = document.getElementById("status-line");
 const galleryEl = document.getElementById("gallery");
@@ -35,6 +42,8 @@ const confirmModalEl = document.getElementById("confirm-modal");
 const confirmModalMessageEl = document.getElementById("confirm-modal-message");
 const confirmModalCancelEl = document.getElementById("confirm-modal-cancel");
 const confirmModalConfirmEl = document.getElementById("confirm-modal-confirm");
+const zipProgressModalEl = document.getElementById("zip-progress-modal");
+const zipProgressCancelEl = document.getElementById("zip-progress-cancel");
 const disconnectOverlayEl = document.getElementById("disconnect-overlay");
 
 const requiredUi = [
@@ -48,13 +57,20 @@ const requiredUi = [
   ["resolution-select", resolutionSelectEl],
   ["orientation-toggle", orientationToggleEl],
   ["freeze-seed-button", freezeSeedButtonEl],
-  ["scheduler-sampler-button", schedulerSamplerButtonEl],
-  ["random-latent-button", randomLatentButtonEl],
+  ["procedural-latent-slider", proceduralLatentSliderEl],
+  ["procedural-latent-value", proceduralLatentValueEl],
   ["prompt-enhance-button", promptEnhanceButtonEl],
   ["delete-gallery-button", deleteGalleryButtonEl],
   ["kill-server-button", killServerButtonEl],
   ["filter-input", filterInputEl],
   ["reverse-order-button", reverseOrderButtonEl],
+  ["gallery-density-slider", galleryDensitySliderEl],
+  ["multi-select-toggle", multiSelectToggleEl],
+  ["multi-select-actions", multiSelectActionsEl],
+  ["multi-select-count", multiSelectCountEl],
+  ["bulk-upscale-button", bulkUpscaleButtonEl],
+  ["bulk-download-button", bulkDownloadButtonEl],
+  ["bulk-delete-button", bulkDeleteButtonEl],
   ["gallery-count", galleryCountEl],
   ["status-line", statusLineEl],
   ["gallery", galleryEl],
@@ -75,6 +91,8 @@ const requiredUi = [
   ["confirm-modal-message", confirmModalMessageEl],
   ["confirm-modal-cancel", confirmModalCancelEl],
   ["confirm-modal-confirm", confirmModalConfirmEl],
+  ["zip-progress-modal", zipProgressModalEl],
+  ["zip-progress-cancel", zipProgressCancelEl],
   ["disconnect-overlay", disconnectOverlayEl],
 ];
 
@@ -84,6 +102,7 @@ if (missingUi.length) {
 }
 
 const CLIENT_ID_STORAGE_KEY = "justrayzist.client_id";
+const GALLERY_COLUMNS_STORAGE_KEY = "justrayzist.gallery_columns";
 
 function createClientId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -110,13 +129,22 @@ function getOrCreateClientId() {
   return clientId;
 }
 
+function getStoredGalleryColumns() {
+  try {
+    const raw = Number(window.localStorage.getItem(GALLERY_COLUMNS_STORAGE_KEY) || 4);
+    return Math.max(3, Math.min(8, raw || 4));
+  } catch (_) {
+    return 4;
+  }
+}
+
 const state = {
   clientId: getOrCreateClientId(),
   orientation: "portrait",
   freezeSeed: false,
-  dpmSampler: false,
-  randomLatent: false,
+  proceduralCreativity: 0,
   promptEnhance: true,
+  galleryColumns: getStoredGalleryColumns(),
   currentSeed: null,
   newestFirst: true,
   filterTimer: null,
@@ -125,6 +153,8 @@ const state = {
   activeJob: null,
   queueWorkerRunning: false,
   galleryItems: [],
+  multiSelectMode: false,
+  selectedFilenames: new Set(),
   pendingJobs: [],
   galleryLoadRequestSeq: 0,
   zoom: 1.0,
@@ -141,6 +171,9 @@ const state = {
   viewerCompareHolding: false,
   viewerCompareSourceFilename: null,
   confirmAction: null,
+  zipAbortController: null,
+  galleryColumnFrame: null,
+  pendingGalleryColumns: 4,
 };
 
 function randomSeed() {
@@ -306,6 +339,12 @@ function escapeHtml(value) {
 function buildImageUrl(filename) {
   const query = new URLSearchParams();
   query.set("client_id", state.clientId);
+  return `/images/${encodeURIComponent(filename)}?${query.toString()}`;
+}
+
+function buildViewerImageUrl(filename) {
+  const query = new URLSearchParams();
+  query.set("client_id", state.clientId);
   query.set("t", String(Date.now()));
   return `/images/${encodeURIComponent(filename)}?${query.toString()}`;
 }
@@ -314,6 +353,206 @@ function buildDownloadUrl(filename) {
   const query = new URLSearchParams();
   query.set("client_id", state.clientId);
   return `/images/${encodeURIComponent(filename)}?${query.toString()}`;
+}
+
+function galleryKeyForPending(job) {
+  return `pending:${job.placeholderId}`;
+}
+
+function galleryKeyForImage(item) {
+  return `image:${item.filename}`;
+}
+
+function getGalleryImageItem(filename) {
+  const target = String(filename || "").trim();
+  if (!target) return null;
+  return state.galleryItems.find((item) => item.filename === target) || null;
+}
+
+function getGalleryNodeMap() {
+  const map = new Map();
+  const nodes = galleryEl.querySelectorAll("[data-gallery-key]");
+  for (const node of nodes) {
+    map.set(node.dataset.galleryKey, node);
+  }
+  return map;
+}
+
+function captureGalleryPositions() {
+  const positions = new Map();
+  const nodes = galleryEl.querySelectorAll("[data-gallery-key]");
+  for (const node of nodes) {
+    if (node.classList.contains("removing")) continue;
+    positions.set(node.dataset.galleryKey, node.getBoundingClientRect());
+  }
+  return positions;
+}
+
+function animateGalleryLayout(beforePositions) {
+  const nodes = galleryEl.querySelectorAll("[data-gallery-key]");
+  for (const node of nodes) {
+    if (node.classList.contains("removing")) continue;
+    const before = beforePositions.get(node.dataset.galleryKey);
+    if (!before) continue;
+    const after = node.getBoundingClientRect();
+    const deltaX = before.left - after.left;
+    const deltaY = before.top - after.top;
+    const scaleX = after.width > 0 ? before.width / after.width : 1;
+    const scaleY = after.height > 0 ? before.height / after.height : 1;
+    if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5 && Math.abs(scaleX - 1) < 0.01 && Math.abs(scaleY - 1) < 0.01) {
+      continue;
+    }
+    node.style.transition = "none";
+    node.style.transformOrigin = "top left";
+    node.style.transform = `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`;
+    void node.offsetWidth;
+    node.style.transition = "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)";
+    node.style.transform = "";
+    const cleanup = () => {
+      node.style.transition = "";
+      node.style.transformOrigin = "";
+    };
+    node.addEventListener("transitionend", cleanup, { once: true });
+  }
+}
+
+function finalizeEnteringTile(tile) {
+  requestAnimationFrame(() => {
+    tile.classList.remove("entering");
+  });
+}
+
+function cancelScheduledTileRemoval(tile) {
+  const handle = tile?._galleryRemovalHandle;
+  if (!handle) return;
+  handle.cancelled = true;
+  if (handle.timeoutId !== null) {
+    window.clearTimeout(handle.timeoutId);
+  }
+  tile._galleryRemovalHandle = null;
+  tile.classList.remove("removing");
+}
+
+function scheduleTileRemoval(tile) {
+  if (!tile || tile.classList.contains("removing")) return;
+  tile.classList.add("removing");
+  const handle = { cancelled: false, timeoutId: null };
+  tile._galleryRemovalHandle = handle;
+  let done = false;
+  const cleanup = () => {
+    if (done) return;
+    if (handle.cancelled) return;
+    done = true;
+    tile._galleryRemovalHandle = null;
+    const before = captureGalleryPositions();
+    if (tile.parentElement === galleryEl) {
+      tile.remove();
+    }
+    requestAnimationFrame(() => animateGalleryLayout(before));
+  };
+  tile.addEventListener("transitionend", cleanup, { once: true });
+  handle.timeoutId = window.setTimeout(cleanup, 240);
+}
+
+function showZipProgressModal() {
+  zipProgressModalEl.classList.remove("hidden");
+  zipProgressModalEl.setAttribute("aria-hidden", "false");
+  zipProgressCancelEl.focus();
+}
+
+function hideZipProgressModal() {
+  zipProgressModalEl.classList.add("hidden");
+  zipProgressModalEl.setAttribute("aria-hidden", "true");
+}
+
+function cancelZipDownload() {
+  if (state.zipAbortController) {
+    state.zipAbortController.abort();
+  } else {
+    hideZipProgressModal();
+  }
+}
+
+function setGalleryColumns(count, options = {}) {
+  const next = Math.max(3, Math.min(8, Number(count) || 4));
+  const animate = Boolean(options.animate);
+  const before = animate ? captureGalleryPositions() : null;
+  state.galleryColumns = next;
+  state.pendingGalleryColumns = next;
+  galleryDensitySliderEl.value = String(next);
+  document.documentElement.style.setProperty("--gallery-columns", String(next));
+  try {
+    window.localStorage.setItem(GALLERY_COLUMNS_STORAGE_KEY, String(next));
+  } catch (_) {
+  }
+  if (before) {
+    requestAnimationFrame(() => animateGalleryLayout(before));
+  }
+}
+
+function scheduleGalleryColumns(count) {
+  state.pendingGalleryColumns = Math.max(3, Math.min(8, Number(count) || 4));
+  galleryDensitySliderEl.value = String(state.pendingGalleryColumns);
+  if (state.galleryColumnFrame !== null) {
+    return;
+  }
+  state.galleryColumnFrame = window.requestAnimationFrame(() => {
+    state.galleryColumnFrame = null;
+    setGalleryColumns(state.pendingGalleryColumns, { animate: true });
+  });
+}
+
+function getSelectedGalleryItems() {
+  return state.galleryItems.filter((item) => state.selectedFilenames.has(item.filename));
+}
+
+function selectedImageCount() {
+  return getSelectedGalleryItems().length;
+}
+
+function syncSelectedFilenames() {
+  const available = new Set(state.galleryItems.map((item) => item.filename));
+  state.selectedFilenames = new Set(
+    [...state.selectedFilenames].filter((filename) => available.has(filename))
+  );
+}
+
+function clearMultiSelection() {
+  state.selectedFilenames.clear();
+}
+
+function updateMultiSelectControls() {
+  const count = selectedImageCount();
+  const active = state.multiSelectMode;
+  multiSelectToggleEl.textContent = active ? "Cancel" : "Multiselection";
+  multiSelectToggleEl.setAttribute("aria-pressed", String(active));
+  multiSelectActionsEl.classList.toggle("hidden", !active);
+  multiSelectCountEl.textContent = count === 1 ? "1 selected" : `${count} selected`;
+  bulkDownloadButtonEl.disabled = count === 0;
+  bulkDeleteButtonEl.disabled = count === 0;
+  bulkUpscaleButtonEl.disabled = count === 0;
+}
+
+function toggleMultiSelectMode(force) {
+  const next = typeof force === "boolean" ? force : !state.multiSelectMode;
+  state.multiSelectMode = next;
+  if (!next) {
+    clearMultiSelection();
+  }
+  updateMultiSelectControls();
+  renderGallery();
+}
+
+function toggleGallerySelection(filename) {
+  const target = String(filename || "").trim();
+  if (!target) return;
+  if (state.selectedFilenames.has(target)) {
+    state.selectedFilenames.delete(target);
+  } else {
+    state.selectedFilenames.add(target);
+  }
+  updateMultiSelectControls();
+  renderGallery();
 }
 
 function resolveSourceFilename(item) {
@@ -350,11 +589,10 @@ function updateSettingsSummary() {
   if (state.freezeSeed && state.currentSeed !== null) {
     pieces.push(`Seed <span class="summary-value">${state.currentSeed}</span>`);
   }
-  if (state.dpmSampler) {
-    pieces.push(`Scheduler <span class="summary-value">DPM++ SDE</span>`);
-  }
-  if (state.randomLatent) {
-    pieces.push(`Extra Creative <span class="summary-value">ON (BETA)</span>`);
+  if (state.proceduralCreativity > 0) {
+    pieces.push(
+      `Creative Mode <span class="summary-value">${describeProceduralCreativity(state.proceduralCreativity)}</span>`,
+    );
   }
 
   settingsSummaryEl.innerHTML = pieces
@@ -383,23 +621,22 @@ function updateFreezeSeedButton() {
   }
 }
 
-function updateSchedulerSamplerButton() {
-  if (state.dpmSampler) {
-    schedulerSamplerButtonEl.textContent = "SCHEDULER/SAMPLER: ON (DPM++ SDE + DDIM-UNIFORM)";
-    schedulerSamplerButtonEl.classList.add("active");
-  } else {
-    schedulerSamplerButtonEl.textContent = "SCHEDULER/SAMPLER: OFF (EULER)";
-    schedulerSamplerButtonEl.classList.remove("active");
-  }
+function describeProceduralCreativity(level) {
+  if (level <= 0) return "OFF";
+  if (level === 1) return "Light";
+  if (level === 2) return "Medium";
+  return "Extreme";
 }
 
-function updateRandomLatentButton() {
-  if (state.randomLatent) {
-    randomLatentButtonEl.textContent = "EXTRA CREATIVE (BETA): ON";
-    randomLatentButtonEl.classList.add("active");
+function updateProceduralLatentControls() {
+  proceduralLatentSliderEl.value = String(state.proceduralCreativity);
+  proceduralLatentValueEl.textContent =
+    `CREATIVE MODE: ${describeProceduralCreativity(state.proceduralCreativity)}`;
+  proceduralLatentValueEl.classList.toggle("active", state.proceduralCreativity > 0);
+  if (state.proceduralCreativity > 0) {
+    proceduralLatentValueEl.style.color = "var(--lime)";
   } else {
-    randomLatentButtonEl.textContent = "EXTRA CREATIVE (BETA): OFF";
-    randomLatentButtonEl.classList.remove("active");
+    proceduralLatentValueEl.style.color = "#d8d8d8";
   }
 }
 
@@ -438,7 +675,7 @@ function endViewerCompareHold() {
   }
   const item = getActiveViewerItem();
   if (!item) return;
-  viewerImageEl.src = buildImageUrl(item.filename);
+  viewerImageEl.src = buildViewerImageUrl(item.filename);
   viewerImageEl.alt = item.prompt || "Generated image preview";
 }
 
@@ -454,7 +691,7 @@ function beginViewerCompareHold() {
   if (compareButton) {
     compareButton.classList.add("active");
   }
-  viewerImageEl.src = buildImageUrl(sourceFilename);
+  viewerImageEl.src = buildViewerImageUrl(sourceFilename);
   viewerImageEl.alt = `Original preview ${sourceFilename}`;
 }
 
@@ -523,7 +760,7 @@ function showViewer(item, index = -1) {
   state.viewerIndex = index;
   state.viewerCompareHolding = false;
   state.viewerCompareSourceFilename = null;
-  viewerImageEl.src = buildImageUrl(item.filename);
+  viewerImageEl.src = buildViewerImageUrl(item.filename);
   viewerImageEl.alt = item.prompt || "Generated image preview";
   state.viewerPromptExpanded = false;
   applyViewerItemMeta(item);
@@ -677,23 +914,39 @@ function pendingJobLabel(job, queuePosition) {
   return isUpscale ? "UPSCALE QUEUED..." : "QUEUED...";
 }
 
-function renderPendingTile(job) {
+function createPendingTile(job) {
   const tile = document.createElement("article");
   tile.className = "tile generating";
+  tile.dataset.galleryKey = galleryKeyForPending(job);
   tile.dataset.placeholderId = job.placeholderId;
 
   const canvas = document.createElement("div");
   canvas.className = "tile-placeholder";
-  canvas.style.aspectRatio = `${job.width} / ${job.height}`;
+  tile.append(canvas);
 
   const spinner = document.createElement("div");
   spinner.className = "tile-spinner";
-  const queuePosition = state.queue.findIndex((queued) => queued.placeholderId === job.placeholderId);
-  spinner.textContent = pendingJobLabel(job, queuePosition);
-
   canvas.append(spinner);
-  tile.append(canvas);
+  updatePendingTile(tile, job);
+  tile.classList.add("entering");
+  finalizeEnteringTile(tile);
   return tile;
+}
+
+function updatePendingTile(tile, job) {
+  cancelScheduledTileRemoval(tile);
+  tile.dataset.galleryKey = galleryKeyForPending(job);
+  tile.dataset.placeholderId = job.placeholderId;
+  tile.classList.add("generating");
+  const canvas = tile.querySelector(".tile-placeholder");
+  const spinner = tile.querySelector(".tile-spinner");
+  if (canvas) {
+    canvas.style.aspectRatio = `${job.width} / ${job.height}`;
+  }
+  if (spinner) {
+    const queuePosition = state.queue.findIndex((queued) => queued.placeholderId === job.placeholderId);
+    spinner.textContent = pendingJobLabel(job, queuePosition);
+  }
 }
 
 function dropMissingGalleryItem(filename) {
@@ -710,40 +963,36 @@ function dropMissingGalleryItem(filename) {
   }
 }
 
-function renderImageTile(item, index) {
+function createImageTile(item) {
   const tile = document.createElement("article");
   tile.className = "tile";
-  const upscaled = isUpscaledItem(item);
 
   const image = document.createElement("img");
-  image.src = buildImageUrl(item.filename);
-  image.alt = item.prompt || "Generated image";
   image.loading = "lazy";
   image.addEventListener("error", () => {
     tile.remove();
-    dropMissingGalleryItem(item.filename);
+    dropMissingGalleryItem(tile.dataset.filename || "");
   });
 
   const overlay = document.createElement("div");
   overlay.className = "tile-overlay";
   const badges = document.createElement("div");
   badges.className = "tile-badges";
+  const upscaleBadge = document.createElement("span");
+  upscaleBadge.className = "tile-badge tile-badge-upscaled";
+  upscaleBadge.title = "Upscaled";
+  upscaleBadge.setAttribute("aria-hidden", "true");
+  upscaleBadge.innerHTML =
+    '<svg viewBox="0 0 24 24" focusable="false"><path d="M4 9V4h5v2H6v3H4zm10-5h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 4v-4h2v6h-6v-2h4z"/></svg>';
+  badges.append(upscaleBadge);
 
-  if (upscaled) {
-    const upscaleBadge = document.createElement("span");
-    upscaleBadge.className = "tile-badge tile-badge-upscaled";
-    upscaleBadge.title = "Upscaled";
-    upscaleBadge.setAttribute("aria-hidden", "true");
-    upscaleBadge.innerHTML =
-      '<svg viewBox="0 0 24 24" focusable="false"><path d="M4 9V4h5v2H6v3H4zm10-5h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 4v-4h2v6h-6v-2h4z"/></svg>';
-    badges.append(upscaleBadge);
-  }
+  const selectBadge = document.createElement("span");
+  selectBadge.className = "tile-badge tile-select-badge";
+  selectBadge.setAttribute("aria-hidden", "true");
+  badges.append(selectBadge);
 
   const meta = document.createElement("div");
   meta.className = "tile-meta";
-  const timestamp = item.timestamp || item.created_at;
-  const resolution = item.width && item.height ? `${item.width}x${item.height}` : "unknown";
-  meta.textContent = `${formatGalleryTimestamp(timestamp)} | ${shortPrompt(item.prompt, 60)} | ${resolution}`;
 
   const actions = document.createElement("div");
   actions.className = "tile-actions";
@@ -752,69 +1001,160 @@ function renderImageTile(item, index) {
 
   const download = document.createElement("a");
   download.className = "tile-download";
-  download.href = buildDownloadUrl(item.filename);
-  download.setAttribute("download", item.filename);
   download.textContent = "Download";
   download.addEventListener("click", (event) => event.stopPropagation());
 
   const del = document.createElement("button");
   del.className = "tile-delete";
   del.type = "button";
-  del.setAttribute("aria-label", `Delete ${item.filename}`);
   del.title = "Delete image";
   del.innerHTML =
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 7h2v8h-2v-8zm4 0h2v8h-2v-8zM7 10h2v8H7v-8z"/></svg>';
   del.addEventListener("click", (event) => {
     event.stopPropagation();
-    showConfirmModal(`Delete "${item.filename}"? This cannot be undone.`, async () => {
-      await deleteImage(item.filename);
+    const filename = tile.dataset.filename || "";
+    showConfirmModal(`Delete "${filename}"? This cannot be undone.`, async () => {
+      await deleteImage(filename);
     }, "Delete");
   });
 
   primaryActions.append(download);
-  if (canUpscaleItem(item)) {
-    const upscale = document.createElement("button");
-    upscale.className = "tile-upscale";
-    upscale.type = "button";
-    upscale.textContent = "Upscale";
-    upscale.addEventListener("click", (event) => {
-      event.stopPropagation();
-      enqueueUpscaleFromItem(item);
-    });
-    primaryActions.append(upscale);
-  }
+  const upscale = document.createElement("button");
+  upscale.className = "tile-upscale";
+  upscale.type = "button";
+  upscale.textContent = "Upscale";
+  upscale.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const liveItem = getGalleryImageItem(tile.dataset.filename);
+    if (liveItem) {
+      enqueueUpscaleFromItem(liveItem);
+    }
+  });
+  primaryActions.append(upscale);
   actions.append(primaryActions, del);
   overlay.append(meta, actions);
   tile.append(image, badges, overlay);
-  tile.addEventListener("click", () => showViewer(item, index));
+  tile.addEventListener("click", () => {
+    const filename = tile.dataset.filename || "";
+    if (state.multiSelectMode) {
+      toggleGallerySelection(filename);
+      return;
+    }
+    const liveItem = getGalleryImageItem(filename);
+    if (!liveItem) return;
+    const liveIndex = state.galleryItems.findIndex((candidate) => candidate.filename === filename);
+    showViewer(liveItem, liveIndex);
+  });
+  updateImageTile(tile, item);
+  tile.classList.add("entering");
+  finalizeEnteringTile(tile);
   return tile;
 }
 
-function renderGallery() {
-  galleryEl.innerHTML = "";
-  const pending = [...state.pendingJobs];
-  const items = [...state.galleryItems];
-  updateGalleryCount(items.length);
-  const hasContent = pending.length > 0 || items.length > 0;
-  emptyStateEl.classList.toggle("hidden", hasContent);
-  if (!hasContent) return;
+function updateImageTile(tile, item) {
+  cancelScheduledTileRemoval(tile);
+  const upscaled = isUpscaledItem(item);
+  const selected = state.selectedFilenames.has(item.filename);
+  tile.dataset.galleryKey = galleryKeyForImage(item);
+  tile.dataset.filename = item.filename;
+  tile.classList.toggle("multiselect-active", state.multiSelectMode);
+  tile.classList.toggle("selected", selected);
 
-  if (state.newestFirst) {
-    for (const job of pending) {
-      galleryEl.append(renderPendingTile(job));
+  const image = tile.querySelector("img");
+  if (image) {
+    const nextSrc = buildImageUrl(item.filename);
+    if (image.src !== new URL(nextSrc, window.location.origin).toString()) {
+      image.src = nextSrc;
     }
-    for (let index = 0; index < items.length; index += 1) {
-      galleryEl.append(renderImageTile(items[index], index));
+    image.alt = item.prompt || "Generated image";
+  }
+
+  const timestamp = item.timestamp || item.created_at;
+  const resolution = item.width && item.height ? `${item.width}x${item.height}` : "unknown";
+  const meta = tile.querySelector(".tile-meta");
+  if (meta) {
+    meta.textContent = `${formatGalleryTimestamp(timestamp)} | ${shortPrompt(item.prompt, 60)} | ${resolution}`;
+  }
+
+  const upscaleBadge = tile.querySelector(".tile-badge-upscaled");
+  if (upscaleBadge) {
+    upscaleBadge.style.display = upscaled ? "" : "none";
+  }
+
+  const selectBadge = tile.querySelector(".tile-select-badge");
+  if (selectBadge) {
+    selectBadge.textContent = selected ? "✓" : "";
+    selectBadge.style.display = state.multiSelectMode ? "" : "none";
+  }
+
+  const download = tile.querySelector(".tile-download");
+  if (download) {
+    download.href = buildDownloadUrl(item.filename);
+    download.setAttribute("download", item.filename);
+  }
+
+  const del = tile.querySelector(".tile-delete");
+  if (del) {
+    del.setAttribute("aria-label", `Delete ${item.filename}`);
+  }
+
+  const upscale = tile.querySelector(".tile-upscale");
+  if (upscale) {
+    upscale.style.display = canUpscaleItem(item) ? "" : "none";
+  }
+}
+
+function buildDesiredGalleryEntries() {
+  const pending = state.newestFirst ? [...state.pendingJobs] : [];
+  const items = [...state.galleryItems];
+  const trailingPending = state.newestFirst ? [] : [...state.pendingJobs];
+  const desired = [];
+  for (const job of pending) {
+    desired.push({ key: galleryKeyForPending(job), kind: "pending", value: job });
+  }
+  for (const item of items) {
+    desired.push({ key: galleryKeyForImage(item), kind: "image", value: item });
+  }
+  for (const job of trailingPending) {
+    desired.push({ key: galleryKeyForPending(job), kind: "pending", value: job });
+  }
+  return desired;
+}
+
+function renderGallery() {
+  const before = captureGalleryPositions();
+  syncSelectedFilenames();
+  updateMultiSelectControls();
+  updateGalleryCount(state.galleryItems.length);
+  const desiredEntries = buildDesiredGalleryEntries();
+  const hasContent = desiredEntries.length > 0;
+  emptyStateEl.classList.toggle("hidden", hasContent);
+  if (!hasContent) {
+    for (const tile of galleryEl.querySelectorAll("[data-gallery-key]")) {
+      scheduleTileRemoval(tile);
     }
     return;
   }
 
-  for (let index = 0; index < items.length; index += 1) {
-    galleryEl.append(renderImageTile(items[index], index));
+  const existingMap = getGalleryNodeMap();
+  for (const entry of desiredEntries) {
+    let tile = existingMap.get(entry.key) || null;
+    if (!tile) {
+      tile = entry.kind === "pending" ? createPendingTile(entry.value) : createImageTile(entry.value);
+    } else if (entry.kind === "pending") {
+      updatePendingTile(tile, entry.value);
+    } else {
+      updateImageTile(tile, entry.value);
+    }
+    galleryEl.append(tile);
+    existingMap.delete(entry.key);
   }
-  for (const job of pending) {
-    galleryEl.append(renderPendingTile(job));
+
+  for (const tile of existingMap.values()) {
+    scheduleTileRemoval(tile);
   }
+
+  requestAnimationFrame(() => animateGalleryLayout(before));
 }
 
 function updateGalleryCount(imageCount = state.galleryItems.length) {
@@ -902,14 +1242,18 @@ async function loadImages() {
     return;
   }
   state.galleryItems = sortItems(payload.items || []);
+  syncSelectedFilenames();
   renderGallery();
   syncViewerWithGallery();
 }
 
-async function deleteImage(filename) {
+async function deleteImage(filename, options = {}) {
+  const skipReload = Boolean(options.skipReload);
+  const suppressStatus = Boolean(options.suppressStatus);
   const existingItems = state.galleryItems;
   const hadItem = existingItems.some((item) => item.filename === filename);
   if (hadItem) {
+    state.selectedFilenames.delete(filename);
     state.galleryItems = existingItems.filter((item) => item.filename !== filename);
     if (state.viewerFilename === filename) {
       hideViewer();
@@ -937,8 +1281,113 @@ async function deleteImage(filename) {
     }
     throw new Error(formatApiError(payload, "Image deletion failed."));
   }
+  if (!skipReload) {
+    await loadImages();
+  }
+  if (!suppressStatus) {
+    setStatus(`Deleted ${filename}.`);
+  }
+}
+
+async function deleteSelectedImages() {
+  const selectedItems = getSelectedGalleryItems();
+  const count = selectedItems.length;
+  if (count === 0) {
+    setStatus("No images selected.", true);
+    return;
+  }
+  for (const item of selectedItems) {
+    await deleteImage(item.filename, { skipReload: true, suppressStatus: true });
+  }
   await loadImages();
-  setStatus(`Deleted ${filename}.`);
+  clearMultiSelection();
+  updateMultiSelectControls();
+  renderGallery();
+  setStatus(`Deleted ${count} image${count === 1 ? "" : "s"}.`);
+}
+
+function queueSelectedUpscales() {
+  const selectedItems = getSelectedGalleryItems();
+  if (selectedItems.length === 0) {
+    setStatus("Select at least one image to upscale.", true);
+    return false;
+  }
+  if (selectedItems.length > 5) {
+    setStatus("Bulk upscale is limited to 5 selected images.", true);
+    return false;
+  }
+  const invalidItems = selectedItems.filter((item) => !canUpscaleItem(item));
+  if (invalidItems.length > 0) {
+    setStatus("Bulk upscale only works on original images that have not already been upscaled.", true);
+    return false;
+  }
+  if (totalOutstandingJobs() + selectedItems.length > state.maxQueuedGenerations) {
+    setStatus(`Bulk upscale would exceed the queue limit of ${state.maxQueuedGenerations}.`, true);
+    return false;
+  }
+  let queued = 0;
+  for (const item of selectedItems) {
+    if (enqueueUpscaleFromItem(item)) {
+      queued += 1;
+    }
+  }
+  if (queued > 0) {
+    clearMultiSelection();
+    updateMultiSelectControls();
+    renderGallery();
+    setStatus(`Queued ${queued} upscale job${queued === 1 ? "" : "s"}.`);
+    return true;
+  }
+  return false;
+}
+
+async function downloadSelectedImagesZip() {
+  const selectedItems = getSelectedGalleryItems();
+  if (selectedItems.length === 0) {
+    setStatus("No images selected.", true);
+    return;
+  }
+  const controller = new AbortController();
+  state.zipAbortController = controller;
+  showZipProgressModal();
+  try {
+    const response = await apiFetch("/images/download-zip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filenames: selectedItems.map((item) => item.filename) }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (_) {
+        payload = null;
+      }
+      throw new Error(formatApiError(payload, "ZIP download failed."));
+    }
+    const blob = await response.blob();
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = `${state.clientId}_selection.zip`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1500);
+    setStatus(`Prepared ZIP download for ${selectedItems.length} image${selectedItems.length === 1 ? "" : "s"}.`);
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      setStatus("ZIP download cancelled.");
+      return;
+    }
+    throw error;
+  } finally {
+    if (state.zipAbortController === controller) {
+      state.zipAbortController = null;
+    }
+    hideZipProgressModal();
+  }
 }
 
 function enqueueGenerationFromPrompt() {
@@ -965,9 +1414,8 @@ function enqueueGenerationFromPrompt() {
     width: dimensions.width,
     height: dimensions.height,
     seed,
-    scheduler_mode: state.dpmSampler ? "dpm" : "euler",
     enhance_prompt: state.promptEnhance,
-    use_random_latent: state.randomLatent,
+    procedural_creativity: state.proceduralCreativity,
   };
 
   state.queue.push(job);
@@ -1019,7 +1467,6 @@ function enqueueUpscaleFromItem(item) {
     height: targetHeight,
     seed,
     pack: preferredPack,
-    scheduler_mode: state.dpmSampler ? "dpm" : "euler",
     enhance_prompt: state.promptEnhance,
   };
 
@@ -1072,7 +1519,6 @@ async function processGenerationQueue() {
               filename: job.filename,
               pack: job.pack,
               seed: job.seed,
-              scheduler_mode: job.scheduler_mode,
               enhance_prompt: job.enhance_prompt,
             }
           : {
@@ -1080,9 +1526,8 @@ async function processGenerationQueue() {
               width: job.width,
               height: job.height,
               seed: job.seed,
-              scheduler_mode: job.scheduler_mode,
               enhance_prompt: job.enhance_prompt,
-              use_random_latent: Boolean(job.use_random_latent),
+              procedural_creativity: Number(job.procedural_creativity || 0),
             };
         const response = await apiFetch(endpoint, {
           method: "POST",
@@ -1135,7 +1580,10 @@ async function onDeleteGallery() {
       throw new Error(formatApiError(payload, "Gallery deletion failed."));
     }
     hideViewer();
-    galleryEl.innerHTML = "";
+    state.galleryItems = [];
+    state.pendingJobs = [];
+    clearMultiSelection();
+    renderGallery();
     emptyStateEl.classList.remove("hidden");
     await loadImages();
     setStatus(
@@ -1199,15 +1647,10 @@ function toggleFreezeSeed() {
   updateSettingsSummary();
 }
 
-function toggleSchedulerSampler() {
-  state.dpmSampler = !state.dpmSampler;
-  updateSchedulerSamplerButton();
-  updateSettingsSummary();
-}
-
-function toggleRandomLatent() {
-  state.randomLatent = !state.randomLatent;
-  updateRandomLatentButton();
+function setProceduralCreativity(level) {
+  const next = Math.max(0, Math.min(3, Number(level) || 0));
+  state.proceduralCreativity = next;
+  updateProceduralLatentControls();
   updateSettingsSummary();
 }
 
@@ -1261,13 +1704,14 @@ function endDrag(event) {
 
 async function bootstrap() {
   try {
+    setGalleryColumns(state.galleryColumns);
     updateTopbarOffset();
     updateReverseButton();
     applyOrientationButtonState();
     updateFreezeSeedButton();
-    updateSchedulerSamplerButton();
-    updateRandomLatentButton();
+    updateProceduralLatentControls();
     updatePromptEnhanceButton();
+    updateMultiSelectControls();
     updateSettingsSummary();
     updateViewerNavState();
     updateGenerateButtonState();
@@ -1283,8 +1727,9 @@ generateButtonEl.addEventListener("click", () => {
   enqueueGenerationFromPrompt();
 });
 freezeSeedButtonEl.addEventListener("click", toggleFreezeSeed);
-schedulerSamplerButtonEl.addEventListener("click", toggleSchedulerSampler);
-randomLatentButtonEl.addEventListener("click", toggleRandomLatent);
+proceduralLatentSliderEl.addEventListener("input", () => {
+  setProceduralCreativity(proceduralLatentSliderEl.value);
+});
 promptEnhanceButtonEl.addEventListener("click", togglePromptEnhance);
 
 document.addEventListener("click", (event) => {
@@ -1337,6 +1782,32 @@ reverseOrderButtonEl.addEventListener("click", () => {
   state.newestFirst = !state.newestFirst;
   updateReverseButton();
   loadImages().catch((error) => setStatus(String(error?.message || error), true));
+});
+galleryDensitySliderEl.addEventListener("input", () => {
+  scheduleGalleryColumns(galleryDensitySliderEl.value);
+});
+multiSelectToggleEl.addEventListener("click", () => {
+  toggleMultiSelectMode();
+});
+bulkUpscaleButtonEl.addEventListener("click", () => {
+  queueSelectedUpscales();
+});
+bulkDownloadButtonEl.addEventListener("click", () => {
+  downloadSelectedImagesZip().catch((error) => setStatus(String(error?.message || error), true));
+});
+bulkDeleteButtonEl.addEventListener("click", () => {
+  const count = selectedImageCount();
+  if (count === 0) {
+    setStatus("No images selected.", true);
+    return;
+  }
+  showConfirmModal(
+    `Delete ${count} selected image${count === 1 ? "" : "s"}? This cannot be undone.`,
+    async () => {
+      await deleteSelectedImages();
+    },
+    "Delete"
+  );
 });
 deleteGalleryButtonEl.addEventListener("click", onDeleteGallery);
 killServerButtonEl.addEventListener("click", () => {
@@ -1449,6 +1920,11 @@ viewerStageEl.addEventListener("dblclick", () => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !zipProgressModalEl.classList.contains("hidden")) {
+    event.preventDefault();
+    cancelZipDownload();
+    return;
+  }
   const viewerOpen = !viewerModalEl.classList.contains("hidden");
   if (viewerOpen && event.key === "ArrowLeft") {
     event.preventDefault();
@@ -1478,6 +1954,9 @@ document.addEventListener("keydown", (event) => {
     hideConfirmModal();
     hideViewer();
     setSettingsVisible(false);
+    if (state.multiSelectMode) {
+      toggleMultiSelectMode(false);
+    }
   }
 });
 
@@ -1485,6 +1964,12 @@ confirmModalCancelEl.addEventListener("click", hideConfirmModal);
 confirmModalEl.addEventListener("click", (event) => {
   if (event.target === confirmModalEl) {
     hideConfirmModal();
+  }
+});
+zipProgressCancelEl.addEventListener("click", cancelZipDownload);
+zipProgressModalEl.addEventListener("click", (event) => {
+  if (event.target === zipProgressModalEl) {
+    cancelZipDownload();
   }
 });
 confirmModalConfirmEl.addEventListener("click", async () => {

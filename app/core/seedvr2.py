@@ -4,7 +4,6 @@ import argparse
 import contextlib
 import importlib
 import importlib.util
-import io
 import json
 import logging
 import multiprocessing
@@ -176,7 +175,7 @@ def _ensure_runtime_allocator_env_compat(runtime_script: Path) -> None:
 
     try:
         runtime_script.write_text(updated, encoding="utf-8")
-        LOGGER.info(
+        LOGGER.debug(
             "Patched SeedVR2 runtime allocator env var to PYTORCH_ALLOC_CONF: %s",
             runtime_script,
         )
@@ -220,19 +219,61 @@ def _suppress_noncritical_logs():
         logging.disable(previous_disable)
 
 
+class _CapturedRuntimeStream:
+    def __init__(self, handle: Any) -> None:
+        self._handle = handle
+        self._cached_value: str | None = None
+
+    def getvalue(self) -> str:
+        if self._cached_value is not None:
+            return self._cached_value
+        self._handle.flush()
+        position = self._handle.tell()
+        self._handle.seek(0)
+        data = self._handle.read()
+        self._handle.seek(position)
+        return str(data)
+
+    def finalize(self) -> None:
+        if self._cached_value is None:
+            self._cached_value = self.getvalue()
+
+
 @contextlib.contextmanager
 def _runtime_output_context(*, verbose_runtime: bool):
     if verbose_runtime:
         yield None, None
         return
-    captured_stdout = io.StringIO()
-    captured_stderr = io.StringIO()
-    with (
-        contextlib.redirect_stdout(captured_stdout),
-        contextlib.redirect_stderr(captured_stderr),
-        _suppress_noncritical_logs(),
-    ):
-        yield captured_stdout, captured_stderr
+    stdout_tmp = tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace")
+    stderr_tmp = tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace")
+    captured_stdout = _CapturedRuntimeStream(stdout_tmp)
+    captured_stderr = _CapturedRuntimeStream(stderr_tmp)
+    saved_stdout_fd = os.dup(1)
+    saved_stderr_fd = os.dup(2)
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(stdout_tmp.fileno(), 1)
+        os.dup2(stderr_tmp.fileno(), 2)
+        with _suppress_noncritical_logs():
+            yield captured_stdout, captured_stderr
+    finally:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        finally:
+            os.dup2(saved_stdout_fd, 1)
+            os.dup2(saved_stderr_fd, 2)
+            os.close(saved_stdout_fd)
+            os.close(saved_stderr_fd)
+            captured_stdout.finalize()
+            captured_stderr.finalize()
+            stdout_tmp.flush()
+            stderr_tmp.flush()
+            stdout_tmp.seek(0)
+            stderr_tmp.seek(0)
+            stdout_tmp.close()
+            stderr_tmp.close()
 
 
 def _resolution_targets(width: int, height: int) -> tuple[int, int]:
@@ -488,12 +529,14 @@ def _attempt_to_record(
 def _seedvr2_attempt_worker(payload: dict[str, Any], result_queue: Any) -> None:
     captured_stdout_text = ""
     captured_stderr_text = ""
+    captured_stdout = None
+    captured_stderr = None
     try:
         runtime_script = Path(str(payload["runtime_script"]))
-        runtime_module = _ensure_runtime_module(runtime_script)
-        args = argparse.Namespace(**dict(payload["args"]))
         verbose_runtime = bool(payload.get("verbose_runtime", False))
         with _runtime_output_context(verbose_runtime=verbose_runtime) as (captured_stdout, captured_stderr):
+            runtime_module = _ensure_runtime_module(runtime_script)
+            args = argparse.Namespace(**dict(payload["args"]))
             runtime_module.process_single_file(
                 str(payload["input_path"]),
                 args,
@@ -514,6 +557,10 @@ def _seedvr2_attempt_worker(payload: dict[str, Any], result_queue: Any) -> None:
             }
         )
     except Exception as exc:  # noqa: BLE001
+        if captured_stdout is not None:
+            captured_stdout_text = captured_stdout.getvalue()
+        if captured_stderr is not None:
+            captured_stderr_text = captured_stderr.getvalue()
         tb_text = traceback.format_exc()
         result_queue.put(
             {

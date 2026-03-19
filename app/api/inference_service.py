@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import random
 from pathlib import Path
@@ -17,6 +18,7 @@ from app.core.model_registry import (
     load_model_pack_by_name,
 )
 from app.core.worker import GenerationRequest, GenerationSession
+from app.core.worker.types import resolve_procedural_creativity
 from app.core.upscale_blend import UPSCALE_ENGINE_NAME, upscale_with_x2_seed_blend
 from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
 from app.storage.gallery_index import (
@@ -30,6 +32,8 @@ from app.storage.gallery_index import (
     normalize_owner_id,
     sync_outputs_to_gallery,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _assert_supported_backend(model_pack: ModelPack) -> None:
@@ -103,6 +107,27 @@ class InferenceService:
 
     def get_image(self, filename: str, owner_id: str) -> dict[str, Any] | None:
         return get_image(self._settings, filename, owner_id=self.sanitize_owner_id(owner_id))
+
+    def resolve_download_images(self, owner_id: str, filenames: list[str]) -> list[tuple[str, Path]]:
+        safe_owner_id = self.sanitize_owner_id(owner_id)
+        resolved: list[tuple[str, Path]] = []
+        seen: set[str] = set()
+        for raw_filename in filenames:
+            safe_filename = self.sanitize_filename(raw_filename)
+            if safe_filename in seen:
+                continue
+            row = get_image(self._settings, safe_filename, owner_id=safe_owner_id)
+            if row is None:
+                raise ValueError(f"Image not found: {safe_filename}")
+            output_path = row.get("output_path")
+            if not output_path:
+                raise ValueError(f"Image path is missing: {safe_filename}")
+            resolved_path = self.resolve_output_path(str(output_path))
+            if not resolved_path.exists():
+                raise ValueError(f"Image file not found on disk: {safe_filename}")
+            resolved.append((safe_filename, resolved_path))
+            seen.add(safe_filename)
+        return resolved
 
     def delete_gallery(self, owner_id: str, confirm_text: str) -> dict[str, int]:
         normalized = confirm_text.strip()
@@ -184,13 +209,25 @@ class InferenceService:
         seed: int | None = None,
         scheduler_mode: str | None = None,
         enhance_prompt: bool = False,
-        use_random_latent: bool = False,
+        procedural_creativity: int = 0,
     ) -> dict[str, Any]:
         with self._lock:
+            effective_procedural_creativity = resolve_procedural_creativity(
+                procedural_creativity=procedural_creativity
+            )
             safe_owner_id = self.sanitize_owner_id(owner_id)
             model_pack = self._resolve_pack(pack_name)
             session = self._session_for_pack(model_pack)
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
+            LOGGER.info(
+                "Generate request: owner=%s pack=%s size=%dx%d seed=%s creative_mode=%s",
+                safe_owner_id,
+                model_pack.name,
+                width,
+                height,
+                effective_seed,
+                effective_procedural_creativity,
+            )
             output_path = build_output_path(self.owner_output_dir(safe_owner_id))
 
             result = session.generate(
@@ -201,7 +238,7 @@ class InferenceService:
                     seed=effective_seed,
                     scheduler_mode=scheduler_mode,
                     enhance_prompt=enhance_prompt,
-                    use_random_latent=use_random_latent,
+                    procedural_creativity=effective_procedural_creativity,
                 )
             )
 
@@ -227,11 +264,7 @@ class InferenceService:
                     "scheduler_mode": result.scheduler_mode,
                     "runtime_profile": result.runtime_profile,
                     "execution_mode": result.execution_mode,
-                    "use_random_latent": bool(use_random_latent),
-                    "random_latent_file": result.random_latent_file,
-                    "random_latent_alpha": result.random_latent_alpha,
-                    "random_latent_preprocess": result.random_latent_preprocess,
-                    "random_latent_scheduler_forced": result.random_latent_scheduler_forced,
+                    "procedural_creativity": result.procedural_creativity,
                 },
             )
             append_generation_metric(
@@ -247,11 +280,7 @@ class InferenceService:
                     "output_path": str(saved_path),
                     "owner_id": safe_owner_id,
                     "model_pack": model_pack.name,
-                    "use_random_latent": bool(use_random_latent),
-                    "random_latent_file": result.random_latent_file,
-                    "random_latent_alpha": result.random_latent_alpha,
-                    "random_latent_preprocess": result.random_latent_preprocess,
-                    "random_latent_scheduler_forced": result.random_latent_scheduler_forced,
+                    "procedural_creativity": result.procedural_creativity,
                     **result.telemetry_dict(),
                 },
             )
@@ -266,11 +295,18 @@ class InferenceService:
             image_row["prompt_enhanced"] = result.prompt_enhanced
             image_row["runtime_profile"] = result.runtime_profile
             image_row["execution_mode"] = result.execution_mode
-            image_row["use_random_latent"] = bool(use_random_latent)
-            image_row["random_latent_file"] = result.random_latent_file
-            image_row["random_latent_alpha"] = result.random_latent_alpha
-            image_row["random_latent_preprocess"] = result.random_latent_preprocess
-            image_row["random_latent_scheduler_forced"] = result.random_latent_scheduler_forced
+            image_row["procedural_creativity"] = result.procedural_creativity
+            LOGGER.info(
+                "Image created: owner=%s file=%s pack=%s size=%dx%d seed=%s duration_ms=%s creative_mode=%s",
+                safe_owner_id,
+                image_row["filename"],
+                model_pack.name,
+                width,
+                height,
+                result.seed,
+                result.duration_ms,
+                result.procedural_creativity,
+            )
             return image_row
 
     def upscale(
@@ -301,6 +337,13 @@ class InferenceService:
             resolved_pack_name = pack_name or preferred_pack
             model_pack_name = (resolved_pack_name or "unknown").strip() or "unknown"
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
+            LOGGER.info(
+                "Upscale request: owner=%s source=%s pack=%s seed=%s",
+                safe_owner_id,
+                safe_filename,
+                model_pack_name,
+                effective_seed,
+            )
 
             with Image.open(source_path) as source_file:
                 source_image = source_file.convert("RGB")
@@ -380,6 +423,16 @@ class InferenceService:
             image_row["runtime_profile"] = self._settings.runtime_profile.name
             image_row["execution_mode"] = UPSCALE_ENGINE_NAME
             image_row["upscale_engine"] = UPSCALE_ENGINE_NAME
+            LOGGER.info(
+                "Image upscaled: owner=%s source=%s file=%s size=%dx%d seed=%s duration_ms=%s",
+                safe_owner_id,
+                safe_filename,
+                image_row["filename"],
+                final_width,
+                final_height,
+                effective_seed,
+                result.duration_ms,
+            )
             return image_row
 
     @staticmethod

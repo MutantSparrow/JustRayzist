@@ -117,12 +117,20 @@ python -m app.cli.main seedvr2-benchmark --profiles high,balanced,constrained
 python -m app.cli.main seedvr2-blend-benchmark --profile high --alphas 25,50,75
 ```
 
+Procedural latent preview:
+
+```powershell
+python -m app.cli.main procedural-latent-preview --count 16 --seed-start 1 --creativity 2
+```
+
 ## API Usage
 
 Base URL: `http://127.0.0.1:37717`
 
 Supported generation cap: `1536x1536`.
 Client-scoped routes require `X-JustRayzist-Client`.
+Use `procedural_creativity` (`0-3`) to control Creative Mode.
+In the main UI, scheduler behavior is derived automatically from Creative Mode. `scheduler_mode` remains optional for raw API and CLI calls.
 
 ```powershell
 $headers = @{ "X-JustRayzist-Client" = "desktop-client" }
@@ -139,7 +147,24 @@ $body = @{
   seed = 123456
   scheduler_mode = "euler"
   enhance_prompt = $false
-  use_random_latent = $false
+  procedural_creativity = 0
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:37717/generate" -Headers $headers -ContentType "application/json" -Body $body
+```
+
+Creative Mode:
+
+```powershell
+$body = @{
+  prompt = "Cinematic skyline at sunrise"
+  width = 1024
+  height = 1024
+  pack = "Rayzist_bf16"
+  seed = 123456
+  scheduler_mode = "dpm"
+  enhance_prompt = $false
+  procedural_creativity = 2
 } | ConvertTo-Json
 
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:37717/generate" -Headers $headers -ContentType "application/json" -Body $body
