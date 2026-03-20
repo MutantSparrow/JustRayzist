@@ -248,68 +248,18 @@ def _runtime_output_context(*, verbose_runtime: bool):
     stderr_tmp = tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace")
     captured_stdout = _CapturedRuntimeStream(stdout_tmp)
     captured_stderr = _CapturedRuntimeStream(stderr_tmp)
-    saved_stdout_fd: int | None = None
-    saved_stderr_fd: int | None = None
-    use_fd_capture = False
     try:
-        try:
-            saved_stdout_fd = os.dup(1)
-            saved_stderr_fd = os.dup(2)
-            sys.stdout.flush()
-            sys.stderr.flush()
-            os.dup2(stdout_tmp.fileno(), 1)
-            os.dup2(stderr_tmp.fileno(), 2)
-            use_fd_capture = True
-        except OSError as exc:
-            LOGGER.debug("SeedVR2 runtime fd capture unavailable; falling back to Python stream capture: %s", exc)
-            if saved_stdout_fd is not None:
-                try:
-                    os.dup2(saved_stdout_fd, 1)
-                except OSError:
-                    pass
-                os.close(saved_stdout_fd)
-                saved_stdout_fd = None
-            if saved_stderr_fd is not None:
-                try:
-                    os.dup2(saved_stderr_fd, 2)
-                except OSError:
-                    pass
-                os.close(saved_stderr_fd)
-                saved_stderr_fd = None
-
-        if use_fd_capture:
-            with _suppress_noncritical_logs():
-                yield captured_stdout, captured_stderr
-        else:
-            with (
-                contextlib.redirect_stdout(stdout_tmp),
-                contextlib.redirect_stderr(stderr_tmp),
-                _suppress_noncritical_logs(),
-            ):
-                yield captured_stdout, captured_stderr
+        with (
+            contextlib.redirect_stdout(stdout_tmp),
+            contextlib.redirect_stderr(stderr_tmp),
+            _suppress_noncritical_logs(),
+        ):
+            yield captured_stdout, captured_stderr
     finally:
-        try:
-            if use_fd_capture:
-                try:
-                    sys.stdout.flush()
-                    sys.stderr.flush()
-                except OSError:
-                    pass
-        finally:
-            if saved_stdout_fd is not None:
-                try:
-                    os.dup2(saved_stdout_fd, 1)
-                finally:
-                    os.close(saved_stdout_fd)
-            if saved_stderr_fd is not None:
-                try:
-                    os.dup2(saved_stderr_fd, 2)
-                finally:
-                    os.close(saved_stderr_fd)
-            captured_stdout.finalize()
-            captured_stderr.finalize()
-            stdout_tmp.close()
-            stderr_tmp.close()
+        captured_stdout.finalize()
+        captured_stderr.finalize()
+        stdout_tmp.close()
+        stderr_tmp.close()
 
 
 def _resolution_targets(width: int, height: int) -> tuple[int, int]:
