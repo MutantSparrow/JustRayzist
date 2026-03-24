@@ -7,6 +7,8 @@ Check:
 - `modelpack.yaml` paths exist and are local paths
 - file extensions match declared formats (`safetensors` or `gguf`)
 - `pipeline_config_dir` and `required_configs` exist
+- `user_visible`, if present, is a boolean
+- advanced runtime hints (`storage_mode`, `storage_dtype`, `compute_dtype`) are valid for the selected component
 
 Actions:
 
@@ -123,14 +125,41 @@ Check:
 - images are under `outputs/`
 - `data/gallery.db` exists
 - the request is using the same client id that created the images
+- `GET /images` and `GET /model-packs` are being checked from the same running instance you launched
 
 Actions:
 
 ```powershell
-python -m app.cli.main serve --host 127.0.0.1 --port 37717 --profile balanced
+python -m app.cli.main serve --host 127.0.0.1 --port 37717
 ```
 
 Server startup performs gallery sync.
+
+## A model pack is missing from the launcher or `GET /model-packs`
+
+Check:
+
+- the pack folder contains `modelpack.yaml`
+- `python -m app.cli.main validate-models` passes
+- the pack is not marked `user_visible: false`
+- the pack is not marked `enabled: false`
+
+Important:
+
+- only public enabled packs appear in `StartWeb.bat` and `GET /model-packs`
+- when exactly one public enabled pack exists, `StartWeb.bat` auto-selects it and skips the pack prompt
+- hidden packs can still be loaded explicitly for engineering workflows
+- `Rayzist_fp8_full` and compatible custom real-FP8 packs can be public; if they are missing, validate their pack files and weights
+- `fp8_storage` is not a user pack anymore; constrained conditions may derive `<base>__auto_fp8_storage` automatically
+- real FP8 packs currently run through BF16 compute with FP8-at-rest preservation; native FP8 inference is not implemented yet
+
+Actions:
+
+```powershell
+python -m app.cli.main validate-models
+python -m app.cli.main validate-models --all
+python -m app.cli.main status
+```
 
 ## `GET /images/{filename}` returns not found
 
@@ -152,7 +181,39 @@ Mitigations:
 
 - lower `--drift-threshold-mb`
 - set `--recycle-every`
-- switch to `constrained` profile on lower-VRAM hardware
+- let auto resource-tiering downgrade naturally on lower-VRAM hardware
+- use engineering-only forced profile overrides only when you are benchmarking or diagnosing a specific memory strategy
+
+## High VRAM pressure or unexpected fallback behavior
+
+Check the current baseline and detected memory tier:
+
+```powershell
+python -m app.cli.main status
+python -m app.cli.main doctor
+```
+
+Look for:
+
+- `runtime_profile`: stable baseline defaults for normal behavior
+- `resource_tier`: current auto-detected memory strategy
+- `resource_tier_override`: should normally be `null`
+- `auto_resource_tier`: should normally be `true`
+
+If a request falls back to a heavier offload mode, that usually means the preflight guard found less free CUDA-visible VRAM than was needed for the current run. This can happen even if Windows Task Manager looks relatively empty, because CUDA allocatable VRAM and desktop-reported usage do not always match exactly.
+
+Normal guidance:
+
+- do not create a second user pack just for FP8 storage
+- let constrained conditions derive the internal FP8-storage runtime strategy automatically when the selected base pack is compatible
+- keep forced `--profile` / `--profiles` flags for engineering diagnostics and benchmark commands only
+
+Useful engineering probes:
+
+```powershell
+python -m app.cli.main pack-compare --prompt "diagnostic prompt"
+python -m app.cli.main prompt-grid-benchmark --pack Rayzist_bf16 --prompt "PROMPT 1" --prompt "PROMPT 2" --prompt "PROMPT 3"
+```
 
 ## SeedVR2 or upscale assets are missing
 

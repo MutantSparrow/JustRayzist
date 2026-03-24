@@ -1,0 +1,27 @@
+﻿name: Rayzist_fp8_full
+user_visible: true
+enabled: false
+architecture: z_image_turbo
+backend_preference:
+  - fp8_zimage
+  - diffusers
+pipeline_config_dir: ../Rayzist_bf16/config
+components:
+  transformer:
+    path: ./weights/Rayzist.v1.0.fp8_e4m3fn.full.safetensors
+    format: safetensors
+  vae:
+    path: ../Rayzist_bf16/weights/diffusion_pytorch_model.safetensors
+    format: safetensors
+  text_encoder:
+    path: ../Rayzist_bf16/config/text_encoder/model.safetensors
+    format: safetensors
+required_configs:
+  - ../Rayzist_bf16/config/model_index.json
+  - ../Rayzist_bf16/config/scheduler/scheduler_config.json
+  - ../Rayzist_bf16/config/tokenizer/tokenizer.json
+  - ../Rayzist_bf16/config/transformer/config.json
+  - ../Rayzist_bf16/config/vae/config.json
+  - ../Rayzist_bf16/config/text_encoder/config.json
+
+

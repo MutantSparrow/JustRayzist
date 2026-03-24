@@ -15,10 +15,11 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
+from app.api.api_manifest import api_manifest_payload
 from app.config import load_settings
+from app.api.inference_service import InferenceService
 from app.core.logging import configure_logging
 from app.core.model_registry import ModelPackValidationError
-from app.api.inference_service import InferenceService
 from app.storage.gallery_index import ensure_gallery_schema
 
 configure_logging()
@@ -111,24 +112,42 @@ def _resolve_owner_id(client_header: str | None, client_query: str | None = None
 
 @app.get("/health")
 def health() -> dict:
+    runtime = inference.runtime_status()
     return {
         "status": "ok",
         "app": settings.app_name,
         "version": settings.app_version,
-        "profile": settings.runtime_profile.name,
+        "runtime_profile": runtime.get("runtime_profile"),
+        "resource_tier": runtime.get("resource_tier"),
+        "active_pack": runtime.get("active_pack"),
+        "selected_pack": runtime.get("selected_pack"),
+        "effective_pack": runtime.get("effective_pack"),
+        "active_backend": runtime.get("active_backend"),
+        "fp8_fallback_used": runtime.get("fp8_fallback_used", False),
+        "fp8_fallback_reason": runtime.get("fp8_fallback_reason"),
+        "fp8_runtime_mode": runtime.get("fp8_runtime_mode"),
+        "fp8_storage_preserved_tensor_count": runtime.get("fp8_storage_preserved_tensor_count", 0),
+        "fp8_promoted_tensor_count": runtime.get("fp8_promoted_tensor_count", 0),
         "offline_mode": settings.offline_mode,
     }
 
 
 @app.get("/config")
 def config() -> dict:
-    return settings.to_dict()
+    payload = settings.to_dict()
+    payload["runtime"] = inference.runtime_status()
+    return payload
 
 
 @app.get("/model-packs")
 def model_packs() -> dict:
     packs = inference.list_model_packs()
     return {"items": packs, "count": len(packs)}
+
+
+@app.get("/api-manifest", include_in_schema=False)
+def api_manifest() -> dict:
+    return api_manifest_payload()
 
 
 @app.post("/generate")

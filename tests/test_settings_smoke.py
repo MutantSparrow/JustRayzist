@@ -13,7 +13,11 @@ def test_profile_soak_defaults_are_tuned() -> None:
     balanced = load_settings(profile_name="balanced").runtime_profile
     constrained = load_settings(profile_name="constrained").runtime_profile
 
+    assert high.min_free_vram_gb == 12
+    assert balanced.min_free_vram_gb == 8
+    assert constrained.min_free_vram_gb == 4
     assert high.default_soak_drift_threshold_mb == 256
     assert balanced.default_soak_drift_threshold_mb == 128
     assert constrained.default_soak_drift_threshold_mb == 64
     assert constrained.default_soak_recycle_every == 24
+

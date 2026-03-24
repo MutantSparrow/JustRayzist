@@ -1,5 +1,7 @@
 param(
-  [switch]$Force
+  [switch]$Force,
+  [ValidateSet("auto", "bf16", "fp8_full")]
+  [string]$ModelVariant = "auto"
 )
 
 $ErrorActionPreference = "Stop"
@@ -148,14 +150,122 @@ function Download-Asset {
   Write-Host "[ok] $Name saved ($sizeMb MB)"
 }
 
-$assets = @(
-  @{
-    Name = "Transformer checkpoint"
+function Get-MaxNvidiaVramMiB {
+  $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+  if (-not $nvidiaSmi) {
+    return $null
+  }
+
+  $previousPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $rows = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null
+    if (-not $rows) {
+      return $null
+    }
+    $values = @()
+    foreach ($row in $rows) {
+      $text = [string]$row
+      $parsed = 0
+      if ([int]::TryParse($text.Trim(), [ref]$parsed)) {
+        $values += $parsed
+      }
+    }
+    if (-not $values -or $values.Count -eq 0) {
+      return $null
+    }
+    return ($values | Measure-Object -Maximum).Maximum
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+}
+
+function Resolve-ModelVariant {
+  param([Parameter(Mandatory = $true)][string]$RequestedVariant)
+
+  if ($RequestedVariant -ne "auto") {
+    return [PSCustomObject]@{
+      Name = $RequestedVariant
+      MaxVramMiB = $null
+      Source = "explicit"
+    }
+  }
+
+  $maxVramMiB = Get-MaxNvidiaVramMiB
+  if ($null -eq $maxVramMiB) {
+    Write-Host "[variant] Could not detect NVIDIA VRAM via nvidia-smi. Falling back to BF16 default."
+    return [PSCustomObject]@{
+      Name = "bf16"
+      MaxVramMiB = $null
+      Source = "auto-undetected"
+    }
+  }
+
+  if ([int]$maxVramMiB -lt 13312) {
+    Write-Host "[variant] Detected max NVIDIA VRAM: $maxVramMiB MiB (< 13312 MiB). Selecting FP8-full default."
+    return [PSCustomObject]@{
+      Name = "fp8_full"
+      MaxVramMiB = [int]$maxVramMiB
+      Source = "auto-low-vram"
+    }
+  }
+
+  Write-Host "[variant] Detected max NVIDIA VRAM: $maxVramMiB MiB (>= 13312 MiB). Selecting BF16 default."
+  return [PSCustomObject]@{
+    Name = "bf16"
+    MaxVramMiB = [int]$maxVramMiB
+    Source = "auto-normal-vram"
+  }
+}
+
+function Set-ModelPackEnabledState {
+  param(
+    [Parameter(Mandatory = $true)][string]$PackName,
+    [Parameter(Mandatory = $true)][bool]$Enabled
+  )
+
+  $packFile = Join-Path $projectRoot ("models\packs\" + $PackName + "\modelpack.yaml")
+  if (-not (Test-Path $packFile)) {
+    throw "Model pack manifest not found: $packFile"
+  }
+
+  $content = Get-Content $packFile -Raw
+  $enabledLine = "enabled: " + $Enabled.ToString().ToLowerInvariant()
+  if ($content -match '(?m)^[ ]*enabled:[ ]*(true|false)[ ]*$') {
+    $updated = [regex]::Replace($content, '(?m)^[ ]*enabled:[ ]*(true|false)[ ]*$', $enabledLine, 1)
+  } elseif ($content -match '(?m)^[ ]*user_visible:[ ]*(true|false)[ ]*$') {
+    $updated = [regex]::Replace($content, '(?m)^(?<line>[ ]*user_visible:[ ]*(true|false)[ ]*)$', '${line}' + "`r`n" + $enabledLine, 1)
+  } elseif ($content -match '(?m)^[ ]*name:[ ]*.+$') {
+    $updated = [regex]::Replace($content, '(?m)^(?<line>[ ]*name:[ ]*.+)$', '${line}' + "`r`n" + $enabledLine, 1)
+  } else {
+    $updated = $enabledLine + "`r`n" + $content
+  }
+
+  Set-Content -Path $packFile -Value $updated -Encoding utf8
+}
+
+$selectedVariant = Resolve-ModelVariant -RequestedVariant $ModelVariant
+$transformerAsset = $null
+if ($selectedVariant.Name -eq "fp8_full") {
+  $transformerAsset = @{
+    Name = "Transformer checkpoint (FP8 full)"
+    RepoId = "MutantSparrow/Ray"
+    RepoFile = "Z-IMAGE-TURBO/Rayzist.v1.0.fp8_e4m3fn.full.safetensors"
+    RelativeOutputPath = "models/packs/Rayzist_fp8_full/weights/Rayzist.v1.0.fp8_e4m3fn.full.safetensors"
+    Sha256 = ""
+  }
+} else {
+  $transformerAsset = @{
+    Name = "Transformer checkpoint (BF16)"
     RepoId = "MutantSparrow/Ray"
     RepoFile = "Z-IMAGE-TURBO/Rayzist.v1.0.safetensors"
     RelativeOutputPath = "models/packs/Rayzist_bf16/weights/Rayzist.v1.0.safetensors"
     Sha256 = "e1d396329a3d5ebde6d81df5d4753367a61fa9f0cb45ed6fa78336f69bd975a1"
-  },
+  }
+}
+
+$assets = @(
+  $transformerAsset,
   @{
     Name = "VAE checkpoint"
     RepoId = "Tongyi-MAI/Z-Image-Turbo"
@@ -216,6 +326,16 @@ foreach ($asset in $assets) {
   Download-Asset -HfExe $hfExe -Name $asset.Name -RepoId $asset.RepoId -RepoFile $asset.RepoFile -RelativeOutputPath $asset.RelativeOutputPath -Sha256 $asset.Sha256 -Overwrite:$Force
 }
 
+if ($selectedVariant.Name -eq "fp8_full") {
+  Set-ModelPackEnabledState -PackName "Rayzist_bf16" -Enabled $false
+  Set-ModelPackEnabledState -PackName "Rayzist_fp8_full" -Enabled $true
+  Write-Host "[variant] Enabled default pack: Rayzist_fp8_full"
+} else {
+  Set-ModelPackEnabledState -PackName "Rayzist_bf16" -Enabled $true
+  Set-ModelPackEnabledState -PackName "Rayzist_fp8_full" -Enabled $false
+  Write-Host "[variant] Enabled default pack: Rayzist_bf16"
+}
+
 $deprecatedVaePath = Join-Path $projectRoot "models/packs/Rayzist_bf16/weights/ultrafluxVAEImproved_v10.safetensors"
 if (Test-Path $deprecatedVaePath) {
   Remove-Item -Path $deprecatedVaePath -Force
@@ -224,5 +344,6 @@ if (Test-Path $deprecatedVaePath) {
 
 Write-Host ""
 Write-Host "Model asset fetch complete (HF CLI + XET)."
+Write-Host ("Selected model variant: {0}" -f $selectedVariant.Name)
 Write-Host "Next step:"
 Write-Host "  python -m app.cli.main validate-models"

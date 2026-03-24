@@ -43,3 +43,10 @@ JustRayzist/
 # IDE
 .vscode/
 .idea/
+
+desktop.ini
+
+.build/pytest-work/
+.build/pytest-runtime/
+.pytest_tmp/
+pytest_temp_root/

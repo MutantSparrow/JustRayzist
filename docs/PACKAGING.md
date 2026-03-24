@@ -9,6 +9,12 @@ The repository supports two Windows packaging flows:
 
 Model weights are not bundled in either mode. Packaged releases also include `UpdateApp.bat`, `scripts\update_release.ps1`, `release_manifest.json`, and the local README image assets so installs can update in place from GitHub releases.
 
+The packaged UX now matches source mode:
+
+- startup prompts only for public model-pack selection and local/LAN listen mode
+- memory strategy is auto-detected at runtime through internal `resource_tier` selection
+- no normal-user packaged flow asks for `high`, `balanced`, or `constrained`
+
 ## Main Scripts
 
 - `scripts\pyinstaller\build_onedir.ps1`
@@ -64,9 +70,19 @@ powershell -ExecutionPolicy Bypass -File scripts\release\clean_legacy_artifacts.
 ## Runtime Asset Policy
 
 - `RunMeFirst.bat` is the primary setup and repair path
-- `StartWeb.bat` can auto-fetch the default `Rayzist_bf16` assets when they are missing
+- `StartWeb.bat` can auto-fetch the selected default pack assets when they are missing
+- install/setup auto-selects `Rayzist_fp8_full` below 13 GiB of detected NVIDIA VRAM and otherwise keeps `Rayzist_bf16` as the default enabled pack
+- `StartWeb.bat` now asks users only for pack selection when more than one public enabled pack exists, plus local/LAN listen mode
+- `StartWeb.bat` shows only public enabled packs and keeps hidden/experimental/disabled packs out of the normal packaged launcher flow
+- release packaging copies tracked pack metadata only, so local custom packs and local weight files are left to the installer/local machine
 - downloads use Hugging Face CLI with XET acceleration
 - fetched assets are SHA256-verified before acceptance
+
+## Packaged Update Expectations
+
+- `UpdateApp.bat` preserves `models/`, `outputs/`, `data/`, `.venv/`, and `release_lane.txt`
+- packaged updates should not overwrite local user outputs or model assets
+- after update, `StartWeb.bat` should still present the no-profile startup flow and public-pack-only selection
 
 ## CUDA / Driver Baseline
 

@@ -13,6 +13,14 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 <img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
 <img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
+## New in v1.4.0
+
+- startup is simpler: no user profile choice, automatic VRAM-aware resource tiering, and pack selection only when more than one public enabled pack is installed
+- setup can now auto-pick `Rayzist_fp8_full` on sub-13GB NVIDIA systems, while higher-VRAM installs stay on the BF16 default pack
+- real FP8 packs are now supported as normal user packs, but they currently run as BF16 compute with FP8-at-rest preservation where safe; native FP8 inference is not implemented in this release
+- public pack discovery now respects both `user_visible` and `enabled`, while constrained runs can still derive internal `<base>__auto_fp8_storage` variants when useful
+- the API and gallery flows are broader and cleaner, with ZIP download, gallery import/delete, and `/API` examples generated from the live route manifest
+- engineering tooling now includes pack/resource comparison commands such as `pack-compare`, `pack-compare-suite`, and `prompt-grid-benchmark`
 
 ## Specs
 
@@ -20,7 +28,7 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 - Typer CLI
 - Z-Image Turbo, and more specifically my very own finetune: [Rayzist](https://huggingface.co/MutantSparrow/Ray)
 - local model packs (`.safetensors` / `.gguf`)
-- Runtime profiles `constrained`, `balanced`, `high` support different VRAM classes
+- Automatic resource-tier detection adapts memory strategy to available VRAM
 - custom mixed-model fast upscale flow. It's not the best in the world, but it's the best at that speed!
 - Creative Mode slider (`0-3`) for Light, Medium, and Extreme generation variants
 - RunMeFirst bootstrap installation and auto-repair
@@ -78,6 +86,7 @@ From repository root:
 - install matching torch/runtime dependencies based on your detected GPU
 - install Hugging Face CLI + XET support in the environment
 - fetch default model assets from Hugging Face
+- choose `Rayzist_bf16` or `Rayzist_fp8_full` as the default installed pack from detected NVIDIA VRAM
 - run sanity checks and create a desktop shortcut
 
 Downloads are performed through Hugging Face CLI (`hf download`) with XET acceleration enabled (`HF_XET_HIGH_PERFORMANCE=1`), and each file is SHA256-verified before acceptance.
@@ -94,10 +103,20 @@ From repository root:
 <br>
 Launcher flow:
 
-1. Select runtime profile.
-2. Select model pack.
-3. Select if the server will listen to LAN connections.
+1. Select model pack only when more than one public enabled pack is installed.
+2. Select if the server will listen to LAN connections.
+3. Let the app auto-detect a memory strategy from current free VRAM.
 4. Open `http://127.0.0.1:37717/`.
+
+Normal startup no longer asks users to choose `high`, `balanced`, or `constrained`.
+The app keeps a stable `balanced` behavior baseline for normal quality defaults, then
+auto-detects an internal resource tier (`high`, `balanced`, or `constrained`) to pick
+the safest execution/offload strategy for the hardware and current VRAM state.
+That resource tier can downgrade or re-upgrade between requests as available VRAM changes.
+
+Only public enabled packs appear in the launcher and `GET /model-packs`.
+If setup detects less than 13 GiB of NVIDIA VRAM, it enables `Rayzist_fp8_full` as the seamless default install instead of `Rayzist_bf16`.
+Hidden, disabled, or experimental packs remain loadable only when explicitly named for engineering work.
 
 ## Update Packaged Install
 
@@ -113,7 +132,7 @@ It checks the latest matching GitHub release for your current lane and mode, the
 Environment variables (used for CLI)
 
 - `JUSTRAYZIST_ROOT`: override workspace root.
-- `JUSTRAYZIST_PROFILE`: `constrained|balanced|high`.
+- `JUSTRAYZIST_PROFILE`: engineering-only runtime tier override for diagnostics and benchmarks.
 - `JUSTRAYZIST_PACK`: default model pack name.
 - `JUSTRAYZIST_OFFLINE`: `1` (default) enables offline env guards.
 - `JUSTRAYZIST_ENV`: environment label (`dev` default).
@@ -128,25 +147,26 @@ From repository root:
 python -m app.cli.main status
 python -m app.cli.main doctor
 python -m app.cli.main validate-models
-python -m app.cli.main serve --host 127.0.0.1 --port 37717 --profile balanced
+python -m app.cli.main validate-models --all
+python -m app.cli.main serve --host 127.0.0.1 --port 37717
 ```
 
 Generate:
 
 ```powershell
-python -m app.cli.main generate --pack Rayzist_bf16 --prompt "cinematic skyline at sunrise" --profile balanced
+python -m app.cli.main generate --pack Rayzist_bf16 --prompt "cinematic skyline at sunrise"
 ```
 
 Upscale + refine:
 
 ```powershell
-python -m app.cli.main upscale-refine --pack Rayzist_bf16 --input-image outputs\sample.png --prompt "portrait photo" --profile balanced
+python -m app.cli.main upscale-refine --pack Rayzist_bf16 --input-image outputs\sample.png --prompt "portrait photo"
 ```
 
 Soak test:
 
 ```powershell
-python -m app.cli.main soak --pack Rayzist_bf16 --prompt "stress prompt" --iterations 20 --profile constrained
+python -m app.cli.main soak --pack Rayzist_bf16 --prompt "stress prompt" --iterations 20
 ```
 
 Soak report:
@@ -156,9 +176,13 @@ python -m app.cli.main soak-report --list-sessions
 python -m app.cli.main soak-report --session-id <session_id>
 ```
 
-There are also dedicated benchmark commands if you want to poke at the SeedVR2 paths:
+Normal CLI commands use auto resource-tier detection. Forced profile/tier flags are kept only on engineering benchmark and probe commands:
 
 ```powershell
+python -m app.cli.main upscale-test --input-image outputs\_Upscale_test.png --checkpoint models\upscaler\2x_RealESRGAN_x2plus.pth --profiles high,balanced,constrained
+python -m app.cli.main pack-compare --prompt "cinematic skyline at sunrise"
+python -m app.cli.main pack-compare-suite --iterations 3
+python -m app.cli.main prompt-grid-benchmark --pack Rayzist_bf16 --prompt "PROMPT 1" --prompt "PROMPT 2" --prompt "PROMPT 3"
 python -m app.cli.main seedvr2-benchmark --profiles high,balanced,constrained
 python -m app.cli.main seedvr2-blend-benchmark --profile high --alphas 25,50,75
 ```
@@ -179,27 +203,130 @@ Use `procedural_creativity` (`0-3`) to control Creative Mode.
 In the main UI, scheduler behavior is derived automatically from Creative Mode. `scheduler_mode` remains optional for raw API and CLI calls.
 Direct image fetches can use `?client_id=<client-id>` if you are linking them into a page or tool.
 
+<!-- BEGIN GENERATED API ROUTES -->
 - `GET /health`
 - `GET /config`
 - `GET /model-packs`
 - `POST /generate`
 - `POST /upscale`
-- `GET /images`
-- `GET /images/{filename}`
-- `DELETE /images/{filename}?confirm=DELETE`
-- `DELETE /gallery?confirm=DELETE`
-- `GET /gallery/import-sources`
-- `POST /gallery/import`
-- `POST /server/kill`
+- `POST /images/download-zip`
+<!-- END GENERATED API ROUTES -->
+
 - `GET /API` (interactive API documentation + tester)
 
-### API Example: Generate
+`GET /health` and `GET /config` report both:
+- `runtime_profile`: the stable baseline defaults used for normal behavior
+- `resource_tier`: the currently detected internal memory strategy
 
-```http
-POST /generate
-X-JustRayzist-Client: desktop-client
-Content-Type: application/json
+`GET /model-packs` returns public packs only. Internal derived strategies such as `<base>__auto_fp8_storage` are engineering/runtime details, not normal user pack names.
 
+<!-- BEGIN GENERATED API EXAMPLES -->
+### `GET /health`
+
+Service health plus current baseline/defaults and detected memory strategy.
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "app": "JustRayzist",
+  "version": "1.4.0",
+  "runtime_profile": "balanced",
+  "resource_tier": "high",
+  "active_pack": "Rayzist_bf16",
+  "selected_pack": "Rayzist_bf16",
+  "effective_pack": "Rayzist_bf16",
+  "active_backend": "diffusers_zimage",
+  "fp8_fallback_used": false,
+  "fp8_fallback_reason": null,
+  "fp8_runtime_mode": null,
+  "fp8_storage_preserved_tensor_count": 0,
+  "fp8_promoted_tensor_count": 0,
+  "offline_mode": true
+}
+```
+
+### `GET /config`
+
+Resolved runtime configuration, paths, and current runtime status.
+
+Sample response:
+
+```json
+{
+  "app_name": "JustRayzist",
+  "app_version": "1.4.0",
+  "environment": "dev",
+  "offline_mode": true,
+  "runtime_profile": {
+    "name": "balanced",
+    "description": "16GB-class profile with moderate offload and stable throughput."
+  },
+  "resource_tier": {
+    "name": "high",
+    "description": "24GB-class profile with minimal offload and highest throughput."
+  },
+  "resource_tier_override": null,
+  "auto_resource_tier": true,
+  "paths": {
+    "root_dir": "S:\\STABLEDIFFUSION\\JustRayzist",
+    "models_dir": "S:\\STABLEDIFFUSION\\JustRayzist\\models",
+    "model_packs_dir": "S:\\STABLEDIFFUSION\\JustRayzist\\models\\packs",
+    "outputs_dir": "S:\\STABLEDIFFUSION\\JustRayzist\\outputs",
+    "data_dir": "S:\\STABLEDIFFUSION\\JustRayzist\\data",
+    "ui_dir": "S:\\STABLEDIFFUSION\\JustRayzist\\app\\ui"
+  },
+  "runtime": {
+    "runtime_profile": "balanced",
+    "resource_tier": "high",
+    "resource_tier_description": "24GB-class profile with minimal offload and highest throughput.",
+    "resource_tier_override": null,
+    "auto_resource_tier": true,
+    "active_pack": "Rayzist_bf16",
+    "selected_pack": "Rayzist_bf16",
+    "effective_pack": "Rayzist_bf16",
+    "active_backend": "diffusers_zimage",
+    "execution_mode": "model_offload",
+    "fp8_checkpoint": false,
+    "fp8_fallback_used": false,
+    "fp8_fallback_reason": null,
+    "fp8_runtime_mode": null,
+    "fp8_normalized_tensor_count": 0,
+    "fp8_storage_preserved_tensor_count": 0,
+    "fp8_promoted_tensor_count": 0
+  }
+}
+```
+
+### `GET /model-packs`
+
+List discovered, valid, public, and enabled model packs.
+
+Sample response:
+
+```json
+{
+  "count": 1,
+  "items": [
+    {
+      "name": "Rayzist_bf16",
+      "path": "S:\\STABLEDIFFUSION\\JustRayzist\\models\\packs\\Rayzist_bf16\\modelpack.yaml",
+      "architecture": "z_image_turbo"
+    }
+  ]
+}
+```
+
+### `POST /generate`
+
+Generate one image from prompt and dimensions in the current client scope.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
 {
   "prompt": "A cinematic skyline at sunrise",
   "width": 1024,
@@ -212,34 +339,34 @@ Content-Type: application/json
 }
 ```
 
-### API Example: Creative Mode
+Sample response:
 
-```http
-POST /generate
-X-JustRayzist-Client: desktop-client
-Content-Type: application/json
-
+```json
 {
+  "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+  "output_path": "S:\\STABLEDIFFUSION\\JustRayzist\\outputs\\example-client\\justrayzist_YYYYMMDD_hhmmss_000.png",
   "prompt": "A cinematic skyline at sunrise",
   "width": 1024,
   "height": 1024,
-  "pack": "Rayzist_bf16",
-  "seed": 123456,
-  "scheduler_mode": "dpm",
-  "enhance_prompt": false,
-  "procedural_creativity": 2
+  "duration_ms": 12345,
+  "url": "/images/justrayzist_YYYYMMDD_hhmmss_000.png",
+  "prompt_enhanced": false,
+  "scheduler_mode": "euler",
+  "procedural_creativity": 0
 }
 ```
 
-### API Example: Upscale
+### `POST /upscale`
 
-```http
-POST /upscale
-X-JustRayzist-Client: desktop-client
-Content-Type: application/json
+Upscale one gallery image with the app's mixed-model fast upscale flow.
 
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
 {
-  "filename": "justrayzist_20260228_120000_000.png",
+  "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
   "pack": "Rayzist_bf16",
   "seed": 123456,
   "scheduler_mode": "euler",
@@ -247,7 +374,44 @@ Content-Type: application/json
 }
 ```
 
-`POST /upscale` uses the app's default custom mixed-model fast upscale path.
+Sample response:
+
+```json
+{
+  "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
+  "mode": "api_upscale",
+  "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+  "upscale_engine": "x2_seedvr2_blend",
+  "duration_ms": 23456,
+  "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png"
+}
+```
+
+### `POST /images/download-zip`
+
+Download a ZIP archive containing the selected client-scoped images.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "filenames": [
+    "justrayzist_YYYYMMDD_hhmmss_000.png",
+    "justrayzist_YYYYMMDD_hhmmss_001.png"
+  ]
+}
+```
+
+Sample response:
+
+```text
+ZIP binary response (attachment filename: <client>_selection.zip)
+```
+<!-- END GENERATED API EXAMPLES -->
+
+The `/API` tester page uses the app's internal `GET /api-manifest` feed to stay aligned with the real handlers and current example payloads.
 
 ## Troubleshooting
 
@@ -282,3 +446,4 @@ Default model assets are provided by the following model owners and repositories
 - imagepipeline (superresolution/x2 upscaler): https://huggingface.co/imagepipeline/superresolution
 
 Model weights remain under their respective upstream licenses and terms.
+

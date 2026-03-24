@@ -12,6 +12,7 @@ from typing import Any
 
 from PIL import Image
 
+from app.config.profiles import RuntimeProfile
 from app.config.settings import AppSettings
 from app.core.memory import (
     CudaMemorySnapshot,
@@ -26,6 +27,21 @@ from app.core.upscale import upscale_image
 from app.core.worker.types import GenerationRequest, resolve_procedural_creativity
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class VramPreflightResult:
+    checked: bool
+    cleanup_attempted: bool
+    passed_before_cleanup: bool | None
+    passed_after_cleanup: bool | None
+    free_before_bytes: int | None
+    free_after_cleanup_bytes: int | None
+    threshold_bytes: int | None
+
+    @property
+    def passed(self) -> bool:
+        return bool(self.passed_after_cleanup)
 
 
 @dataclass
@@ -59,15 +75,41 @@ class GenerationResult:
     process_memory_before: ProcessMemorySnapshot | None = None
     process_memory_after: ProcessMemorySnapshot | None = None
     runtime_profile: str | None = None
+    resource_tier: str | None = None
     execution_mode: str | None = None
+    execution_mode_initial: str | None = None
+    execution_mode_before_generate: str | None = None
+    execution_mode_after_generate: str | None = None
     cuda_total_bytes: int | None = None
     cuda_reserved_after_load_bytes: int | None = None
+    cuda_free_before_load_bytes: int | None = None
+    cuda_free_after_load_bytes: int | None = None
+    cuda_free_before_generate_bytes: int | None = None
+    cuda_free_after_generate_bytes: int | None = None
+    preflight_checked: bool = False
+    preflight_cleanup_attempted: bool = False
+    preflight_passed_before_cleanup: bool | None = None
+    preflight_passed_after_cleanup: bool | None = None
+    preflight_free_before_bytes: int | None = None
+    preflight_free_after_cleanup_bytes: int | None = None
+    preflight_threshold_bytes: int | None = None
+    preflight_fallback_triggered: bool = False
     procedural_latent_enabled: bool = False
     procedural_creativity: int = 0
     procedural_latent_recipe: str | None = None
     procedural_latent_alpha: float | None = None
     procedural_latent_preprocess: str | None = None
     procedural_latent_scheduler_forced: bool = False
+    selected_pack: str | None = None
+    effective_pack: str | None = None
+    fp8_checkpoint: bool = False
+    fp8_fallback_used: bool = False
+    fp8_fallback_reason: str | None = None
+    fp8_runtime_mode: str | None = None
+    fp8_normalized_tensor_count: int = 0
+    fp8_storage_preserved_tensor_count: int = 0
+    fp8_promoted_tensor_count: int = 0
+    fp8_normalized_tensor_names: tuple[str, ...] = ()
 
     def telemetry_dict(self) -> dict[str, Any]:
         return {
@@ -107,19 +149,46 @@ class GenerationResult:
                 self.process_memory_after.to_dict() if self.process_memory_after else None
             ),
             "runtime_profile": self.runtime_profile,
+            "resource_tier": self.resource_tier,
             "execution_mode": self.execution_mode,
+            "execution_mode_initial": self.execution_mode_initial,
+            "execution_mode_before_generate": self.execution_mode_before_generate,
+            "execution_mode_after_generate": self.execution_mode_after_generate,
             "cuda_total_bytes": self.cuda_total_bytes,
             "cuda_reserved_after_load_bytes": self.cuda_reserved_after_load_bytes,
+            "cuda_free_before_load_bytes": self.cuda_free_before_load_bytes,
+            "cuda_free_after_load_bytes": self.cuda_free_after_load_bytes,
+            "cuda_free_before_generate_bytes": self.cuda_free_before_generate_bytes,
+            "cuda_free_after_generate_bytes": self.cuda_free_after_generate_bytes,
+            "preflight_checked": self.preflight_checked,
+            "preflight_cleanup_attempted": self.preflight_cleanup_attempted,
+            "preflight_passed_before_cleanup": self.preflight_passed_before_cleanup,
+            "preflight_passed_after_cleanup": self.preflight_passed_after_cleanup,
+            "preflight_free_before_bytes": self.preflight_free_before_bytes,
+            "preflight_free_after_cleanup_bytes": self.preflight_free_after_cleanup_bytes,
+            "preflight_threshold_bytes": self.preflight_threshold_bytes,
+            "preflight_fallback_triggered": self.preflight_fallback_triggered,
             "procedural_latent_enabled": self.procedural_latent_enabled,
             "procedural_creativity": self.procedural_creativity,
             "procedural_latent_recipe": self.procedural_latent_recipe,
             "procedural_latent_alpha": self.procedural_latent_alpha,
             "procedural_latent_preprocess": self.procedural_latent_preprocess,
             "procedural_latent_scheduler_forced": self.procedural_latent_scheduler_forced,
+            "selected_pack": self.selected_pack,
+            "effective_pack": self.effective_pack,
+            "fp8_checkpoint": self.fp8_checkpoint,
+            "fp8_fallback_used": self.fp8_fallback_used,
+            "fp8_fallback_reason": self.fp8_fallback_reason,
+            "fp8_runtime_mode": self.fp8_runtime_mode,
+            "fp8_normalized_tensor_count": self.fp8_normalized_tensor_count,
+            "fp8_storage_preserved_tensor_count": self.fp8_storage_preserved_tensor_count,
+            "fp8_promoted_tensor_count": self.fp8_promoted_tensor_count,
+            "fp8_normalized_tensor_names": list(self.fp8_normalized_tensor_names),
         }
 
 
 class DiffusersZImageBackend:
+    BACKEND_NAME = "diffusers_zimage"
     _SCHEDULER_EULER = "euler"
     _SCHEDULER_DPM_MANUAL = "dpm"
     _SCHEDULER_DPM_EXP_LIGHT = "dpm_exp_light"
@@ -154,17 +223,68 @@ class DiffusersZImageBackend:
     _PROCEDURAL_LATENT_PREPROCESS = "procedural_normalize_mix"
     _PROCEDURAL_LATENT_RECIPE_VERSION = "proc_v4"
 
-    def __init__(self, settings: AppSettings, model_pack: ModelPack):
+    def __init__(
+        self,
+        settings: AppSettings,
+        model_pack: ModelPack,
+        resource_tier: RuntimeProfile | None = None,
+    ):
         self._settings = settings
         self._model_pack = model_pack
+        self._resource_tier = resource_tier
         self._loaded: LoadedZImagePipeline | None = None
         self._img2img_pipe: Any | None = None
         self._active_scheduler_mode_by_pipe: dict[int, str] = {}
         self._effective_execution_mode: str = "unknown"
+        self._initial_execution_mode: str = "unknown"
+        self._backend_name: str = self.BACKEND_NAME
         self._cuda_total_bytes: int | None = None
         self._cuda_reserved_after_load_bytes: int | None = None
+        self._cuda_free_before_load_bytes: int | None = None
+        self._cuda_free_after_load_bytes: int | None = None
+        self._fp8_checkpoint = False
+        self._fp8_fallback_used = False
+        self._fp8_fallback_reason: str | None = None
+        self._fp8_runtime_mode: str | None = None
+        self._fp8_normalized_tensor_count = 0
+        self._fp8_storage_preserved_tensor_count = 0
+        self._fp8_promoted_tensor_count = 0
+        self._fp8_normalized_tensor_names: tuple[str, ...] = ()
+        self._last_preflight: VramPreflightResult = VramPreflightResult(
+            checked=False,
+            cleanup_attempted=False,
+            passed_before_cleanup=None,
+            passed_after_cleanup=None,
+            free_before_bytes=None,
+            free_after_cleanup_bytes=None,
+            threshold_bytes=None,
+        )
+        self._preflight_fallback_triggered = False
         self._high_runtime_fallback_latched = False
         self._high_runtime_pressure_hits = 0
+
+    def _build_pipeline(self) -> LoadedZImagePipeline:
+        return build_zimage_pipeline(
+            self._model_pack,
+            self._resource_profile(),
+        )
+
+    def set_resource_tier(self, profile: RuntimeProfile) -> None:
+        self._resource_tier = profile
+
+    def _resource_profile(self) -> RuntimeProfile:
+        if self._resource_tier is not None:
+            return self._resource_tier
+        controller = getattr(self._settings, "resource_tier_controller", None)
+        if controller is not None:
+            try:
+                return controller.current()
+            except Exception:
+                pass
+        profile = getattr(self._settings, "resource_tier", None)
+        if profile is not None:
+            return profile
+        return self._settings.runtime_profile
 
     @staticmethod
     def _snap_up(value: int, multiple: int) -> int:
@@ -187,7 +307,7 @@ class DiffusersZImageBackend:
         return tiles
 
     def _default_execution_mode_for_profile(self) -> str:
-        profile = self._settings.runtime_profile
+        profile = self._resource_profile()
         if profile.enable_sequential_offload:
             return "sequential_offload"
         if profile.enable_cpu_offload:
@@ -195,10 +315,11 @@ class DiffusersZImageBackend:
         return self._HIGH_MODE_FULL_CUDA
 
     def _normalize_high_force_mode(self) -> str:
-        if self._settings.runtime_profile.name != "high":
+        resource_profile = self._resource_profile()
+        if resource_profile.name != "high":
             return self._HIGH_MODE_AUTO
 
-        raw_mode = str(getattr(self._settings.runtime_profile, "high_force_mode", "auto") or "auto")
+        raw_mode = str(getattr(resource_profile, "high_force_mode", "auto") or "auto")
         normalized = raw_mode.strip().lower()
         if normalized in {
             self._HIGH_MODE_AUTO,
@@ -226,10 +347,83 @@ class DiffusersZImageBackend:
             return None, None
 
     @staticmethod
+    def _cuda_free_total_snapshot(torch_module: Any) -> tuple[int | None, int | None]:
+        try:
+            if not torch_module.cuda.is_available():
+                return None, None
+            device = int(torch_module.cuda.current_device())
+            free_bytes, total_bytes = torch_module.cuda.mem_get_info(device)
+            return int(free_bytes), int(total_bytes)
+        except Exception:
+            return None, None
+
+    @staticmethod
     def _ratio(numerator: int | None, denominator: int | None) -> float | None:
         if numerator is None or denominator is None or denominator <= 0:
             return None
         return float(numerator) / float(denominator)
+
+    def _min_free_vram_threshold_bytes(self) -> int | None:
+        threshold_gb = getattr(self._resource_profile(), "min_free_vram_gb", None)
+        if threshold_gb is None:
+            return None
+        try:
+            threshold = int(threshold_gb)
+        except (TypeError, ValueError):
+            return None
+        if threshold <= 0:
+            return None
+        return threshold * 1024 * 1024 * 1024
+
+    def _run_vram_preflight(self, torch_module: Any) -> VramPreflightResult:
+        started = now_perf()
+        threshold_bytes = self._min_free_vram_threshold_bytes()
+        if threshold_bytes is None or not torch_module.cuda.is_available():
+            result = VramPreflightResult(
+                checked=False,
+                cleanup_attempted=False,
+                passed_before_cleanup=None,
+                passed_after_cleanup=None,
+                free_before_bytes=None,
+                free_after_cleanup_bytes=None,
+                threshold_bytes=threshold_bytes,
+            )
+            self._last_preflight = result
+            return result
+
+        free_before, _ = self._cuda_free_total_snapshot(torch_module)
+        passed_before = free_before is not None and free_before >= threshold_bytes
+        cleanup_attempted = False
+        free_after = free_before
+        passed_after = passed_before
+
+        if not passed_before:
+            cleanup_attempted = True
+            self._clear_cuda_cache(torch_module)
+            free_after, _ = self._cuda_free_total_snapshot(torch_module)
+            passed_after = free_after is not None and free_after >= threshold_bytes
+
+        result = VramPreflightResult(
+            checked=True,
+            cleanup_attempted=cleanup_attempted,
+            passed_before_cleanup=passed_before,
+            passed_after_cleanup=passed_after,
+            free_before_bytes=free_before,
+            free_after_cleanup_bytes=free_after,
+            threshold_bytes=threshold_bytes,
+        )
+        elapsed_ms = int((now_perf() - started) * 1000)
+        if elapsed_ms > 50:
+            LOGGER.debug(
+                "VRAM preflight exceeded budget: elapsed_ms=%s threshold_bytes=%s free_before_bytes=%s free_after_cleanup_bytes=%s cleanup_attempted=%s",
+                elapsed_ms,
+                threshold_bytes,
+                free_before,
+                free_after,
+                cleanup_attempted,
+            )
+        self._last_preflight = result
+        return result
 
     def _apply_pipe_execution_mode(self, pipe: Any, mode: str) -> str:
         if mode == "sequential_offload":
@@ -256,12 +450,21 @@ class DiffusersZImageBackend:
 
         return mode
 
-    def _resolve_high_startup_mode(self, total_bytes: int | None, reserved_bytes: int | None) -> str:
+    def _resolve_high_startup_mode(
+        self,
+        *,
+        total_bytes: int | None,
+        reserved_bytes: int | None,
+        preflight: VramPreflightResult,
+    ) -> str:
         force_mode = self._normalize_high_force_mode()
         if force_mode in {self._HIGH_MODE_FULL_CUDA, self._HIGH_MODE_MODEL_OFFLOAD}:
             return force_mode
 
         if force_mode != self._HIGH_MODE_AUTO:
+            return self._HIGH_MODE_MODEL_OFFLOAD
+
+        if preflight.checked and not preflight.passed:
             return self._HIGH_MODE_MODEL_OFFLOAD
 
         if total_bytes is None or reserved_bytes is None:
@@ -270,7 +473,9 @@ class DiffusersZImageBackend:
             )
             return self._HIGH_MODE_MODEL_OFFLOAD
 
-        threshold = float(getattr(self._settings.runtime_profile, "high_reserved_vram_ratio_threshold", 0.82))
+        threshold = float(
+            getattr(self._resource_profile(), "high_reserved_vram_ratio_threshold", 0.82)
+        )
         threshold = max(0.50, min(0.98, threshold))
         ratio = self._ratio(reserved_bytes, total_bytes) or 1.0
         if ratio > threshold:
@@ -282,17 +487,35 @@ class DiffusersZImageBackend:
 
         if not torch.cuda.is_available():
             self._effective_execution_mode = "cpu"
+            self._initial_execution_mode = "cpu"
             self._cuda_total_bytes = None
             self._cuda_reserved_after_load_bytes = None
+            self._cuda_free_before_load_bytes = None
+            self._cuda_free_after_load_bytes = None
+            self._last_preflight = VramPreflightResult(
+                checked=False,
+                cleanup_attempted=False,
+                passed_before_cleanup=None,
+                passed_after_cleanup=None,
+                free_before_bytes=None,
+                free_after_cleanup_bytes=None,
+                threshold_bytes=self._min_free_vram_threshold_bytes(),
+            )
             return
 
+        free_before, total_from_meminfo = self._cuda_free_total_snapshot(torch)
         total_bytes, reserved_bytes = self._cuda_capacity_snapshot(torch)
-        profile_name = self._settings.runtime_profile.name
+        profile_name = self._resource_profile().name
         selected_mode = self._default_execution_mode_for_profile()
         startup_ratio = self._ratio(reserved_bytes, total_bytes)
+        startup_preflight = self._run_vram_preflight(torch)
 
         if profile_name == "high":
-            selected_mode = self._resolve_high_startup_mode(total_bytes, reserved_bytes)
+            selected_mode = self._resolve_high_startup_mode(
+                total_bytes=total_bytes,
+                reserved_bytes=reserved_bytes,
+                preflight=startup_preflight,
+            )
             if selected_mode == self._HIGH_MODE_MODEL_OFFLOAD:
                 try:
                     self._apply_pipe_execution_mode(pipe, self._HIGH_MODE_MODEL_OFFLOAD)
@@ -306,14 +529,26 @@ class DiffusersZImageBackend:
             self._high_runtime_fallback_latched = selected_mode == self._HIGH_MODE_MODEL_OFFLOAD
 
         self._effective_execution_mode = selected_mode
+        self._initial_execution_mode = selected_mode
         total_after, reserved_after = self._cuda_capacity_snapshot(torch)
-        self._cuda_total_bytes = total_after if total_after is not None else total_bytes
+        free_after, total_after_meminfo = self._cuda_free_total_snapshot(torch)
+        self._cuda_total_bytes = (
+            total_after
+            if total_after is not None
+            else total_from_meminfo
+            if total_from_meminfo is not None
+            else total_after_meminfo
+            if total_after_meminfo is not None
+            else total_bytes
+        )
         self._cuda_reserved_after_load_bytes = (
             reserved_after if reserved_after is not None else reserved_bytes
         )
+        self._cuda_free_before_load_bytes = free_before
+        self._cuda_free_after_load_bytes = free_after
         after_ratio = self._ratio(self._cuda_reserved_after_load_bytes, self._cuda_total_bytes)
         LOGGER.debug(
-            "Execution mode initialized: profile=%s mode=%s startup_reserved_ratio=%s reserved_after_load_ratio=%s total_vram_bytes=%s reserved_after_load_bytes=%s",
+            "Execution mode initialized: profile=%s mode=%s startup_reserved_ratio=%s reserved_after_load_ratio=%s total_vram_bytes=%s reserved_after_load_bytes=%s free_before_load_bytes=%s free_after_load_bytes=%s",
             profile_name,
             self._effective_execution_mode,
             f"{startup_ratio:.3f}" if startup_ratio is not None else "n/a",
@@ -322,6 +557,8 @@ class DiffusersZImageBackend:
             self._cuda_reserved_after_load_bytes
             if self._cuda_reserved_after_load_bytes is not None
             else "n/a",
+            self._cuda_free_before_load_bytes if self._cuda_free_before_load_bytes is not None else "n/a",
+            self._cuda_free_after_load_bytes if self._cuda_free_after_load_bytes is not None else "n/a",
         )
 
     def _apply_high_runtime_fallback_if_needed(
@@ -330,7 +567,7 @@ class DiffusersZImageBackend:
         post_mem: CudaMemorySnapshot | None,
         torch_module: Any,
     ) -> None:
-        if self._settings.runtime_profile.name != "high":
+        if self._resource_profile().name != "high":
             return
         if self._effective_execution_mode != self._HIGH_MODE_FULL_CUDA:
             return
@@ -491,12 +728,36 @@ class DiffusersZImageBackend:
     def _ensure_loaded(self) -> LoadedZImagePipeline:
         if self._loaded is None:
             LOGGER.info("Loading pipeline for model pack '%s'", self._model_pack.name)
-            self._loaded = build_zimage_pipeline(
-                self._model_pack,
-                self._settings.runtime_profile,
-            )
+            self._loaded = self._build_pipeline()
+            self._backend_name = self._loaded.backend_name
+            self._fp8_checkpoint = self._loaded.fp8_checkpoint
+            self._fp8_fallback_used = self._loaded.fp8_fallback_used
+            self._fp8_fallback_reason = self._loaded.fp8_fallback_reason
+            self._fp8_runtime_mode = self._loaded.fp8_runtime_mode
+            self._fp8_normalized_tensor_count = self._loaded.fp8_normalized_tensor_count
+            self._fp8_storage_preserved_tensor_count = self._loaded.fp8_storage_preserved_tensor_count
+            self._fp8_promoted_tensor_count = self._loaded.fp8_promoted_tensor_count
+            self._fp8_normalized_tensor_names = self._loaded.fp8_normalized_tensor_names
             self._initialize_execution_mode(self._loaded.pipeline)
         return self._loaded
+
+    def runtime_status(self) -> dict[str, Any]:
+        selected_pack = getattr(self._model_pack, "base_name", None) or getattr(self._model_pack, "name", None)
+        return {
+            "backend": self._backend_name,
+            "execution_mode": self._effective_execution_mode,
+            "execution_mode_initial": self._initial_execution_mode,
+            "selected_pack": selected_pack,
+            "effective_pack": getattr(self._model_pack, "name", None),
+            "fp8_checkpoint": self._fp8_checkpoint,
+            "fp8_fallback_used": self._fp8_fallback_used,
+            "fp8_fallback_reason": self._fp8_fallback_reason,
+            "fp8_runtime_mode": self._fp8_runtime_mode,
+            "fp8_normalized_tensor_count": self._fp8_normalized_tensor_count,
+            "fp8_storage_preserved_tensor_count": self._fp8_storage_preserved_tensor_count,
+            "fp8_promoted_tensor_count": self._fp8_promoted_tensor_count,
+            "fp8_normalized_tensor_names": list(self._fp8_normalized_tensor_names),
+        }
 
     def _ensure_img2img_pipe(self) -> Any:
         if self._img2img_pipe is not None:
@@ -1718,7 +1979,7 @@ class DiffusersZImageBackend:
         return prompt
 
     def _prepare_pipe_for_prompt_enhancement(self, pipe: Any) -> bool:
-        profile = self._settings.runtime_profile
+        profile = self._resource_profile()
         if (
             not profile.enable_sequential_offload
             or not profile.enable_cpu_offload
@@ -1796,7 +2057,7 @@ class DiffusersZImageBackend:
             tile_size = max(0, int(request.refine_tile_size))
             return tile_size, overlap
 
-        profile_name = self._settings.runtime_profile.name
+        profile_name = self._resource_profile().name
         max_dim = max(width, height)
         if profile_name == "high" and max_dim <= self._REFINE_HIGH_FULL_FRAME_MAX_DIM:
             tile_size = 0
@@ -2077,7 +2338,7 @@ class DiffusersZImageBackend:
         tile_overlap: int,
         torch_module: Any,
     ) -> tuple[Image.Image, int, int, int]:
-        profile_name = self._settings.runtime_profile.name
+        profile_name = self._resource_profile().name
         fallback_overlap = max(32, tile_overlap)
         min_tile = self._REFINE_FALLBACK_MIN_TILE_BY_PROFILE.get(profile_name, 512)
 
@@ -2209,8 +2470,33 @@ class DiffusersZImageBackend:
             torch_module=torch,
         )
 
+        self._preflight_fallback_triggered = False
+        generate_preflight = self._run_vram_preflight(torch)
+        if (
+            loaded.device == "cuda"
+            and self._resource_profile().name == "high"
+            and self._effective_execution_mode == self._HIGH_MODE_FULL_CUDA
+            and generate_preflight.checked
+            and not generate_preflight.passed
+        ):
+            applied_mode = self._apply_pipe_execution_mode(pipe, self._HIGH_MODE_MODEL_OFFLOAD)
+            if applied_mode == self._HIGH_MODE_MODEL_OFFLOAD:
+                self._effective_execution_mode = self._HIGH_MODE_MODEL_OFFLOAD
+                self._high_runtime_fallback_latched = True
+                self._preflight_fallback_triggered = True
+                if self._img2img_pipe is not None:
+                    self._apply_pipe_execution_mode(self._img2img_pipe, self._HIGH_MODE_MODEL_OFFLOAD)
+                self._clear_cuda_cache(torch)
+            else:
+                LOGGER.warning(
+                    "Pre-generate VRAM guard requested model_offload but pipeline remained in %s.",
+                    applied_mode,
+                )
+
         pre_mem = cuda_memory_snapshot(torch)
         pre_proc_mem = process_memory_snapshot()
+        execution_mode_before_generate = self._effective_execution_mode
+        cuda_free_before_generate, _ = self._cuda_free_total_snapshot(torch)
         started = now_perf()
         with torch.inference_mode():
             output = pipe(
@@ -2227,15 +2513,18 @@ class DiffusersZImageBackend:
         duration_ms = int((now_perf() - started) * 1000)
         post_mem = cuda_memory_snapshot(torch)
         post_proc_mem = process_memory_snapshot()
+        cuda_free_after_generate, _ = self._cuda_free_total_snapshot(torch)
         self._apply_high_runtime_fallback_if_needed(post_mem=post_mem, torch_module=torch)
+        execution_mode_after_generate = self._effective_execution_mode
         image = output.images[0]
+        selected_pack = getattr(self._model_pack, "base_name", None) or getattr(self._model_pack, "name", None)
         return GenerationResult(
             image=image,
             seed=request.seed,
             steps=steps,
             guidance_scale=guidance_scale,
             scheduler_mode=scheduler_mode,
-            backend="diffusers_zimage",
+            backend=self._backend_name,
             device=loaded.device,
             duration_ms=duration_ms,
             prompt_original=prompt_original,
@@ -2246,15 +2535,41 @@ class DiffusersZImageBackend:
             process_memory_before=pre_proc_mem,
             process_memory_after=post_proc_mem,
             runtime_profile=self._settings.runtime_profile.name,
+            resource_tier=self._resource_profile().name,
             execution_mode=self._effective_execution_mode,
+            execution_mode_initial=self._initial_execution_mode,
+            execution_mode_before_generate=execution_mode_before_generate,
+            execution_mode_after_generate=execution_mode_after_generate,
             cuda_total_bytes=self._cuda_total_bytes,
             cuda_reserved_after_load_bytes=self._cuda_reserved_after_load_bytes,
+            cuda_free_before_load_bytes=self._cuda_free_before_load_bytes,
+            cuda_free_after_load_bytes=self._cuda_free_after_load_bytes,
+            cuda_free_before_generate_bytes=cuda_free_before_generate,
+            cuda_free_after_generate_bytes=cuda_free_after_generate,
+            preflight_checked=generate_preflight.checked,
+            preflight_cleanup_attempted=generate_preflight.cleanup_attempted,
+            preflight_passed_before_cleanup=generate_preflight.passed_before_cleanup,
+            preflight_passed_after_cleanup=generate_preflight.passed_after_cleanup,
+            preflight_free_before_bytes=generate_preflight.free_before_bytes,
+            preflight_free_after_cleanup_bytes=generate_preflight.free_after_cleanup_bytes,
+            preflight_threshold_bytes=generate_preflight.threshold_bytes,
+            preflight_fallback_triggered=self._preflight_fallback_triggered,
             procedural_latent_enabled=effective_procedural_creativity > 0,
             procedural_creativity=effective_procedural_creativity,
             procedural_latent_recipe=procedural_latent_recipe,
             procedural_latent_alpha=procedural_latent_alpha,
             procedural_latent_preprocess=procedural_latent_preprocess,
             procedural_latent_scheduler_forced=procedural_latent_scheduler_forced,
+            selected_pack=selected_pack,
+            effective_pack=getattr(self._model_pack, "name", None),
+            fp8_checkpoint=self._fp8_checkpoint,
+            fp8_fallback_used=self._fp8_fallback_used,
+            fp8_fallback_reason=self._fp8_fallback_reason,
+            fp8_runtime_mode=self._fp8_runtime_mode,
+            fp8_normalized_tensor_count=self._fp8_normalized_tensor_count,
+            fp8_storage_preserved_tensor_count=self._fp8_storage_preserved_tensor_count,
+            fp8_promoted_tensor_count=self._fp8_promoted_tensor_count,
+            fp8_normalized_tensor_names=self._fp8_normalized_tensor_names,
         )
 
     def upscale_and_refine(self, input_image: object, request: GenerationRequest) -> GenerationResult:
@@ -2334,6 +2649,7 @@ class DiffusersZImageBackend:
         post_mem = cuda_memory_snapshot(torch)
         post_proc_mem = process_memory_snapshot()
         self._apply_high_runtime_fallback_if_needed(post_mem=post_mem, torch_module=torch)
+        selected_pack = getattr(self._model_pack, "base_name", None) or getattr(self._model_pack, "name", None)
 
         return GenerationResult(
             image=refined_image,
@@ -2341,7 +2657,7 @@ class DiffusersZImageBackend:
             steps=refine_steps,
             guidance_scale=guidance_scale,
             scheduler_mode=scheduler_mode,
-            backend="diffusers_zimage",
+            backend=self._backend_name,
             device=loaded.device,
             duration_ms=duration_ms,
             prompt_original=prompt_original,
@@ -2365,7 +2681,18 @@ class DiffusersZImageBackend:
             process_memory_before=pre_proc_mem,
             process_memory_after=post_proc_mem,
             runtime_profile=self._settings.runtime_profile.name,
+            resource_tier=self._resource_profile().name,
             execution_mode=self._effective_execution_mode,
             cuda_total_bytes=self._cuda_total_bytes,
             cuda_reserved_after_load_bytes=self._cuda_reserved_after_load_bytes,
+            selected_pack=selected_pack,
+            effective_pack=getattr(self._model_pack, "name", None),
+            fp8_checkpoint=self._fp8_checkpoint,
+            fp8_fallback_used=self._fp8_fallback_used,
+            fp8_fallback_reason=self._fp8_fallback_reason,
+            fp8_runtime_mode=self._fp8_runtime_mode,
+            fp8_normalized_tensor_count=self._fp8_normalized_tensor_count,
+            fp8_storage_preserved_tensor_count=self._fp8_storage_preserved_tensor_count,
+            fp8_promoted_tensor_count=self._fp8_promoted_tensor_count,
+            fp8_normalized_tensor_names=self._fp8_normalized_tensor_names,
         )

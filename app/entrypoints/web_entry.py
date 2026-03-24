@@ -19,12 +19,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="justrayzist-web")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=37717)
-    parser.add_argument("--profile", default=None)
     args = parser.parse_args()
     _ensure_root_for_frozen()
-    serve(host=args.host, port=args.port, profile=args.profile)
+    serve(host=args.host, port=args.port, profile=None)
 
 
 if __name__ == "__main__":
     main()
-

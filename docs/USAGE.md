@@ -22,6 +22,7 @@ Manual alternative:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe C:\Path\To\python.exe -Lane cu128
 powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1
+powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1 -ModelVariant fp8_full
 ```
 
 ## Update a Packaged Install
@@ -38,6 +39,7 @@ The updater preserves `models/`, `outputs/`, `data/`, `.venv/`, and `release_lan
 ```powershell
 python -m app.cli.main doctor
 python -m app.cli.main validate-models
+python -m app.cli.main validate-models --all
 python -m app.cli.main --help
 ```
 
@@ -46,7 +48,7 @@ python -m app.cli.main --help
 Source mode:
 
 ```powershell
-python -m app.cli.main serve --host 127.0.0.1 --port 37717 --profile balanced
+python -m app.cli.main serve --host 127.0.0.1 --port 37717
 ```
 
 Launcher mode:
@@ -54,6 +56,26 @@ Launcher mode:
 ```powershell
 .\StartWeb.bat
 ```
+
+Launcher flow:
+
+1. Select a public enabled model pack only when more than one is installed.
+2. Select local-only or LAN listen mode.
+3. Let the app auto-detect a memory strategy from available VRAM.
+
+## Auto Resource Tiering
+
+Normal runs no longer ask the user to choose `high`, `balanced`, or `constrained`.
+
+- `runtime_profile` stays on the stable `balanced` baseline for normal quality behavior.
+- `resource_tier` is auto-detected from current free VRAM and drives memory strategy only.
+- Internal execution modes such as `full_cuda`, `model_offload`, and `sequential_offload` are selected automatically.
+- The app can downgrade or re-upgrade the internal resource tier between requests as available VRAM changes.
+- Public pack lists (`StartWeb.bat`, `GET /model-packs`) show only public enabled packs.
+- Setup and asset fetch auto-select `Rayzist_fp8_full` as the default installed pack when detected NVIDIA VRAM is below 13 GiB; otherwise they keep `Rayzist_bf16` enabled by default.
+- Real FP8 packs such as `Rayzist_fp8_full` and compatible custom FP8 packs are normal selectable public packs.
+- Real FP8 packs currently run as BF16 compute with FP8-at-rest preservation where safe; native FP8 inference is not implemented in the current release.
+- In constrained conditions, compatible safetensors packs may auto-derive an internal FP8-storage runtime variant such as `Rayzist_bf16__auto_fp8_storage`.
 
 ## CLI Commands
 
@@ -72,8 +94,7 @@ python -m app.cli.main generate `
   --pack Rayzist_bf16 `
   --prompt "A cinematic skyline at sunrise" `
   --width 1024 `
-  --height 1024 `
-  --profile balanced
+  --height 1024
 ```
 
 Supported generation cap: `1536x1536`.
@@ -93,8 +114,7 @@ Upscale and refine:
 python -m app.cli.main upscale-refine `
   --pack Rayzist_bf16 `
   --input-image outputs\sample.png `
-  --prompt "portrait photo" `
-  --profile balanced
+  --prompt "portrait photo"
 ```
 
 Soak run and report:
@@ -103,14 +123,15 @@ Soak run and report:
 python -m app.cli.main soak `
   --pack Rayzist_bf16 `
   --prompt "stress prompt" `
-  --iterations 20 `
-  --profile constrained
+  --iterations 20
 
 python -m app.cli.main soak-report --list-sessions
 python -m app.cli.main soak-report --session-id <session_id>
 ```
 
-SeedVR2 benchmark commands:
+Engineering-only benchmark commands:
+
+These commands keep forced `--profile` / `--profiles` flags for diagnostics and reproducible comparisons. They are not part of the normal startup/runtime flow.
 
 ```powershell
 python -m app.cli.main seedvr2-benchmark --profiles high,balanced,constrained
@@ -123,6 +144,44 @@ Procedural latent preview:
 python -m app.cli.main procedural-latent-preview --count 16 --seed-start 1 --creativity 2
 ```
 
+Engineering compare/probe commands:
+
+These commands are discoverable in the CLI, but they are intended for diagnostics, benchmarking, and regression work rather than normal daily generation.
+
+```powershell
+python -m app.cli.main upscale-test `
+  --input-image outputs\_Upscale_test.png `
+  --checkpoint models\upscaler\2x_RealESRGAN_x2plus.pth `
+  --profiles high,balanced,constrained
+
+python -m app.cli.main pack-compare `
+  --prompt "A cinematic skyline at sunrise"
+
+python -m app.cli.main pack-compare-suite `
+  --iterations 3
+
+python -m app.cli.main prompt-grid-benchmark `
+  --pack Rayzist_bf16 `
+  --prompt "PROMPT 1" `
+  --prompt "PROMPT 2" `
+  --prompt "PROMPT 3"
+
+python -m app.cli.main seedvr2-benchmark `
+  --profiles high,balanced,constrained
+
+python -m app.cli.main seedvr2-blend-benchmark `
+  --profile high `
+  --alphas 25,50,75
+```
+
+What they are for:
+
+- `upscale-test`: compare plain x2 upscale settings across forced profiles.
+- `pack-compare`: compare a base pack against a candidate runtime strategy such as derived FP8 storage.
+- `pack-compare-suite`: run the multi-pack benchmark matrix and generate contact sheets/reports.
+- `prompt-grid-benchmark`: run forced-tier plus auto-tier prompt grids with generation/upscale artifacts.
+- `seedvr2-benchmark` / `seedvr2-blend-benchmark`: benchmark SeedVR2 runtime behavior and blend modes.
+
 ## API Usage
 
 Base URL: `http://127.0.0.1:37717`
@@ -131,70 +190,371 @@ Supported generation cap: `1536x1536`.
 Client-scoped routes require `X-JustRayzist-Client`.
 Use `procedural_creativity` (`0-3`) to control Creative Mode.
 In the main UI, scheduler behavior is derived automatically from Creative Mode. `scheduler_mode` remains optional for raw API and CLI calls.
+`GET /health` and `GET /config` report both the stable `runtime_profile` baseline and the currently detected `resource_tier`.
+`GET /model-packs` returns public packs only.
+The built-in `/API` page gets its route descriptions and sample payloads from the internal `GET /api-manifest` feed so the examples stay aligned with the real handlers.
 
 ```powershell
 $headers = @{ "X-JustRayzist-Client" = "desktop-client" }
 ```
 
-Generate:
+<!-- BEGIN GENERATED API ROUTES -->
+- `GET /health`
+- `GET /config`
+- `GET /model-packs`
+- `POST /generate`
+- `POST /upscale`
+- `GET /images?prompt=skyline&limit=50&offset=0&newest_first=true`
+- `GET /images/{filename}?client_id=<client-id>`
+- `POST /images/download-zip`
+- `DELETE /images/{filename}?confirm=DELETE`
+- `DELETE /gallery?confirm=DELETE`
+- `GET /gallery/import-sources`
+- `POST /gallery/import`
+- `POST /server/kill`
+<!-- END GENERATED API ROUTES -->
 
-```powershell
-$body = @{
-  prompt = "Cinematic skyline at sunrise"
-  width = 1024
-  height = 1024
-  pack = "Rayzist_bf16"
-  seed = 123456
-  scheduler_mode = "euler"
-  enhance_prompt = $false
-  procedural_creativity = 0
-} | ConvertTo-Json
+<!-- BEGIN GENERATED API EXAMPLES -->
+### `GET /health`
 
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:37717/generate" -Headers $headers -ContentType "application/json" -Body $body
+Service health plus current baseline/defaults and detected memory strategy.
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "app": "JustRayzist",
+  "version": "1.4.0",
+  "runtime_profile": "balanced",
+  "resource_tier": "high",
+  "active_pack": "Rayzist_bf16",
+  "selected_pack": "Rayzist_bf16",
+  "effective_pack": "Rayzist_bf16",
+  "active_backend": "diffusers_zimage",
+  "fp8_fallback_used": false,
+  "fp8_fallback_reason": null,
+  "fp8_runtime_mode": null,
+  "fp8_storage_preserved_tensor_count": 0,
+  "fp8_promoted_tensor_count": 0,
+  "offline_mode": true
+}
 ```
 
-Creative Mode:
+### `GET /config`
 
-```powershell
-$body = @{
-  prompt = "Cinematic skyline at sunrise"
-  width = 1024
-  height = 1024
-  pack = "Rayzist_bf16"
-  seed = 123456
-  scheduler_mode = "dpm"
-  enhance_prompt = $false
-  procedural_creativity = 2
-} | ConvertTo-Json
+Resolved runtime configuration, paths, and current runtime status.
 
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:37717/generate" -Headers $headers -ContentType "application/json" -Body $body
+Sample response:
+
+```json
+{
+  "app_name": "JustRayzist",
+  "app_version": "1.4.0",
+  "environment": "dev",
+  "offline_mode": true,
+  "runtime_profile": {
+    "name": "balanced",
+    "description": "16GB-class profile with moderate offload and stable throughput."
+  },
+  "resource_tier": {
+    "name": "high",
+    "description": "24GB-class profile with minimal offload and highest throughput."
+  },
+  "resource_tier_override": null,
+  "auto_resource_tier": true,
+  "paths": {
+    "root_dir": "S:\\STABLEDIFFUSION\\JustRayzist",
+    "models_dir": "S:\\STABLEDIFFUSION\\JustRayzist\\models",
+    "model_packs_dir": "S:\\STABLEDIFFUSION\\JustRayzist\\models\\packs",
+    "outputs_dir": "S:\\STABLEDIFFUSION\\JustRayzist\\outputs",
+    "data_dir": "S:\\STABLEDIFFUSION\\JustRayzist\\data",
+    "ui_dir": "S:\\STABLEDIFFUSION\\JustRayzist\\app\\ui"
+  },
+  "runtime": {
+    "runtime_profile": "balanced",
+    "resource_tier": "high",
+    "resource_tier_description": "24GB-class profile with minimal offload and highest throughput.",
+    "resource_tier_override": null,
+    "auto_resource_tier": true,
+    "active_pack": "Rayzist_bf16",
+    "selected_pack": "Rayzist_bf16",
+    "effective_pack": "Rayzist_bf16",
+    "active_backend": "diffusers_zimage",
+    "execution_mode": "model_offload",
+    "fp8_checkpoint": false,
+    "fp8_fallback_used": false,
+    "fp8_fallback_reason": null,
+    "fp8_runtime_mode": null,
+    "fp8_normalized_tensor_count": 0,
+    "fp8_storage_preserved_tensor_count": 0,
+    "fp8_promoted_tensor_count": 0
+  }
+}
 ```
 
-List images:
+### `GET /model-packs`
 
-```powershell
-Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:37717/images?limit=50&offset=0&newest_first=true" -Headers $headers
+List discovered, valid, public, and enabled model packs.
+
+Sample response:
+
+```json
+{
+  "count": 1,
+  "items": [
+    {
+      "name": "Rayzist_bf16",
+      "path": "S:\\STABLEDIFFUSION\\JustRayzist\\models\\packs\\Rayzist_bf16\\modelpack.yaml",
+      "architecture": "z_image_turbo"
+    }
+  ]
+}
 ```
 
-Download one image:
+### `POST /generate`
 
-```powershell
-Invoke-WebRequest -Uri "http://127.0.0.1:37717/images/justrayzist_20260316_120000_000.png?client_id=desktop-client" -OutFile sample.png
+Generate one image from prompt and dimensions in the current client scope.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "prompt": "A cinematic skyline at sunrise",
+  "width": 1024,
+  "height": 1024,
+  "pack": "Rayzist_bf16",
+  "seed": 123456,
+  "scheduler_mode": "euler",
+  "enhance_prompt": false,
+  "procedural_creativity": 0
+}
 ```
 
-Delete one image:
+Sample response:
 
-```powershell
-$deleteBody = @{ confirm = "DELETE" } | ConvertTo-Json
-Invoke-RestMethod -Method Delete -Uri "http://127.0.0.1:37717/images/justrayzist_20260316_120000_000.png?confirm=DELETE" -Headers $headers -ContentType "application/json" -Body $deleteBody
+```json
+{
+  "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+  "output_path": "S:\\STABLEDIFFUSION\\JustRayzist\\outputs\\example-client\\justrayzist_YYYYMMDD_hhmmss_000.png",
+  "prompt": "A cinematic skyline at sunrise",
+  "width": 1024,
+  "height": 1024,
+  "duration_ms": 12345,
+  "url": "/images/justrayzist_YYYYMMDD_hhmmss_000.png",
+  "prompt_enhanced": false,
+  "scheduler_mode": "euler",
+  "procedural_creativity": 0
+}
 ```
 
-Import from another gallery source:
+### `POST /upscale`
 
-```powershell
-$body = @{ source_id = "__legacy_root__"; dry_run = $false } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:37717/gallery/import" -Headers $headers -ContentType "application/json" -Body $body
+Upscale one gallery image with the app's mixed-model fast upscale flow.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+  "pack": "Rayzist_bf16",
+  "seed": 123456,
+  "scheduler_mode": "euler",
+  "enhance_prompt": false
+}
 ```
+
+Sample response:
+
+```json
+{
+  "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
+  "mode": "api_upscale",
+  "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+  "upscale_engine": "x2_seedvr2_blend",
+  "duration_ms": 23456,
+  "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png"
+}
+```
+
+### `GET /images?prompt=skyline&limit=50&offset=0&newest_first=true`
+
+List images for the current client scope.
+
+Requires `X-JustRayzist-Client`.
+
+Sample response:
+
+```json
+{
+  "count": 1,
+  "limit": 50,
+  "offset": 0,
+  "items": [
+    {
+      "filename": "justrayzist_YYYYMMDD_hhmmss_000.png"
+    }
+  ]
+}
+```
+
+### `GET /images/{filename}?client_id=<client-id>`
+
+Download one image by filename. Use the query parameter for direct links and image tags.
+
+Requires `X-JustRayzist-Client`.
+
+Sample response:
+
+```text
+PNG binary response
+```
+
+### `POST /images/download-zip`
+
+Download a ZIP archive containing the selected client-scoped images.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "filenames": [
+    "justrayzist_YYYYMMDD_hhmmss_000.png",
+    "justrayzist_YYYYMMDD_hhmmss_001.png"
+  ]
+}
+```
+
+Sample response:
+
+```text
+ZIP binary response (attachment filename: <client>_selection.zip)
+```
+
+### `DELETE /images/{filename}?confirm=DELETE`
+
+Delete one image and its index entry in the current client scope.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "confirm": "DELETE"
+}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "deleted_files": 1,
+  "deleted_rows": 1,
+  "remaining_rows": 0,
+  "filename": "..."
+}
+```
+
+### `DELETE /gallery?confirm=DELETE`
+
+Delete all gallery images for the current client scope.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "confirm": "DELETE"
+}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "deleted_files": 42,
+  "deleted_rows": 42,
+  "remaining_rows": 0
+}
+```
+
+### `GET /gallery/import-sources`
+
+List gallery import candidates from the legacy root or other userspaces.
+
+Requires `X-JustRayzist-Client`.
+
+Sample response:
+
+```json
+{
+  "count": 2,
+  "items": [
+    {
+      "source_id": "__legacy_root__",
+      "image_count": 10
+    }
+  ]
+}
+```
+
+### `POST /gallery/import`
+
+Copy PNGs from another gallery source into the current client userspace.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "source_id": "__legacy_root__",
+  "dry_run": false
+}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "source_id": "__legacy_root__",
+  "target_owner_id": "example-client",
+  "imported": 12,
+  "skipped": 0,
+  "failed": 0
+}
+```
+
+### `POST /server/kill`
+
+Request local server shutdown.
+
+Sample request body:
+
+```json
+{}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "message": "Server shutdown initiated."
+}
+```
+<!-- END GENERATED API EXAMPLES -->
 
 ## Output Locations
 
@@ -206,7 +566,7 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:37717/gallery/import" -Hea
 ## Environment Variables
 
 - `JUSTRAYZIST_ROOT`
-- `JUSTRAYZIST_PROFILE`
+- `JUSTRAYZIST_PROFILE` (engineering-only runtime tier override)
 - `JUSTRAYZIST_PACK`
 - `JUSTRAYZIST_OFFLINE`
 - `JUSTRAYZIST_ENV`

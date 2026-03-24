@@ -3,14 +3,18 @@ from __future__ import annotations
 import logging
 import os
 import random
+from dataclasses import replace
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from PIL import Image
 
+from app.config.profiles import RuntimeProfile
 from app.config.settings import AppSettings
+from app.core.backends import SUPPORTED_BACKENDS
 from app.core.model_registry import (
+    ModelComponent,
     ModelPack,
     ModelPackValidationError,
     discover_model_packs,
@@ -34,19 +38,21 @@ from app.storage.gallery_index import (
 )
 
 LOGGER = logging.getLogger(__name__)
+_DONOR_PACK_NAME = "Rayzist_bf16"
+_DERIVED_FP8_STORAGE_NAME = "fp8_storage"
+_DERIVED_FP8_STORAGE_SUFFIX = "__auto_fp8_storage"
 
 
 def _assert_supported_backend(model_pack: ModelPack) -> None:
-    supported = {"diffusers", "diffusers_zimage"}
     backends = [
         str(name).strip().lower()
         for name in model_pack.backend_preference
         if str(name).strip()
     ]
-    if not any(name in supported for name in backends):
+    if not any(name in SUPPORTED_BACKENDS for name in backends):
         raise ModelPackValidationError(
             "Unsupported backend preference list "
-            f"{model_pack.backend_preference!r}. Include one of: {sorted(supported)}."
+            f"{model_pack.backend_preference!r}. Include one of: {sorted(SUPPORTED_BACKENDS)}."
         )
 
 
@@ -57,7 +63,10 @@ class InferenceService:
         configured_pack = os.getenv("JUSTRAYZIST_PACK", "").strip()
         self._default_pack_name = configured_pack or None
         self._active_pack_name: str | None = None
+        self._active_selected_pack_name: str | None = None
+        self._active_backend_name: str | None = None
         self._active_session: GenerationSession | None = None
+        self._donor_pack_cache: ModelPack | None = None
 
     @staticmethod
     def sanitize_owner_id(owner_id: str) -> str:
@@ -76,6 +85,8 @@ class InferenceService:
                 pack = load_model_pack(pack_file)
             except ModelPackValidationError:
                 continue
+            if not pack.user_visible or not pack.enabled:
+                continue
             packs.append(
                 {
                     "name": pack.name,
@@ -84,6 +95,41 @@ class InferenceService:
                 }
             )
         return packs
+
+    def current_resource_tier(self, *, refresh: bool = True) -> RuntimeProfile:
+        controller = self._settings.resource_tier_controller
+        return controller.refresh() if refresh else controller.current()
+
+    def runtime_status(self) -> dict[str, Any]:
+        tier = self.current_resource_tier(refresh=False)
+        backend_status: dict[str, Any] = {}
+        if self._active_session is not None:
+            try:
+                backend_status = self._active_session.runtime_status()
+            except Exception:
+                backend_status = {}
+        return {
+            "runtime_profile": self._settings.runtime_profile.name,
+            "resource_tier": tier.name,
+            "resource_tier_description": tier.description,
+            "resource_tier_override": self._settings.resource_tier_override,
+            "auto_resource_tier": self._settings.auto_resource_tier,
+            "active_pack": self._active_pack_name,
+            "selected_pack": self._active_selected_pack_name,
+            "effective_pack": backend_status.get("effective_pack", self._active_pack_name),
+            "active_backend": backend_status.get("backend", self._active_backend_name),
+            "execution_mode": backend_status.get("execution_mode"),
+            "execution_mode_initial": backend_status.get("execution_mode_initial"),
+            "fp8_checkpoint": backend_status.get("fp8_checkpoint", False),
+            "fp8_fallback_used": backend_status.get("fp8_fallback_used", False),
+            "fp8_fallback_reason": backend_status.get("fp8_fallback_reason"),
+            "fp8_runtime_mode": backend_status.get("fp8_runtime_mode"),
+            "fp8_normalized_tensor_count": backend_status.get("fp8_normalized_tensor_count", 0),
+            "fp8_storage_preserved_tensor_count": backend_status.get(
+                "fp8_storage_preserved_tensor_count", 0
+            ),
+            "fp8_promoted_tensor_count": backend_status.get("fp8_promoted_tensor_count", 0),
+        }
 
     def sync_gallery(self) -> int:
         return sync_outputs_to_gallery(self._settings)
@@ -164,7 +210,7 @@ class InferenceService:
                 dry_run=dry_run,
             )
 
-    def _resolve_pack(self, pack_name: str | None) -> ModelPack:
+    def _load_base_pack(self, pack_name: str | None) -> ModelPack:
         requested_pack_name = (pack_name or self._default_pack_name or "").strip()
         if requested_pack_name:
             pack = load_model_pack_by_name(self._settings.paths.model_packs_dir, requested_pack_name)
@@ -174,9 +220,142 @@ class InferenceService:
         pack_paths = discover_model_packs(self._settings.paths.model_packs_dir)
         if not pack_paths:
             raise ModelPackValidationError("No model packs found.")
-        pack = load_model_pack(pack_paths[0])
-        _assert_supported_backend(pack)
-        return pack
+        for pack_path in pack_paths:
+            pack = load_model_pack(pack_path)
+            if not pack.user_visible or not pack.enabled:
+                continue
+            _assert_supported_backend(pack)
+            return pack
+        raise ModelPackValidationError("No public enabled model packs found.")
+
+    def _load_donor_pack(self) -> ModelPack:
+        if self._donor_pack_cache is None:
+            donor_pack = load_model_pack_by_name(self._settings.paths.model_packs_dir, _DONOR_PACK_NAME)
+            _assert_supported_backend(donor_pack)
+            self._donor_pack_cache = donor_pack
+        return self._donor_pack_cache
+
+    @staticmethod
+    def _merge_required_configs(primary: list[Path], fallback: list[Path]) -> list[Path]:
+        merged: list[Path] = []
+        seen: set[Path] = set()
+        for path in [*primary, *fallback]:
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            merged.append(resolved)
+            seen.add(resolved)
+        return merged
+
+    def _complete_pack_with_donor(self, model_pack: ModelPack) -> ModelPack:
+        has_pipeline = model_pack.pipeline_config_dir is not None
+        has_vae = "vae" in model_pack.components
+        has_text_encoder = "text_encoder" in model_pack.components
+        if has_pipeline and has_vae and has_text_encoder and model_pack.required_configs:
+            return model_pack
+
+        donor_pack = self._load_donor_pack()
+        if model_pack.architecture != donor_pack.architecture or "transformer" not in model_pack.components:
+            raise ModelPackValidationError(
+                f"Model pack '{model_pack.name}' is missing required components/config and is not "
+                f"compatible with donor pack '{donor_pack.name}'."
+            )
+
+        merged_components = dict(donor_pack.components)
+        merged_components.update(model_pack.components)
+        return replace(
+            model_pack,
+            backend_preference=model_pack.backend_preference or donor_pack.backend_preference,
+            components=merged_components,
+            pipeline_config_dir=model_pack.pipeline_config_dir or donor_pack.pipeline_config_dir,
+            required_configs=self._merge_required_configs(
+                model_pack.required_configs,
+                donor_pack.required_configs,
+            ),
+            base_name=model_pack.base_name or model_pack.name,
+            derived_strategy=model_pack.derived_strategy,
+        )
+
+    @staticmethod
+    def _can_derive_fp8_storage(model_pack: ModelPack) -> bool:
+        if model_pack.architecture != "z_image_turbo":
+            return False
+        transformer = model_pack.components.get("transformer")
+        if transformer is None:
+            return False
+        if transformer.file_format != "safetensors":
+            return False
+        if transformer.storage_mode or transformer.storage_dtype or transformer.compute_dtype:
+            return False
+        if model_pack.derived_strategy == _DERIVED_FP8_STORAGE_NAME:
+            return False
+        return True
+
+    def _derive_fp8_storage_pack(self, model_pack: ModelPack) -> ModelPack:
+        if not self._can_derive_fp8_storage(model_pack):
+            return model_pack
+
+        transformer = model_pack.components["transformer"]
+        derived_transformer = ModelComponent(
+            role=transformer.role,
+            path=transformer.path,
+            file_format=transformer.file_format,
+            storage_dtype="fp8_e4m3fn",
+            compute_dtype="bfloat16",
+            storage_mode="layerwise",
+        )
+        derived_components = dict(model_pack.components)
+        derived_components["transformer"] = derived_transformer
+        base_name = model_pack.base_name or model_pack.name
+        return replace(
+            model_pack,
+            name=f"{base_name}{_DERIVED_FP8_STORAGE_SUFFIX}",
+            components=derived_components,
+            user_visible=False,
+            enabled=False,
+            base_name=base_name,
+            derived_strategy=_DERIVED_FP8_STORAGE_NAME,
+        )
+
+    @staticmethod
+    def _split_requested_pack_name(pack_name: str | None) -> tuple[str | None, str | None]:
+        requested = (pack_name or "").strip()
+        if not requested:
+            return None, None
+        if requested.lower().endswith(_DERIVED_FP8_STORAGE_SUFFIX.lower()):
+            base_name = requested[: -len(_DERIVED_FP8_STORAGE_SUFFIX)].strip()
+            if not base_name:
+                raise ModelPackValidationError("Derived FP8-storage pack alias is missing a base pack name.")
+            return base_name, _DERIVED_FP8_STORAGE_NAME
+        return requested, None
+
+    def _resolve_runtime_pack(
+        self,
+        pack_name: str | None,
+        *,
+        apply_resource_tier_policy: bool = True,
+    ) -> tuple[ModelPack, ModelPack, RuntimeProfile]:
+        resource_tier = self.current_resource_tier(refresh=True)
+        requested_pack_name, requested_strategy = self._split_requested_pack_name(pack_name)
+        base_pack = self._load_base_pack(requested_pack_name)
+        completed_pack = self._complete_pack_with_donor(base_pack)
+        effective_pack = completed_pack
+        if requested_strategy == _DERIVED_FP8_STORAGE_NAME:
+            effective_pack = self._derive_fp8_storage_pack(completed_pack)
+        elif apply_resource_tier_policy and resource_tier.name == "constrained":
+            effective_pack = self._derive_fp8_storage_pack(completed_pack)
+        return base_pack, effective_pack, resource_tier
+
+    def resolve_runtime_pack(
+        self,
+        pack_name: str | None,
+        *,
+        apply_resource_tier_policy: bool = True,
+    ) -> tuple[ModelPack, ModelPack, RuntimeProfile]:
+        return self._resolve_runtime_pack(
+            pack_name,
+            apply_resource_tier_policy=apply_resource_tier_policy,
+        )
 
     def resolve_output_path(self, raw_path: str) -> Path:
         resolved = Path(str(raw_path)).expanduser().resolve()
@@ -187,16 +366,34 @@ class InferenceService:
             raise ValueError("Image path is outside managed outputs directory.") from exc
         return resolved
 
-    def _session_for_pack(self, model_pack: ModelPack) -> GenerationSession:
+    def _session_for_pack(
+        self,
+        model_pack: ModelPack,
+        resource_tier: RuntimeProfile,
+    ) -> GenerationSession:
         if self._active_session is None:
+            self._active_selected_pack_name = model_pack.base_name or model_pack.name
             self._active_pack_name = model_pack.name
-            self._active_session = GenerationSession(settings=self._settings, model_pack=model_pack)
+            self._active_session = GenerationSession(
+                settings=self._settings,
+                model_pack=model_pack,
+                resource_tier=resource_tier,
+            )
+            self._active_backend_name = None
             return self._active_session
 
         if self._active_pack_name != model_pack.name:
             self._active_session.recycle("Switching active model pack")
+            self._active_selected_pack_name = model_pack.base_name or model_pack.name
             self._active_pack_name = model_pack.name
-            self._active_session = GenerationSession(settings=self._settings, model_pack=model_pack)
+            self._active_session = GenerationSession(
+                settings=self._settings,
+                model_pack=model_pack,
+                resource_tier=resource_tier,
+            )
+            self._active_backend_name = None
+        else:
+            self._active_session.set_resource_tier(resource_tier)
         return self._active_session
 
     def generate(
@@ -216,13 +413,15 @@ class InferenceService:
                 procedural_creativity=procedural_creativity
             )
             safe_owner_id = self.sanitize_owner_id(owner_id)
-            model_pack = self._resolve_pack(pack_name)
-            session = self._session_for_pack(model_pack)
+            base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name)
+            session = self._session_for_pack(effective_pack, resource_tier)
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
             LOGGER.info(
-                "Generate request: owner=%s pack=%s size=%dx%d seed=%s creative_mode=%s",
+                "Generate request: owner=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s creative_mode=%s",
                 safe_owner_id,
-                model_pack.name,
+                base_pack.name,
+                effective_pack.name,
+                resource_tier.name,
                 width,
                 height,
                 effective_seed,
@@ -241,6 +440,7 @@ class InferenceService:
                     procedural_creativity=effective_procedural_creativity,
                 )
             )
+            self._active_backend_name = result.backend
 
             saved_path = save_png_with_metadata(
                 image=result.image,
@@ -258,11 +458,22 @@ class InferenceService:
                     "guidance_scale": result.guidance_scale,
                     "backend": result.backend,
                     "device": result.device,
-                    "model_pack": model_pack.name,
+                    "model_pack": base_pack.name,
+                    "selected_pack": base_pack.name,
+                    "effective_pack": effective_pack.name,
+                    "derived_strategy": effective_pack.derived_strategy,
+                    "fp8_checkpoint": result.fp8_checkpoint,
+                    "fp8_fallback_used": result.fp8_fallback_used,
+                    "fp8_fallback_reason": result.fp8_fallback_reason,
+                    "fp8_runtime_mode": result.fp8_runtime_mode,
+                    "fp8_normalized_tensor_count": result.fp8_normalized_tensor_count,
+                    "fp8_storage_preserved_tensor_count": result.fp8_storage_preserved_tensor_count,
+                    "fp8_promoted_tensor_count": result.fp8_promoted_tensor_count,
                     "duration_ms": result.duration_ms,
                     "seed": result.seed,
                     "scheduler_mode": result.scheduler_mode,
                     "runtime_profile": result.runtime_profile,
+                    "resource_tier": result.resource_tier,
                     "execution_mode": result.execution_mode,
                     "procedural_creativity": result.procedural_creativity,
                 },
@@ -279,14 +490,21 @@ class InferenceService:
                     "height": height,
                     "output_path": str(saved_path),
                     "owner_id": safe_owner_id,
-                    "model_pack": model_pack.name,
+                    "model_pack": base_pack.name,
+                    "selected_pack": base_pack.name,
+                    "effective_pack": effective_pack.name,
+                    "derived_strategy": effective_pack.derived_strategy,
+                    "resource_tier": result.resource_tier,
                     "procedural_creativity": result.procedural_creativity,
                     **result.telemetry_dict(),
                 },
             )
             image_row = index_image(self._settings, saved_path, owner_id=safe_owner_id)
             image_row["url"] = f"/images/{image_row['filename']}"
-            image_row["pack"] = model_pack.name
+            image_row["pack"] = base_pack.name
+            image_row["selected_pack"] = base_pack.name
+            image_row["effective_pack"] = effective_pack.name
+            image_row["derived_strategy"] = effective_pack.derived_strategy
             image_row["duration_ms"] = result.duration_ms
             image_row["seed"] = result.seed
             image_row["scheduler_mode"] = result.scheduler_mode
@@ -294,13 +512,20 @@ class InferenceService:
             image_row["prompt_effective"] = result.prompt_effective
             image_row["prompt_enhanced"] = result.prompt_enhanced
             image_row["runtime_profile"] = result.runtime_profile
+            image_row["resource_tier"] = result.resource_tier
             image_row["execution_mode"] = result.execution_mode
+            image_row["backend"] = result.backend
+            image_row["fp8_fallback_used"] = result.fp8_fallback_used
+            image_row["fp8_fallback_reason"] = result.fp8_fallback_reason
+            image_row["fp8_runtime_mode"] = result.fp8_runtime_mode
             image_row["procedural_creativity"] = result.procedural_creativity
             LOGGER.info(
-                "Image created: owner=%s file=%s pack=%s size=%dx%d seed=%s duration_ms=%s creative_mode=%s",
+                "Image created: owner=%s file=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s duration_ms=%s creative_mode=%s",
                 safe_owner_id,
                 image_row["filename"],
-                model_pack.name,
+                base_pack.name,
+                effective_pack.name,
+                result.resource_tier,
                 width,
                 height,
                 result.seed,
@@ -336,12 +561,14 @@ class InferenceService:
             preferred_pack = str(source_row.get("model_pack") or "").strip() or None
             resolved_pack_name = pack_name or preferred_pack
             model_pack_name = (resolved_pack_name or "unknown").strip() or "unknown"
+            resource_tier = self.current_resource_tier(refresh=True)
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
             LOGGER.info(
-                "Upscale request: owner=%s source=%s pack=%s seed=%s",
+                "Upscale request: owner=%s source=%s pack=%s tier=%s seed=%s",
                 safe_owner_id,
                 safe_filename,
                 model_pack_name,
+                resource_tier.name,
                 effective_seed,
             )
 
@@ -383,6 +610,7 @@ class InferenceService:
                     "seed": effective_seed,
                     "scheduler_mode": scheduler_mode or "euler",
                     "runtime_profile": self._settings.runtime_profile.name,
+                    "resource_tier": resource_tier.name,
                     "execution_mode": UPSCALE_ENGINE_NAME,
                     "request_enhance_prompt": bool(enhance_prompt),
                     **result.telemetry_dict(),
@@ -407,6 +635,7 @@ class InferenceService:
                     "backend": UPSCALE_ENGINE_NAME,
                     "seed": effective_seed,
                     "scheduler_mode": scheduler_mode or "euler",
+                    "resource_tier": resource_tier.name,
                     "request_enhance_prompt": bool(enhance_prompt),
                     **result.telemetry_dict(),
                 },
@@ -421,6 +650,7 @@ class InferenceService:
             image_row["prompt_effective"] = source_prompt
             image_row["prompt_enhanced"] = False
             image_row["runtime_profile"] = self._settings.runtime_profile.name
+            image_row["resource_tier"] = resource_tier.name
             image_row["execution_mode"] = UPSCALE_ENGINE_NAME
             image_row["upscale_engine"] = UPSCALE_ENGINE_NAME
             LOGGER.info(
@@ -433,6 +663,7 @@ class InferenceService:
                 effective_seed,
                 result.duration_ms,
             )
+            self._active_backend_name = UPSCALE_ENGINE_NAME
             return image_row
 
     @staticmethod

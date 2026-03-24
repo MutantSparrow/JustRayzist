@@ -57,6 +57,36 @@ function Invoke-BuildOnedir {
   }
 }
 
+function Copy-TrackedTreeSubset {
+  param(
+    [Parameter(Mandatory = $true)][string]$RootDir,
+    [Parameter(Mandatory = $true)][string]$RelativeRoot,
+    [Parameter(Mandatory = $true)][string]$DestinationRoot
+  )
+
+  $tracked = @(& git -C $RootDir ls-files -- $RelativeRoot 2>$null)
+  foreach ($relativePath in $tracked) {
+    if ([string]::IsNullOrWhiteSpace($relativePath)) {
+      continue
+    }
+    if ($relativePath -match '\.(safetensors|gguf|pth)$') {
+      continue
+    }
+
+    $sourcePath = Join-Path $RootDir $relativePath
+    if (-not (Test-Path $sourcePath -PathType Leaf)) {
+      continue
+    }
+
+    $destPath = Join-Path $DestinationRoot $relativePath
+    $destDir = Split-Path -Parent $destPath
+    if ($destDir) {
+      New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+    }
+    Copy-Item -Path $sourcePath -Destination $destPath -Force
+  }
+}
+
 function Copy-CommonReleaseContent {
   param(
     [Parameter(Mandatory = $true)][string]$RootDir,
@@ -70,12 +100,9 @@ function Copy-CommonReleaseContent {
   Invoke-RobocopySafe -Source (Join-Path $RootDir "readme_images") -Destination (Join-Path $ReleaseDir "readme_images")
   Invoke-RobocopySafe -Source (Join-Path $RootDir "requirements") -Destination (Join-Path $ReleaseDir "requirements")
   Invoke-RobocopySafe -Source (Join-Path $RootDir "scripts") -Destination (Join-Path $ReleaseDir "scripts")
-  Invoke-RobocopySafe -Source (Join-Path $RootDir "models\\packs") -Destination (Join-Path $ReleaseDir "models\\packs") -ExtraArgs @(
-    "/XF", "*.safetensors", "*.gguf", "*.pth"
-  )
-  Invoke-RobocopySafe -Source (Join-Path $RootDir "models\\upscaler") -Destination (Join-Path $ReleaseDir "models\\upscaler") -ExtraArgs @(
-    "/XF", "*.safetensors", "*.gguf", "*.pth"
-  )
+  Copy-TrackedTreeSubset -RootDir $RootDir -RelativeRoot "models/packs" -DestinationRoot $ReleaseDir
+  Copy-TrackedTreeSubset -RootDir $RootDir -RelativeRoot "models/upscaler" -DestinationRoot $ReleaseDir
+
 
   Copy-Item (Join-Path $RootDir "StartWeb.bat") -Destination (Join-Path $ReleaseDir "StartWeb.bat") -Force
   Copy-Item (Join-Path $RootDir "RunMeFirst.bat") -Destination (Join-Path $ReleaseDir "RunMeFirst.bat") -Force

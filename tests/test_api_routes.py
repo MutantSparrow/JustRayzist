@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import shutil
-from uuid import uuid4
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -144,56 +143,64 @@ def test_images_route_returns_service_items(monkeypatch) -> None:
     assert payload["items"][0]["filename"] == "a.png"
 
 
-def test_image_file_route_serves_png(monkeypatch) -> None:
-    temp_dir = api_main.settings.paths.data_dir / f"test_api_{uuid4().hex}"
+def test_image_file_route_serves_png(monkeypatch, workspace_tmp_path: Path) -> None:
+    temp_dir = workspace_tmp_path / "api-image"
     image_path = temp_dir / "served.png"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        Image.new("RGB", (16, 16), color=(0, 120, 220)).save(image_path, format="PNG")
+    Image.new("RGB", (16, 16), color=(0, 120, 220)).save(image_path, format="PNG")
 
-        def fake_get_image(filename: str, owner_id: str):
-            assert filename == "served.png"
-            assert owner_id == "example-client"
-            return {"filename": filename, "output_path": str(image_path)}
+    def fake_get_image(filename: str, owner_id: str):
+        assert filename == "served.png"
+        assert owner_id == "example-client"
+        return {"filename": filename, "output_path": str(image_path)}
 
-        monkeypatch.setattr(api_main.inference, "get_image", fake_get_image)
+    monkeypatch.setattr(api_main.inference, "get_image", fake_get_image)
 
-        client = TestClient(api_main.app)
-        response = client.get("/images/served.png?client_id=example-client")
-        assert response.status_code == 200
-        assert response.headers["content-type"] == "image/png"
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    client = TestClient(api_main.app)
+    response = client.get("/images/served.png?client_id=example-client")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
 
 
-def test_bulk_download_route_streams_zip(monkeypatch) -> None:
-    temp_dir = api_main.settings.paths.outputs_dir / f"test_zip_{uuid4().hex}"
+def test_bulk_download_route_streams_zip(monkeypatch, workspace_tmp_path: Path) -> None:
+    temp_dir = workspace_tmp_path / "zip-download"
     image_path = temp_dir / "served.png"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        Image.new("RGB", (12, 12), color=(220, 50, 90)).save(image_path, format="PNG")
+    Image.new("RGB", (12, 12), color=(220, 50, 90)).save(image_path, format="PNG")
 
-        def fake_resolve_download_images(**kwargs):
-            assert kwargs == {
-                "owner_id": "example-client",
-                "filenames": ["served.png"],
-            }
-            return [("served.png", image_path)]
+    def fake_resolve_download_images(**kwargs):
+        assert kwargs == {
+            "owner_id": "example-client",
+            "filenames": ["served.png"],
+        }
+        return [("served.png", image_path)]
 
-        monkeypatch.setattr(api_main.inference, "resolve_download_images", fake_resolve_download_images)
+    monkeypatch.setattr(api_main.inference, "resolve_download_images", fake_resolve_download_images)
 
-        client = TestClient(api_main.app)
-        response = client.post(
-            "/images/download-zip",
-            headers=CLIENT_HEADER,
-            json={"filenames": ["served.png"]},
-        )
-        assert response.status_code == 200
-        assert response.headers["content-type"] == "application/zip"
-        assert "selection.zip" in response.headers["content-disposition"]
-        assert b"served.png" in response.content
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/images/download-zip",
+        headers=CLIENT_HEADER,
+        json={"filenames": ["served.png"]},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/zip"
+    assert "selection.zip" in response.headers["content-disposition"]
+    assert b"served.png" in response.content
+
+
+def test_api_manifest_route_lists_bulk_download_route() -> None:
+    client = TestClient(api_main.app)
+    response = client.get("/api-manifest")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] >= 1
+    items = payload["items"]
+    assert any(item["path"] == "/images/download-zip" for item in items)
+    assert any(item["path"] == "/health" for item in items)
+
+
 def test_delete_gallery_route_accepts_query_confirmation(monkeypatch) -> None:
     def fake_delete_gallery(**kwargs):
         assert kwargs == {"owner_id": "example-client", "confirm_text": "delete"}

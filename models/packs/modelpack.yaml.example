@@ -1,4 +1,6 @@
 name: my_z_turbo_pack
+user_visible: true  # Set false for hidden engineering-only packs.
+enabled: true  # Set false to keep a pack installed but unavailable to normal users.
 architecture: z_image_turbo
 backend_preference:
   - diffusers
@@ -7,9 +9,16 @@ components:
   transformer:
     path: ./transformer.safetensors
     format: safetensors
+    # Optional advanced runtime storage hints.
+    # These hints are for advanced runtime/engineering use.
+    # storage_mode: layerwise
+    # storage_dtype: fp8_e4m3fn
+    # compute_dtype: bfloat16
   vae:
     path: ./vae.safetensors
     format: safetensors
+  text_encoder:
+    path: ./text_encoder.gguf
+    format: gguf
 required_configs:
   - ./config/model_index.json
-

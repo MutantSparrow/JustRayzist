@@ -1,7 +1,6 @@
 param(
   [string]$BindHost = "127.0.0.1",
   [int]$Port = 37717,
-  [string]$Profile = "balanced",
   [string]$PythonExe = "python"
 )
 
@@ -15,15 +14,14 @@ $env:PYTHONNOUSERSITE = "1"
 $env:JUSTRAYZIST_ROOT = $rootDir
 
 if (Test-Path $webExe) {
-  & $webExe --host $BindHost --port $Port --profile $Profile
+  & $webExe --host $BindHost --port $Port
   exit $LASTEXITCODE
 }
 
 Push-Location $rootDir
 try {
-  & $PythonExe -m app.cli.main serve --host $BindHost --port $Port --profile $Profile
+  & $PythonExe -m app.cli.main serve --host $BindHost --port $Port
   exit $LASTEXITCODE
 } finally {
   Pop-Location
 }
-

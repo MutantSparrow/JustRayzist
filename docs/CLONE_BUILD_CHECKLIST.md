@@ -43,6 +43,15 @@ python -m pytest -q tests -p no:cacheprovider
 .\StartWeb.bat
 ```
 
+Normal startup should now ask only for the public model pack and local/LAN listen mode. The app should auto-detect its internal resource tier from available VRAM instead of prompting for `high`, `balanced`, or `constrained`.
+
+Quick acceptance checks after launch:
+
+- only public packs are shown in the launcher
+- the app opens on `http://127.0.0.1:37717/`
+- `GET /model-packs` returns only public packs
+- `/API` loads current examples from the internal manifest-backed tester
+
 ## 7. Optional packaged build
 
 ```powershell

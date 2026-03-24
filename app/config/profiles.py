@@ -7,6 +7,7 @@ class RuntimeProfile:
     description: str
     target_vram_gb_min: int
     target_vram_gb_max: int
+    min_free_vram_gb: int
     enable_cpu_offload: bool
     enable_sequential_offload: bool
     guidance_scale_default: float
@@ -23,6 +24,7 @@ RUNTIME_PROFILES: dict[str, RuntimeProfile] = {
         description="24GB-class profile with minimal offload and highest throughput.",
         target_vram_gb_min=20,
         target_vram_gb_max=48,
+        min_free_vram_gb=12,
         enable_cpu_offload=False,
         enable_sequential_offload=False,
         guidance_scale_default=0.0,
@@ -37,6 +39,7 @@ RUNTIME_PROFILES: dict[str, RuntimeProfile] = {
         description="16GB-class profile with moderate offload and stable throughput.",
         target_vram_gb_min=14,
         target_vram_gb_max=24,
+        min_free_vram_gb=8,
         enable_cpu_offload=True,
         enable_sequential_offload=False,
         guidance_scale_default=0.0,
@@ -49,6 +52,7 @@ RUNTIME_PROFILES: dict[str, RuntimeProfile] = {
         description="12GB-class profile prioritizing reliability with stronger offload.",
         target_vram_gb_min=10,
         target_vram_gb_max=16,
+        min_free_vram_gb=4,
         enable_cpu_offload=True,
         enable_sequential_offload=True,
         guidance_scale_default=0.0,

@@ -71,31 +71,26 @@ if exist "launch\ascii_logo_blockier.ans" (
 echo.
 echo JustRayzist Web Launcher
 echo ========================
-echo Select runtime profile:
-echo   [1] constrained  (12GB VRAM target)
-echo   [2] balanced     (16GB VRAM target)
-echo   [3] high         (24GB VRAM target)
 echo.
-
-choice /c 123 /n /m "Choose profile [1-3]: "
-set "PROFILE_CHOICE=%ERRORLEVEL%"
-if "%PROFILE_CHOICE%"=="3" set "PROFILE=high"
-if "%PROFILE_CHOICE%"=="2" set "PROFILE=balanced"
-if "%PROFILE_CHOICE%"=="1" set "PROFILE=constrained"
-
-echo.
-echo Select model pack:
+echo Model pack discovery:
+echo Only public, enabled packs are shown here.
 set /a PACK_COUNT=0
 for /d %%D in ("%CD%\models\packs\*") do (
   if exist "%%~fD\modelpack.yaml" (
-    set /a PACK_COUNT+=1
-    set "PACK_!PACK_COUNT!=%%~nxD"
+    findstr /R /C:"^[ ]*user_visible:[ ]*false" "%%~fD\modelpack.yaml" >nul
+    if errorlevel 1 (
+      findstr /R /C:"^[ ]*enabled:[ ]*false" "%%~fD\modelpack.yaml" >nul
+      if errorlevel 1 (
+        set /a PACK_COUNT+=1
+        set "PACK_!PACK_COUNT!=%%~nxD"
+      )
+    )
   )
 )
 
 if !PACK_COUNT! EQU 0 (
-  echo No model packs found under models\packs.
-  echo Add at least one pack directory with modelpack.yaml and retry.
+  echo No public enabled model packs found under models\packs.
+  echo Enable at least one public pack and retry.
   set "EXIT_CODE=1"
   goto :after_run
 )
@@ -106,23 +101,35 @@ if !PACK_COUNT! GTR 9 (
   goto :after_run
 )
 
-set "PACK_CHOICES="
-for /l %%I in (1,1,!PACK_COUNT!) do (
-  set "PACK_CHOICES=!PACK_CHOICES!%%I"
-  echo   [%%I] !PACK_%%I!
+if !PACK_COUNT! EQU 1 (
+  set "PACK=!PACK_1!"
+  echo Auto-selected only available pack: !PACK!
+) else (
+  echo Select model pack:
+  set "PACK_CHOICES="
+  for /l %%I in (1,1,!PACK_COUNT!) do (
+    set "PACK_CHOICES=!PACK_CHOICES!%%I"
+    echo   [%%I] !PACK_%%I!
+  )
+  echo.
+  choice /c !PACK_CHOICES! /n /m "Choose pack [!PACK_CHOICES!]: "
+  set "PACK_CHOICE_INDEX=%ERRORLEVEL%"
+  set "PACK=!PACK_%PACK_CHOICE_INDEX%!"
 )
-echo.
-
-choice /c !PACK_CHOICES! /n /m "Choose pack [!PACK_CHOICES!]: "
-set "PACK_CHOICE_INDEX=%ERRORLEVEL%"
-
-set "PACK=!PACK_%PACK_CHOICE_INDEX%!"
 set "JUSTRAYZIST_PACK=!PACK!"
 if /I "!PACK!"=="Rayzist_bf16" (
-  call :ensure_rayzist_pack_assets
+  call :ensure_default_pack_assets "bf16"
   if errorlevel 1 (
     set "EXIT_CODE=1"
     goto :after_run
+  )
+) else (
+  if /I "!PACK!"=="Rayzist_fp8_full" (
+    call :ensure_default_pack_assets "fp8_full"
+    if errorlevel 1 (
+      set "EXIT_CODE=1"
+      goto :after_run
+    )
   )
 )
 
@@ -206,7 +213,7 @@ if defined PORT_PID (
 )
 
 echo.
-echo Starting web server with profile: !PROFILE!
+echo Starting web server with automatic resource-tier detection.
 echo Using model pack: !PACK!
 echo Runtime lane: !RELEASE_LANE!
 echo Bind address: !HOST!:!PORT!
@@ -219,9 +226,9 @@ if /I "!NETWORK_MODE!"=="lan" (
 echo.
 
 if /I "!RUN_MODE!"=="exe" (
-  "!WEB_EXE!" --host !HOST! --port !PORT! --profile !PROFILE!
+  "!WEB_EXE!" --host !HOST! --port !PORT!
 ) else (
-  "!PYTHON_EXE!" -m app.cli.main serve --host !HOST! --port !PORT! --profile !PROFILE!
+  "!PYTHON_EXE!" -m app.cli.main serve --host !HOST! --port !PORT!
 )
 set "EXIT_CODE=%ERRORLEVEL%"
 
@@ -293,11 +300,22 @@ if errorlevel 2 exit /b 1
 if errorlevel 1 exit /b 1
 exit /b 0
 
-:ensure_rayzist_pack_assets
+:ensure_default_pack_assets
+set "MODEL_VARIANT=%~1"
 set "PACK_ROOT=%CD%\models\packs\Rayzist_bf16"
 set "NEEDED_TRANSFORMER=%PACK_ROOT%\weights\Rayzist.v1.0.safetensors"
+if /I "!MODEL_VARIANT!"=="fp8_full" (
+  set "PACK_ROOT=%CD%\models\packs\Rayzist_fp8_full"
+  set "NEEDED_TRANSFORMER=%PACK_ROOT%\weights\Rayzist.v1.0.fp8_e4m3fn.full.safetensors"
+)
 set "NEEDED_VAE=%PACK_ROOT%\weights\diffusion_pytorch_model.safetensors"
+if /I "!MODEL_VARIANT!"=="fp8_full" (
+  set "NEEDED_VAE=%CD%\models\packs\Rayzist_bf16\weights\diffusion_pytorch_model.safetensors"
+)
 set "NEEDED_ENCODER=%PACK_ROOT%\config\text_encoder\model.safetensors"
+if /I "!MODEL_VARIANT!"=="fp8_full" (
+  set "NEEDED_ENCODER=%CD%\models\packs\Rayzist_bf16\config\text_encoder\model.safetensors"
+)
 set "NEEDED_UPSCALER=%CD%\models\upscaler\2x_RealESRGAN_x2plus.pth"
 set "NEEDED_SEEDVR2_DIT=%CD%\models\seedvr2\seedvr2_ema_3b_fp8_e4m3fn.safetensors"
 set "NEEDED_SEEDVR2_VAE=%CD%\models\seedvr2\ema_vae_fp16.safetensors"
@@ -316,14 +334,14 @@ if not exist "!NEEDED_SEEDVR2_VAE!" set "MISSING_ASSETS=1"
 if !MISSING_ASSETS! EQU 0 exit /b 0
 
 echo.
-echo Missing default model assets for pack Rayzist_bf16.
+echo Missing default model assets for pack variant !MODEL_VARIANT!.
 if not exist "!FETCH_SCRIPT!" (
   echo Missing fetch script: !FETCH_SCRIPT!
   exit /b 1
 )
 echo Running fetch script:
 echo   !FETCH_SCRIPT!
-powershell -NoProfile -ExecutionPolicy Bypass -File "!FETCH_SCRIPT!"
+powershell -NoProfile -ExecutionPolicy Bypass -File "!FETCH_SCRIPT!" -ModelVariant !MODEL_VARIANT!
 if errorlevel 1 (
   echo Failed to fetch default model assets.
   echo Ensure Hugging Face CLI with XET is installed via:

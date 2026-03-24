@@ -1,5 +1,7 @@
 param(
-  [switch]$ForceRepair
+  [switch]$ForceRepair,
+  [ValidateSet("auto", "bf16", "fp8_full")]
+  [string]$ModelVariant = "auto"
 )
 
 $ErrorActionPreference = "Stop"
@@ -466,7 +468,8 @@ try {
     Invoke-External -Executable "powershell" -Arguments @(
       "-NoProfile",
       "-ExecutionPolicy", "Bypass",
-      "-File", $fetchScript
+      "-File", $fetchScript,
+      "-ModelVariant", $ModelVariant
     )
   }
 

@@ -8,6 +8,8 @@ import yaml
 
 ALLOWED_ARCHITECTURES = {"z_image_turbo"}
 ALLOWED_FORMATS = {"safetensors", "gguf"}
+ALLOWED_STORAGE_MODES = {"layerwise"}
+ALLOWED_RUNTIME_DTYPES = {"float32", "float16", "bfloat16", "fp8_e4m3fn"}
 
 
 @dataclass(frozen=True)
@@ -15,6 +17,9 @@ class ModelComponent:
     role: str
     path: Path
     file_format: str
+    storage_dtype: str | None = None
+    compute_dtype: str | None = None
+    storage_mode: str | None = None
 
 
 @dataclass(frozen=True)
@@ -26,10 +31,30 @@ class ModelPack:
     pipeline_config_dir: Path | None
     required_configs: list[Path]
     source_file: Path
+    user_visible: bool = True
+    enabled: bool = True
+    base_name: str | None = None
+    derived_strategy: str | None = None
 
 
 class ModelPackValidationError(ValueError):
     pass
+
+
+def _parse_user_visible(raw: Any) -> bool:
+    if raw is None:
+        return True
+    if isinstance(raw, bool):
+        return raw
+    raise ModelPackValidationError("'user_visible' must be a boolean when provided.")
+
+
+def _parse_enabled(raw: Any) -> bool:
+    if raw is None:
+        return True
+    if isinstance(raw, bool):
+        return raw
+    raise ModelPackValidationError("'enabled' must be a boolean when provided.")
 
 
 def _is_remote_path(raw_path: str) -> bool:
@@ -73,6 +98,36 @@ def _require_existing_path(path: Path, field_name: str) -> None:
         raise ModelPackValidationError(f"Missing path for '{field_name}': {path}")
 
 
+def _parse_runtime_dtype(role: str, field_name: str, raw: Any) -> str | None:
+    if raw is None:
+        return None
+    normalized = str(raw).strip().lower()
+    if not normalized:
+        return None
+    if normalized not in ALLOWED_RUNTIME_DTYPES:
+        allowed = ", ".join(sorted(ALLOWED_RUNTIME_DTYPES))
+        raise ModelPackValidationError(
+            f"Unsupported {field_name!r} value '{raw}' for component '{role}'. "
+            f"Allowed: {allowed}"
+        )
+    return normalized
+
+
+def _parse_storage_mode(role: str, raw: Any) -> str | None:
+    if raw is None:
+        return None
+    normalized = str(raw).strip().lower()
+    if not normalized:
+        return None
+    if normalized not in ALLOWED_STORAGE_MODES:
+        allowed = ", ".join(sorted(ALLOWED_STORAGE_MODES))
+        raise ModelPackValidationError(
+            f"Unsupported 'storage_mode' value '{raw}' for component '{role}'. "
+            f"Allowed: {allowed}"
+        )
+    return normalized
+
+
 def _parse_component(base_dir: Path, role: str, raw: dict[str, Any]) -> ModelComponent:
     if not isinstance(raw, dict):
         raise ModelPackValidationError(f"Component '{role}' must be an object.")
@@ -86,7 +141,21 @@ def _parse_component(base_dir: Path, role: str, raw: dict[str, Any]) -> ModelCom
     declared_format = str(file_format).lower()
     _validate_extension(resolved, declared_format, role)
     _require_file(resolved, role)
-    return ModelComponent(role=role, path=resolved, file_format=declared_format)
+    storage_dtype = _parse_runtime_dtype(role, "storage_dtype", raw.get("storage_dtype"))
+    compute_dtype = _parse_runtime_dtype(role, "compute_dtype", raw.get("compute_dtype"))
+    storage_mode = _parse_storage_mode(role, raw.get("storage_mode"))
+    if storage_mode and storage_dtype is None:
+        raise ModelPackValidationError(
+            f"Component '{role}' uses storage_mode '{storage_mode}' but is missing 'storage_dtype'."
+        )
+    return ModelComponent(
+        role=role,
+        path=resolved,
+        file_format=declared_format,
+        storage_dtype=storage_dtype,
+        compute_dtype=compute_dtype,
+        storage_mode=storage_mode,
+    )
 
 
 def load_model_pack(pack_file: Path) -> ModelPack:
@@ -144,6 +213,9 @@ def load_model_pack(pack_file: Path) -> ModelPack:
                 f"'pipeline_config_dir' must point to a directory: {pipeline_config_dir}"
             )
 
+    user_visible = _parse_user_visible(payload.get("user_visible"))
+    enabled = _parse_enabled(payload.get("enabled"))
+
     return ModelPack(
         name=name,
         architecture=architecture,
@@ -152,6 +224,10 @@ def load_model_pack(pack_file: Path) -> ModelPack:
         pipeline_config_dir=pipeline_config_dir,
         required_configs=required_configs,
         source_file=pack_file.resolve(),
+        user_visible=user_visible,
+        enabled=enabled,
+        base_name=name,
+        derived_strategy=None,
     )
 
 

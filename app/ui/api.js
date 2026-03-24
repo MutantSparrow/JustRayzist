@@ -10,157 +10,8 @@ const statusEl = document.getElementById("tester-status");
 const responseEl = document.getElementById("tester-response");
 
 const CLIENT_ID_STORAGE_KEY = "justrayzist.client_id";
-
-const ENDPOINTS = [
-  {
-    method: "GET",
-    path: "/health",
-    description: "Service health and active runtime profile.",
-    request: null,
-    response: {
-      status: "ok",
-      app: "JustRayzist",
-      version: "1.0.0",
-      profile: "balanced",
-      offline_mode: true,
-    },
-    requiresClient: false,
-  },
-  {
-    method: "GET",
-    path: "/config",
-    description: "Resolved runtime configuration and paths.",
-    request: null,
-    response: { app_name: "JustRayzist", runtime_profile: { name: "balanced" } },
-    requiresClient: false,
-  },
-  {
-    method: "GET",
-    path: "/model-packs",
-    description: "List discovered and valid model packs.",
-    request: null,
-    response: {
-      count: 1,
-      items: [{ name: "Rayzist_bf16", architecture: "z_image_turbo" }],
-    },
-    requiresClient: false,
-  },
-  {
-    method: "POST",
-    path: "/generate",
-    description: "Generate image from prompt and dimensions (client-scoped gallery).",
-    request: {
-      prompt: "A cinematic skyline at sunrise",
-      width: 1024,
-      height: 1024,
-      pack: "Rayzist_bf16",
-      seed: 123456,
-      scheduler_mode: "euler",
-      enhance_prompt: false,
-      procedural_creativity: 0,
-    },
-    response: {
-      filename: "justrayzist_YYYYMMDD_hhmmss_000.png",
-      width: 1024,
-      height: 1024,
-      duration_ms: 12345,
-      url: "/images/justrayzist_YYYYMMDD_hhmmss_000.png",
-    },
-    requiresClient: true,
-  },
-  {
-    method: "POST",
-    path: "/upscale",
-    description: "Upscale one image from the current client gallery.",
-    request: {
-      filename: "justrayzist_YYYYMMDD_hhmmss_000.png",
-      pack: "Rayzist_bf16",
-      seed: 123456,
-      scheduler_mode: "euler",
-      enhance_prompt: false,
-    },
-    response: {
-      filename: "justrayzist_YYYYMMDD_hhmmss_001.png",
-      mode: "api_upscale",
-      source_filename: "justrayzist_YYYYMMDD_hhmmss_000.png",
-      upscale_engine: "x2_seedvr2_blend",
-      duration_ms: 23456,
-      url: "/images/justrayzist_YYYYMMDD_hhmmss_001.png",
-    },
-    requiresClient: true,
-  },
-  {
-    method: "GET",
-    path: "/images?prompt=skyline&limit=50&offset=0&newest_first=true",
-    description: "List images for the current client scope.",
-    request: null,
-    response: {
-      count: 1,
-      limit: 50,
-      offset: 0,
-      items: [{ filename: "justrayzist_YYYYMMDD_hhmmss_000.png" }],
-    },
-    requiresClient: true,
-  },
-  {
-    method: "GET",
-    path: "/images/{filename}?client_id=<client-id>",
-    description: "Download image by filename. Use client query for direct links/img tags.",
-    request: null,
-    response: "PNG binary response",
-    requiresClient: true,
-  },
-  {
-    method: "DELETE",
-    path: "/images/{filename}?confirm=DELETE",
-    description: "Delete one image and its index entry in current client scope.",
-    request: { confirm: "DELETE" },
-    response: { status: "ok", deleted_files: 1, deleted_rows: 1, filename: "..." },
-    requiresClient: true,
-  },
-  {
-    method: "DELETE",
-    path: "/gallery?confirm=DELETE",
-    description: "Delete all gallery images for current client scope.",
-    request: { confirm: "DELETE" },
-    response: { status: "ok", deleted_files: 42, deleted_rows: 42, remaining_rows: 0 },
-    requiresClient: true,
-  },
-  {
-    method: "GET",
-    path: "/gallery/import-sources",
-    description: "List import candidates (legacy root and other userspaces).",
-    request: null,
-    response: {
-      count: 2,
-      items: [{ source_id: "__legacy_root__", image_count: 10 }],
-    },
-    requiresClient: true,
-  },
-  {
-    method: "POST",
-    path: "/gallery/import",
-    description: "Copy PNGs from a source into current client userspace.",
-    request: { source_id: "__legacy_root__", dry_run: false },
-    response: {
-      status: "ok",
-      source_id: "__legacy_root__",
-      target_owner_id: "example_client",
-      imported: 12,
-      skipped: 0,
-      failed: 0,
-    },
-    requiresClient: true,
-  },
-  {
-    method: "POST",
-    path: "/server/kill",
-    description: "Request local server shutdown.",
-    request: {},
-    response: { status: "ok", message: "Server shutdown initiated." },
-    requiresClient: false,
-  },
-];
+const API_MANIFEST_PATH = "/api-manifest";
+let endpoints = [];
 
 function asJson(value) {
   return JSON.stringify(value, null, 2);
@@ -204,7 +55,7 @@ function getOrCreateClientId() {
 
 function renderEndpoints() {
   endpointListEl.innerHTML = "";
-  ENDPOINTS.forEach((endpoint) => {
+  endpoints.forEach((endpoint) => {
     const card = document.createElement("article");
     card.className = "endpoint-card";
 
@@ -298,6 +149,23 @@ async function sendRequest() {
   }
 }
 
+async function fetchEndpointManifest() {
+  const response = await fetch(API_MANIFEST_PATH, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Failed to load API manifest (${response.status} ${response.statusText}).`);
+  }
+  const payload = await response.json();
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  endpoints = items.map((entry) => ({
+    method: String(entry.method || "GET").toUpperCase(),
+    path: String(entry.path || "/"),
+    description: String(entry.description || ""),
+    request: entry.request ?? null,
+    response: entry.response ?? null,
+    requiresClient: Boolean(entry.requires_client),
+  }));
+}
+
 function clearTester() {
   methodEl.value = "GET";
   pathEl.value = "/health";
@@ -307,9 +175,10 @@ function clearTester() {
   responseEl.textContent = "";
 }
 
-function bootstrap() {
+async function bootstrap() {
   baseUrlEl.textContent = window.location.origin;
   clientIdEl.value = getOrCreateClientId();
+  await fetchEndpointManifest();
   renderEndpoints();
   clearTester();
 }
@@ -322,4 +191,6 @@ sendEl.addEventListener("click", () => {
 
 clearEl.addEventListener("click", clearTester);
 
-bootstrap();
+bootstrap().catch((error) => {
+  setStatus(`Failed to load API examples: ${String(error?.message || error)}`, false);
+});

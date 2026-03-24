@@ -3,9 +3,11 @@ from __future__ import annotations
 import gc
 import logging
 from dataclasses import dataclass
+from typing import Any
 
+from app.config.profiles import RuntimeProfile
 from app.config.settings import AppSettings
-from app.core.backends import DiffusersZImageBackend, GenerationResult
+from app.core.backends import GenerationResult, create_backend
 from app.core.model_registry import ModelPack
 from app.core.worker.types import GenerationRequest
 
@@ -19,19 +21,33 @@ class SessionStats:
 
 
 class GenerationSession:
-    def __init__(self, settings: AppSettings, model_pack: ModelPack):
+    def __init__(
+        self,
+        settings: AppSettings,
+        model_pack: ModelPack,
+        resource_tier: RuntimeProfile | None = None,
+    ):
         self._settings = settings
         self._model_pack = model_pack
-        self._backend: DiffusersZImageBackend | None = None
+        self._resource_tier = resource_tier or settings.resource_tier_controller.current()
+        self._backend: Any | None = None
         self.stats = SessionStats()
 
-    def _ensure_backend(self) -> DiffusersZImageBackend:
+    def _ensure_backend(self):
         if self._backend is None:
-            self._backend = DiffusersZImageBackend(
+            self._backend = create_backend(
                 settings=self._settings,
                 model_pack=self._model_pack,
+                resource_tier=self._resource_tier,
             )
         return self._backend
+
+    def set_resource_tier(self, resource_tier: RuntimeProfile) -> None:
+        if self._resource_tier.name == resource_tier.name:
+            return
+        self._resource_tier = resource_tier
+        if self._backend is not None:
+            self.recycle(f"Resource tier changed to {resource_tier.name}")
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         backend = self._ensure_backend()
@@ -57,3 +73,9 @@ class GenerationSession:
                 torch.cuda.empty_cache()
         except Exception:
             pass
+
+    def runtime_status(self) -> dict[str, object]:
+        backend = self._ensure_backend()
+        if hasattr(backend, "runtime_status"):
+            return dict(backend.runtime_status())
+        return {"backend": "unknown", "effective_pack": self._model_pack.name}

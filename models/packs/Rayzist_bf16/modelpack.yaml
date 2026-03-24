@@ -21,3 +21,4 @@ required_configs:
   - ./config/vae/config.json
   - ./config/text_encoder/config.json
 
+enabled: true

@@ -1,4 +1,5 @@
 from app.core.model_registry.model_pack import (
+    ModelComponent,
     ModelPack,
     ModelPackValidationError,
     discover_model_packs,
@@ -7,6 +8,7 @@ from app.core.model_registry.model_pack import (
 )
 
 __all__ = [
+    "ModelComponent",
     "ModelPack",
     "ModelPackValidationError",
     "discover_model_packs",

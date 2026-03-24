@@ -2,11 +2,112 @@ from __future__ import annotations
 
 import os
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.config.profiles import RUNTIME_PROFILES, RuntimeProfile
 from app.version import APP_NAME, APP_VERSION
+
+_BALANCED_PROFILE_NAME = "balanced"
+_RESOURCE_TIER_ORDER = ("constrained", "balanced", "high")
+
+
+def _bytes_from_gb(value_gb: int) -> int:
+    return int(value_gb) * 1024 * 1024 * 1024
+
+
+def current_free_vram_bytes() -> int | None:
+    try:
+        import torch
+    except Exception:
+        return None
+    try:
+        if not torch.cuda.is_available():
+            return None
+        free_bytes, _ = torch.cuda.mem_get_info(torch.cuda.current_device())
+        return int(free_bytes)
+    except Exception:
+        return None
+
+
+def detect_resource_tier_profile(*, free_vram_bytes: int | None = None) -> RuntimeProfile:
+    free_bytes = current_free_vram_bytes() if free_vram_bytes is None else free_vram_bytes
+    if free_bytes is None:
+        return RUNTIME_PROFILES[_BALANCED_PROFILE_NAME]
+    if free_bytes >= _bytes_from_gb(RUNTIME_PROFILES["high"].min_free_vram_gb):
+        return RUNTIME_PROFILES["high"]
+    if free_bytes >= _bytes_from_gb(RUNTIME_PROFILES["balanced"].min_free_vram_gb):
+        return RUNTIME_PROFILES["balanced"]
+    return RUNTIME_PROFILES["constrained"]
+
+
+def _next_tier_name(current_name: str) -> str | None:
+    if current_name not in _RESOURCE_TIER_ORDER:
+        return None
+    idx = _RESOURCE_TIER_ORDER.index(current_name)
+    if idx >= len(_RESOURCE_TIER_ORDER) - 1:
+        return None
+    return _RESOURCE_TIER_ORDER[idx + 1]
+
+
+def _upgrade_margin_gb(target_name: str) -> int:
+    if target_name == "high":
+        return 3
+    if target_name == "balanced":
+        return 2
+    return 0
+
+
+@dataclass
+class ResourceTierController:
+    current_profile: RuntimeProfile
+    override_profile: RuntimeProfile | None = None
+    consecutive_upgrade_hits: int = 0
+
+    def current(self) -> RuntimeProfile:
+        return self.override_profile or self.current_profile
+
+    def refresh(self) -> RuntimeProfile:
+        if self.override_profile is not None:
+            self.current_profile = self.override_profile
+            self.consecutive_upgrade_hits = 0
+            return self.override_profile
+
+        free_bytes = current_free_vram_bytes()
+        if free_bytes is None:
+            return self.current_profile
+
+        direct_target = detect_resource_tier_profile(free_vram_bytes=free_bytes)
+        current_name = self.current_profile.name
+        current_rank = _RESOURCE_TIER_ORDER.index(current_name)
+        target_rank = _RESOURCE_TIER_ORDER.index(direct_target.name)
+
+        if target_rank < current_rank:
+            self.current_profile = direct_target
+            self.consecutive_upgrade_hits = 0
+            return self.current_profile
+
+        if target_rank == current_rank:
+            self.consecutive_upgrade_hits = 0
+            return self.current_profile
+
+        next_name = _next_tier_name(current_name)
+        if next_name is None:
+            self.consecutive_upgrade_hits = 0
+            return self.current_profile
+
+        next_profile = RUNTIME_PROFILES[next_name]
+        promotion_threshold = _bytes_from_gb(
+            next_profile.min_free_vram_gb + _upgrade_margin_gb(next_name)
+        )
+        if free_bytes >= promotion_threshold:
+            self.consecutive_upgrade_hits += 1
+            if self.consecutive_upgrade_hits >= 2:
+                self.current_profile = next_profile
+                self.consecutive_upgrade_hits = 0
+        else:
+            self.consecutive_upgrade_hits = 0
+        return self.current_profile
 
 
 @dataclass(frozen=True)
@@ -26,13 +127,37 @@ class AppSettings:
     environment: str
     offline_mode: bool
     runtime_profile: RuntimeProfile
+    resource_tier: RuntimeProfile
+    resource_tier_override: str | None
+    auto_resource_tier: bool
+    resource_tier_controller: ResourceTierController
     paths: AppPaths
 
     def to_dict(self) -> dict:
-        data = asdict(self)
-        data["runtime_profile"] = asdict(self.runtime_profile)
-        data["paths"] = {key: str(value) for key, value in data["paths"].items()}
-        return data
+        return {
+            "app_name": self.app_name,
+            "app_version": self.app_version,
+            "environment": self.environment,
+            "offline_mode": self.offline_mode,
+            "runtime_profile": {
+                "name": self.runtime_profile.name,
+                "description": self.runtime_profile.description,
+            },
+            "resource_tier": {
+                "name": self.resource_tier_controller.current().name,
+                "description": self.resource_tier_controller.current().description,
+            },
+            "resource_tier_override": self.resource_tier_override,
+            "auto_resource_tier": self.auto_resource_tier,
+            "paths": {
+                "root_dir": str(self.paths.root_dir),
+                "models_dir": str(self.paths.models_dir),
+                "model_packs_dir": str(self.paths.model_packs_dir),
+                "outputs_dir": str(self.paths.outputs_dir),
+                "data_dir": str(self.paths.data_dir),
+                "ui_dir": str(self.paths.ui_dir),
+            },
+        }
 
 
 def _resolve_root() -> Path:
@@ -45,7 +170,7 @@ def _resolve_root() -> Path:
 
 
 def _get_profile(profile_name: str | None) -> RuntimeProfile:
-    resolved = (profile_name or os.getenv("JUSTRAYZIST_PROFILE") or "balanced").lower()
+    resolved = (profile_name or os.getenv("JUSTRAYZIST_PROFILE") or _BALANCED_PROFILE_NAME).lower()
     if resolved not in RUNTIME_PROFILES:
         allowed = ", ".join(sorted(RUNTIME_PROFILES.keys()))
         raise ValueError(f"Invalid profile '{resolved}'. Allowed values: {allowed}.")
@@ -74,7 +199,15 @@ def load_settings(profile_name: str | None = None) -> AppSettings:
     )
     _ensure_directories(paths)
 
-    profile = _get_profile(profile_name)
+    override_profile: RuntimeProfile | None = None
+    if profile_name or os.getenv("JUSTRAYZIST_PROFILE"):
+        override_profile = _get_profile(profile_name)
+    runtime_profile = override_profile or RUNTIME_PROFILES[_BALANCED_PROFILE_NAME]
+    resource_tier = override_profile or detect_resource_tier_profile()
+    resource_tier_controller = ResourceTierController(
+        current_profile=resource_tier,
+        override_profile=override_profile,
+    )
     offline_mode = os.getenv("JUSTRAYZIST_OFFLINE", "1") == "1"
     if offline_mode:
         enforce_offline_runtime()
@@ -84,6 +217,10 @@ def load_settings(profile_name: str | None = None) -> AppSettings:
         app_version=APP_VERSION,
         environment=os.getenv("JUSTRAYZIST_ENV", "dev"),
         offline_mode=offline_mode,
-        runtime_profile=profile,
+        runtime_profile=runtime_profile,
+        resource_tier=resource_tier,
+        resource_tier_override=override_profile.name if override_profile is not None else None,
+        auto_resource_tier=override_profile is None,
+        resource_tier_controller=resource_tier_controller,
         paths=paths,
     )

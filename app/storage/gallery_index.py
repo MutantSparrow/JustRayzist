@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -129,6 +130,16 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(db_path)
     connection.row_factory = sqlite3.Row
     return connection
+
+
+@contextmanager
+def _open_connection(db_path: Path):
+    connection = _connect(db_path)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -332,7 +343,7 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
 
 def ensure_gallery_schema(settings: AppSettings) -> Path:
     db_path = _gallery_db_path(settings)
-    with _connect(db_path) as conn:
+    with _open_connection(db_path) as conn:
         _migrate_images_schema(conn, settings)
         conn.commit()
     return db_path
@@ -446,7 +457,7 @@ def index_image(settings: AppSettings, image_path: Path, owner_id: str | None = 
     if not resolved.exists():
         raise FileNotFoundError(f"Image file not found: {resolved}")
     metadata = _read_png_metadata(resolved)
-    with _connect(db_path) as conn:
+    with _open_connection(db_path) as conn:
         record = _upsert_image(conn, settings, resolved, metadata, owner_id=owner_id)
         conn.commit()
     return record
@@ -459,7 +470,7 @@ def sync_outputs_to_gallery(settings: AppSettings) -> int:
     output_files = sorted(outputs_dir.rglob("*.png"))
 
     indexed = 0
-    with _connect(db_path) as conn:
+    with _open_connection(db_path) as conn:
         removed_missing = _prune_missing_rows(conn, settings)
         existing_rows = conn.execute("SELECT owner_id, filename FROM images").fetchall()
         existing = {(str(row["owner_id"]), str(row["filename"])) for row in existing_rows}
@@ -488,7 +499,7 @@ def list_images(
     safe_offset = max(0, offset)
     order_keyword = "DESC" if newest_first else "ASC"
     scoped_owner = normalize_owner_id(owner_id) if owner_id else None
-    with _connect(db_path) as conn:
+    with _open_connection(db_path) as conn:
         removed_missing = _prune_missing_rows(conn, settings, owner_id=scoped_owner)
         if removed_missing:
             conn.commit()
@@ -518,7 +529,7 @@ def list_images(
 def get_image(settings: AppSettings, filename: str, owner_id: str | None = None) -> dict[str, Any] | None:
     db_path = ensure_gallery_schema(settings)
     scoped_owner = normalize_owner_id(owner_id) if owner_id else None
-    with _connect(db_path) as conn:
+    with _open_connection(db_path) as conn:
         if scoped_owner:
             row = conn.execute(
                 "SELECT * FROM images WHERE owner_id = ? AND filename = ?",
@@ -552,7 +563,7 @@ def delete_gallery(settings: AppSettings, owner_id: str | None = None) -> dict[s
 
     outputs_dir = settings.paths.outputs_dir
     outputs_dir.mkdir(parents=True, exist_ok=True)
-    with _connect(db_path) as conn:
+    with _open_connection(db_path) as conn:
         if scoped_owner:
             rows = conn.execute(
                 "SELECT id, output_path FROM images WHERE owner_id = ?",
@@ -623,7 +634,7 @@ def delete_image(settings: AppSettings, filename: str, owner_id: str | None = No
     remaining_rows = 0
     scoped_owner = normalize_owner_id(owner_id) if owner_id else None
 
-    with _connect(db_path) as conn:
+    with _open_connection(db_path) as conn:
         if scoped_owner:
             row = conn.execute(
                 "SELECT id, output_path FROM images WHERE owner_id = ? AND filename = ?",
