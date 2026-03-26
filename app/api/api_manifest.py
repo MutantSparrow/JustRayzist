@@ -212,15 +212,15 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ),
     ApiExample(
         method="GET",
-        path="/images?prompt=skyline&color=blue&limit=50&offset=0&newest_first=true",
-        description="List images for the current client scope, with optional prompt and color filtering.",
+        path="/images?prompt=skyline&color=blue&favorite=true&limit=50&offset=0&newest_first=true",
+        description="List images for the current client scope, with optional prompt, color, and favorite filtering.",
         requires_client=True,
         request=None,
         response={
             "count": 1,
             "limit": 50,
             "offset": 0,
-            "items": [{"filename": "justrayzist_YYYYMMDD_hhmmss_000.png"}],
+            "items": [{"filename": "justrayzist_YYYYMMDD_hhmmss_000.png", "favorite": 1}],
             "color_cache": {
                 "active": False,
                 "version": "dominant_v6",
@@ -238,6 +238,20 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
         requires_client=True,
         request=None,
         response="PNG binary response",
+        include_in_readme=False,
+    ),
+    ApiExample(
+        method="POST",
+        path="/images/{filename}/favorite",
+        description="Set or clear the favorite flag for one client-scoped image.",
+        requires_client=True,
+        request={"favorite": True},
+        response={
+            "status": "ok",
+            "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+            "favorite": True,
+            "item": {"filename": "justrayzist_YYYYMMDD_hhmmss_000.png", "favorite": 1},
+        },
         include_in_readme=False,
     ),
     ApiExample(

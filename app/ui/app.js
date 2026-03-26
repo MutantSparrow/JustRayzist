@@ -16,6 +16,7 @@ const killServerButtonEl = document.getElementById("kill-server-button");
 const filterInputEl = document.getElementById("filter-input");
 const reverseOrderButtonEl = document.getElementById("reverse-order-button");
 const galleryColorFiltersEl = document.getElementById("gallery-color-filters");
+const galleryFavoriteFilterButtonEl = document.getElementById("gallery-favorite-filter");
 const galleryDensitySliderEl = document.getElementById("gallery-density-slider");
 const multiSelectToggleEl = document.getElementById("multi-select-toggle");
 const multiSelectActionsEl = document.getElementById("multi-select-actions");
@@ -32,10 +33,13 @@ const viewerMetaEl = document.getElementById("viewer-meta");
 const viewerImageEl = document.getElementById("viewer-image");
 const viewerDownloadEl = document.getElementById("viewer-download");
 const viewerStageEl = document.getElementById("viewer-stage");
+const viewerStageFxEl = document.getElementById("viewer-stage-fx");
+const viewerStageFxLabelEl = document.getElementById("viewer-stage-fx-label");
 const viewerCloseButtonEl = document.getElementById("viewer-close-button");
 const viewerUsePromptButtonEl = document.getElementById("viewer-use-prompt-button");
 const viewerCopyPromptButtonEl = document.getElementById("viewer-copy-prompt-button");
 const viewerUpscaleButtonEl = document.getElementById("viewer-upscale-button");
+const viewerFavoriteButtonEl = document.getElementById("viewer-favorite-button");
 const viewerPrevButtonEl = document.getElementById("viewer-prev-button");
 const viewerNextButtonEl = document.getElementById("viewer-next-button");
 const zoomLabelEl = document.getElementById("zoom-label");
@@ -66,6 +70,7 @@ const requiredUi = [
   ["filter-input", filterInputEl],
   ["reverse-order-button", reverseOrderButtonEl],
   ["gallery-color-filters", galleryColorFiltersEl],
+  ["gallery-favorite-filter", galleryFavoriteFilterButtonEl],
   ["gallery-density-slider", galleryDensitySliderEl],
   ["multi-select-toggle", multiSelectToggleEl],
   ["multi-select-actions", multiSelectActionsEl],
@@ -82,10 +87,13 @@ const requiredUi = [
   ["viewer-image", viewerImageEl],
   ["viewer-download", viewerDownloadEl],
   ["viewer-stage", viewerStageEl],
+  ["viewer-stage-fx", viewerStageFxEl],
+  ["viewer-stage-fx-label", viewerStageFxLabelEl],
   ["viewer-close-button", viewerCloseButtonEl],
   ["viewer-use-prompt-button", viewerUsePromptButtonEl],
   ["viewer-copy-prompt-button", viewerCopyPromptButtonEl],
   ["viewer-upscale-button", viewerUpscaleButtonEl],
+  ["viewer-favorite-button", viewerFavoriteButtonEl],
   ["viewer-prev-button", viewerPrevButtonEl],
   ["viewer-next-button", viewerNextButtonEl],
   ["zoom-label", zoomLabelEl],
@@ -111,6 +119,10 @@ const CLIENT_QUEUE_STORAGE_VERSION = 2;
 const GALLERY_COLOR_FILTERS = ["black", "white", "red", "yellow", "blue", "green"];
 const GALLERY_COLOR_CACHE_STATUS_MESSAGE = "Updating gallery color cache...";
 const GALLERY_COLOR_CACHE_POLL_INTERVAL_MS = 2500;
+const GALLERY_SOFT_REMOVAL_DURATION_MS = 240;
+const TILE_ACTION_FX_DURATION_MS = 190;
+const PENDING_UPSCALE_ENTRY_FX_DURATION_MS = 220;
+const VIEWER_STAGE_FX_DURATION_MS = 210;
 
 function createClientId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -156,6 +168,7 @@ const state = {
   currentSeed: null,
   newestFirst: true,
   activeColorFilter: null,
+  favoritesOnly: false,
   filterTimer: null,
   maxQueuedGenerations: 5,
   queue: [],
@@ -187,6 +200,14 @@ const state = {
   clientJobPollTimer: null,
   galleryColorCacheActive: false,
   galleryColorCachePollTimer: null,
+  favoriteToneByFilename: new Map(),
+  lastGalleryQueryState: null,
+  galleryRenderRevision: 0,
+  gallerySoftRemovalBatches: new Map(),
+  pendingUpscaleFxIds: new Set(),
+  viewerStageFxTimer: null,
+  viewerStageFxResolve: null,
+  notificationPermissionRequested: false,
 };
 
 function randomSeed() {
@@ -210,6 +231,150 @@ function updateTopbarOffset() {
 function setStatus(message, isError = false) {
   statusLineEl.textContent = String(message || "");
   statusLineEl.classList.toggle("error", Boolean(isError));
+}
+
+function supportsBrowserNotifications() {
+  return typeof window !== "undefined" && "Notification" in window && window.isSecureContext !== false;
+}
+
+function requestCompletionNotificationPermission() {
+  if (!supportsBrowserNotifications()) return;
+  if (state.notificationPermissionRequested) return;
+  if (Notification.permission !== "default") return;
+  state.notificationPermissionRequested = true;
+  Promise.resolve(Notification.requestPermission()).catch(() => {
+  });
+}
+
+function showGenerationCompletionNotification(job, payload) {
+  if (!supportsBrowserNotifications()) return false;
+  if (Notification.permission !== "granted") return false;
+  if (!job || job.kind !== "generate") return false;
+
+  const filename = String(payload?.filename || "").trim();
+  const seed = payload?.seed ?? job.seed ?? null;
+  const duration = Number(payload?.duration_ms);
+  const title = payload?.prompt_enhanced ? "Prompt Enhanced" : "Generation Done";
+  const details = [];
+  if (filename) {
+    details.push(filename);
+  } else {
+    details.push("Image saved");
+  }
+  if (Number.isFinite(duration) && duration > 0) {
+    details.push(`${duration} ms`);
+  }
+  if (seed !== null && seed !== undefined && seed !== "") {
+    details.push(`seed ${seed}`);
+  }
+  const body = details.join(" | ");
+  const promptSnippet = String(job.prompt || "").trim();
+  const imageUrl = filename ? new URL(buildImageUrl(filename), window.location.origin).toString() : undefined;
+  const notification = new Notification(title, {
+    body: promptSnippet ? `${body}\n${shortPrompt(promptSnippet, 96)}` : body,
+    icon: new URL("/img/favicon.ico", window.location.origin).toString(),
+    image: imageUrl,
+    tag: filename ? `generation:${filename}` : `generation:${job.placeholderId}`,
+  });
+  notification.onclick = () => {
+    try {
+      window.focus();
+    } catch (_) {
+    }
+    notification.close();
+  };
+  window.setTimeout(() => notification.close(), 10000);
+  return true;
+}
+
+function getTileActionFxClassName(kind) {
+  if (kind === "delete") return "fx-delete";
+  if (kind === "upscale-source") return "fx-upscale-source";
+  if (kind === "pending-upscale-enter") return "pending-upscale-enter";
+  return "";
+}
+
+function clearTileActionFx(tile, options = {}) {
+  if (!(tile instanceof HTMLElement)) return;
+  const onlyKind = String(options.onlyKind || "").trim();
+  const activeKind = String(tile._tileActionFxKind || "");
+  if (onlyKind && activeKind !== onlyKind) {
+    return;
+  }
+  if (tile._tileActionFxTimer !== null && tile._tileActionFxTimer !== undefined) {
+    window.clearTimeout(tile._tileActionFxTimer);
+  }
+  tile._tileActionFxTimer = null;
+  tile._tileActionFxKind = "";
+  tile.classList.remove("fx-delete", "fx-upscale-source", "pending-upscale-enter");
+}
+
+function playTileActionFxOnTile(tile, kind, options = {}) {
+  const className = getTileActionFxClassName(kind);
+  if (!(tile instanceof HTMLElement) || !className) return false;
+  const duration = Math.max(
+    1,
+    Number(
+      options.duration ??
+        (kind === "pending-upscale-enter"
+          ? PENDING_UPSCALE_ENTRY_FX_DURATION_MS
+          : TILE_ACTION_FX_DURATION_MS),
+    ) || TILE_ACTION_FX_DURATION_MS,
+  );
+  clearTileActionFx(tile);
+  void tile.offsetWidth;
+  tile._tileActionFxKind = kind;
+  tile.classList.add(className);
+  const timeoutId = window.setTimeout(() => {
+    if (tile._tileActionFxTimer !== timeoutId) return;
+    clearTileActionFx(tile);
+  }, duration);
+  tile._tileActionFxTimer = timeoutId;
+  return true;
+}
+
+function playTileActionFx(filename, kind, options = {}) {
+  return playTileActionFxOnTile(getGalleryTileByFilename(filename), kind, options);
+}
+
+function consumePendingUpscaleEntryFx(placeholderId) {
+  const target = String(placeholderId || "").trim();
+  if (!target || !state.pendingUpscaleFxIds.has(target)) return false;
+  state.pendingUpscaleFxIds.delete(target);
+  return true;
+}
+
+function clearViewerActionFx(options = {}) {
+  const resolvePending = options.resolvePending !== false;
+  if (state.viewerStageFxTimer !== null) {
+    window.clearTimeout(state.viewerStageFxTimer);
+    state.viewerStageFxTimer = null;
+  }
+  const resolve = state.viewerStageFxResolve;
+  state.viewerStageFxResolve = null;
+  viewerStageFxEl.classList.remove("active", "fx-delete", "fx-upscale");
+  viewerStageFxLabelEl.textContent = "";
+  if (resolvePending && typeof resolve === "function") {
+    resolve();
+  }
+}
+
+function playViewerActionFx(kind) {
+  if (viewerModalEl.classList.contains("hidden")) {
+    return Promise.resolve(false);
+  }
+  clearViewerActionFx();
+  const fxKind = kind === "delete" ? "delete" : "upscale";
+  viewerStageFxLabelEl.textContent = fxKind === "delete" ? "DEL" : "2x";
+  viewerStageFxEl.classList.add(fxKind === "delete" ? "fx-delete" : "fx-upscale");
+  void viewerStageFxEl.offsetWidth;
+  viewerStageFxEl.classList.add("active");
+  return new Promise((resolve) => {
+    state.viewerStageFxResolve = () => resolve(true);
+    state.viewerStageFxTimer = window.setTimeout(() => {
+      clearViewerActionFx();
+    }, VIEWER_STAGE_FX_DURATION_MS);
+  });
 }
 
 function clearGalleryColorCachePoll() {
@@ -369,6 +534,98 @@ function formatGalleryTimestamp(raw) {
   if (dayDiff === 0) return `Today ${timeLabel}`;
   if (dayDiff === 1) return `Yesterday ${timeLabel}`;
   return parsed.toLocaleString();
+}
+
+function isFavoriteItem(item) {
+  return Boolean(Number(item?.favorite) || 0);
+}
+
+function buildGalleryQueryState() {
+  return {
+    prompt: String(filterInputEl.value || "").trim(),
+    color: state.activeColorFilter || null,
+    favoritesOnly: Boolean(state.favoritesOnly),
+  };
+}
+
+function galleryQueryStatesEqual(left, right) {
+  if (!left || !right) return false;
+  return (
+    left.prompt === right.prompt &&
+    left.color === right.color &&
+    Boolean(left.favoritesOnly) === Boolean(right.favoritesOnly)
+  );
+}
+
+function resolveGalleryRefreshMotion(previousQueryState, nextQueryState, fallback = "default") {
+  if (!previousQueryState || galleryQueryStatesEqual(previousQueryState, nextQueryState)) {
+    return fallback;
+  }
+  return "filter-soft";
+}
+
+function classifyCornerTone(imageEl) {
+  if (!(imageEl instanceof HTMLImageElement)) return "dark";
+  if (!imageEl.complete || !imageEl.naturalWidth || !imageEl.naturalHeight) return "dark";
+  try {
+    const sourceWidth = imageEl.naturalWidth;
+    const sourceHeight = imageEl.naturalHeight;
+    const sampleWidth = Math.max(16, Math.floor(sourceWidth * 0.18));
+    const sampleHeight = Math.max(16, Math.floor(sourceHeight * 0.18));
+    const sx = Math.max(0, sourceWidth - sampleWidth);
+    const sy = 0;
+    const canvas = document.createElement("canvas");
+    canvas.width = 24;
+    canvas.height = 24;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return "dark";
+    context.drawImage(imageEl, sx, sy, sampleWidth, sampleHeight, 0, 0, 24, 24);
+    const { data } = context.getImageData(0, 0, 24, 24);
+    let luminanceTotal = 0;
+    let weightTotal = 0;
+    for (let index = 0; index < data.length; index += 4) {
+      const alpha = Number(data[index + 3] || 0) / 255;
+      if (alpha <= 0.08) continue;
+      const red = Number(data[index] || 0);
+      const green = Number(data[index + 1] || 0);
+      const blue = Number(data[index + 2] || 0);
+      const luminance = red * 0.2126 + green * 0.7152 + blue * 0.0722;
+      luminanceTotal += luminance * alpha;
+      weightTotal += alpha;
+    }
+    if (weightTotal <= 0) return "dark";
+    return luminanceTotal / weightTotal >= 168 ? "light" : "dark";
+  } catch (_) {
+    return "dark";
+  }
+}
+
+function getFavoriteToneForFilename(filename) {
+  const target = String(filename || "").trim();
+  if (!target) return null;
+  return state.favoriteToneByFilename.get(target) || null;
+}
+
+function setFavoriteToneForFilename(filename, tone) {
+  const target = String(filename || "").trim();
+  if (!target || (tone !== "light" && tone !== "dark")) return;
+  state.favoriteToneByFilename.set(target, tone);
+}
+
+function applyFavoriteToneClass(buttonEl, tone) {
+  if (!(buttonEl instanceof HTMLElement)) return;
+  if (tone !== "light" && tone !== "dark") return;
+  buttonEl.classList.toggle("tone-light", tone === "light");
+  buttonEl.classList.toggle("tone-dark", tone !== "light");
+}
+
+function applyFavoriteButtonTone(buttonEl, imageEl, filename) {
+  let tone = getFavoriteToneForFilename(filename);
+  if (!tone && imageEl instanceof HTMLImageElement && imageEl.complete && imageEl.naturalWidth > 0) {
+    tone = classifyCornerTone(imageEl);
+    setFavoriteToneForFilename(filename, tone);
+  }
+  applyFavoriteToneClass(buttonEl, tone || "dark");
 }
 
 function escapeHtml(value) {
@@ -565,7 +822,7 @@ function restoreClientQueueState() {
     const activeJobs = normalizedPendingJobs.filter((job) => isActiveJobStatus(job.status));
     state.activeJob = activeJobs.length > 0 ? activeJobs[0] : null;
     state.queue = normalizedPendingJobs
-      .filter((job) => job.status !== "generating")
+      .filter((job) => !isActiveJobStatus(job.status))
       .sort((left, right) => {
         const leftIndex = Number(left.queueIndex ?? Number.MAX_SAFE_INTEGER);
         const rightIndex = Number(right.queueIndex ?? Number.MAX_SAFE_INTEGER);
@@ -720,6 +977,26 @@ function getTileAspectRatio(tile) {
   return 1;
 }
 
+function countVisibleGalleryNodes() {
+  let count = 0;
+  const nodes = galleryEl.querySelectorAll("[data-gallery-key]");
+  for (const node of nodes) {
+    if (!node.classList.contains("removing")) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function hasPendingSoftRemovalTiles() {
+  for (const batch of state.gallerySoftRemovalBatches.values()) {
+    if (batch.tiles.size > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function applyMasonryLayout() {
   const nodes = [...galleryEl.querySelectorAll("[data-gallery-key]")].filter(
     (node) => !node.classList.contains("removing"),
@@ -758,6 +1035,42 @@ function applyMasonryLayout() {
 
 function applyGalleryLayout() {
   applyMasonryLayout();
+}
+
+function resolveGalleryRelayoutDecision(motion, previousCount, nextCount) {
+  const safePrevious = Math.max(0, Number(previousCount) || 0);
+  const safeNext = Math.max(0, Number(nextCount) || 0);
+  if (motion === "none") {
+    return { animateLayout: false, removalMode: "immediate", delayEmptyState: false };
+  }
+  if (motion === "filter-soft") {
+    return {
+      animateLayout: false,
+      removalMode: "batched-soft",
+      delayEmptyState: safeNext === 0,
+    };
+  }
+  if (motion === "adaptive") {
+    const largestCount = Math.max(safePrevious, safeNext);
+    const delta = Math.abs(safePrevious - safeNext);
+    const animate = largestCount <= 48 && delta <= 12;
+    return {
+      animateLayout: animate,
+      removalMode: animate ? "legacy" : "immediate",
+      delayEmptyState: false,
+    };
+  }
+  return { animateLayout: true, removalMode: "legacy", delayEmptyState: false };
+}
+
+function syncGalleryEmptyState(options = {}) {
+  const explicitVisibleCount = options.visibleCount;
+  const visibleCount =
+    explicitVisibleCount === undefined || explicitVisibleCount === null
+      ? countVisibleGalleryNodes()
+      : Math.max(0, Number(explicitVisibleCount) || 0);
+  const shouldDelay = Boolean(options.delayEmptyState) && visibleCount === 0 && hasPendingSoftRemovalTiles();
+  emptyStateEl.classList.toggle("hidden", visibleCount > 0 || shouldDelay);
 }
 
 function scheduleGalleryRelayout({ animate = false } = {}) {
@@ -820,18 +1133,89 @@ function finalizeEnteringTile(tile) {
 }
 
 function cancelScheduledTileRemoval(tile) {
-  const handle = tile?._galleryRemovalHandle;
-  if (!handle) return;
-  handle.cancelled = true;
-  if (handle.timeoutId !== null) {
-    window.clearTimeout(handle.timeoutId);
+  if (!tile) return;
+  let shouldSyncEmptyState = false;
+  const softBatch = tile?._gallerySoftRemovalBatch || null;
+  if (softBatch) {
+    softBatch.tiles.delete(tile);
+    if (softBatch.timeoutId !== null && softBatch.tiles.size === 0) {
+      window.clearTimeout(softBatch.timeoutId);
+      softBatch.timeoutId = null;
+      state.gallerySoftRemovalBatches.delete(softBatch.revision);
+      shouldSyncEmptyState = true;
+    }
+    tile._gallerySoftRemovalBatch = null;
   }
-  tile._galleryRemovalHandle = null;
+  const handle = tile?._galleryRemovalHandle;
+  if (handle) {
+    handle.cancelled = true;
+    if (handle.timeoutId !== null) {
+      window.clearTimeout(handle.timeoutId);
+    }
+    tile._galleryRemovalHandle = null;
+  }
   tile.classList.remove("removing");
+  if (shouldSyncEmptyState) {
+    syncGalleryEmptyState();
+  }
+}
+
+function getGallerySoftRemovalBatch(revision) {
+  let batch = state.gallerySoftRemovalBatches.get(revision) || null;
+  if (batch) {
+    return batch;
+  }
+  batch = {
+    revision,
+    tiles: new Set(),
+    timeoutId: null,
+  };
+  state.gallerySoftRemovalBatches.set(revision, batch);
+  return batch;
+}
+
+function finalizeGallerySoftRemovalBatch(batch) {
+  if (!batch) return;
+  if (batch.timeoutId !== null) {
+    window.clearTimeout(batch.timeoutId);
+    batch.timeoutId = null;
+  }
+  state.gallerySoftRemovalBatches.delete(batch.revision);
+  for (const tile of [...batch.tiles]) {
+    batch.tiles.delete(tile);
+    if (tile._gallerySoftRemovalBatch !== batch) {
+      continue;
+    }
+    tile._gallerySoftRemovalBatch = null;
+    if (tile.parentElement === galleryEl) {
+      tile.remove();
+    }
+  }
+  syncGalleryEmptyState();
+}
+
+function scheduleSoftTileRemoval(tile, revision) {
+  if (!tile) return;
+  if (tile.classList.contains("removing")) {
+    cancelScheduledTileRemoval(tile);
+  }
+  tile.classList.add("removing");
+  const batch = getGallerySoftRemovalBatch(revision);
+  batch.tiles.add(tile);
+  tile._gallerySoftRemovalBatch = batch;
+  if (batch.timeoutId !== null) {
+    window.clearTimeout(batch.timeoutId);
+  }
+  batch.timeoutId = window.setTimeout(() => {
+    finalizeGallerySoftRemovalBatch(batch);
+  }, GALLERY_SOFT_REMOVAL_DURATION_MS);
 }
 
 function scheduleTileRemoval(tile) {
-  if (!tile || tile.classList.contains("removing")) return;
+  if (!tile) return;
+  if (tile.classList.contains("removing")) {
+    cancelScheduledTileRemoval(tile);
+  }
   tile.classList.add("removing");
   const handle = { cancelled: false, timeoutId: null };
   tile._galleryRemovalHandle = handle;
@@ -850,6 +1234,14 @@ function scheduleTileRemoval(tile) {
   };
   tile.addEventListener("transitionend", cleanup, { once: true });
   handle.timeoutId = window.setTimeout(cleanup, 240);
+}
+
+function removeTileImmediately(tile) {
+  if (!tile) return;
+  cancelScheduledTileRemoval(tile);
+  if (tile.parentElement === galleryEl) {
+    tile.remove();
+  }
 }
 
 function showZipProgressModal() {
@@ -1016,12 +1408,24 @@ function updateColorSwatches() {
   }
 }
 
+function updateFavoriteFilterButton() {
+  const active = state.favoritesOnly;
+  galleryFavoriteFilterButtonEl.classList.toggle("active", active);
+  galleryFavoriteFilterButtonEl.setAttribute("aria-pressed", String(active));
+}
+
 async function setActiveColorFilter(color) {
   const normalized = GALLERY_COLOR_FILTERS.includes(String(color || "").trim().toLowerCase())
     ? String(color || "").trim().toLowerCase()
     : null;
   state.activeColorFilter = state.activeColorFilter === normalized ? null : normalized;
   updateColorSwatches();
+  await loadImages();
+}
+
+async function toggleFavoriteFilter() {
+  state.favoritesOnly = !state.favoritesOnly;
+  updateFavoriteFilterButton();
   await loadImages();
 }
 
@@ -1111,6 +1515,7 @@ function beginViewerCompareHold() {
 
 function hideViewer() {
   endViewerCompareHold();
+  clearViewerActionFx();
   viewerModalEl.classList.add("hidden");
   viewerModalEl.setAttribute("aria-hidden", "true");
   state.viewerIndex = -1;
@@ -1131,8 +1536,14 @@ function updateViewerNavState() {
 function applyViewerItemMeta(item) {
   const resolution = item.width && item.height ? `${item.width}x${item.height}` : "unknown";
   const upscaled = isUpscaledItem(item);
+  const favorite = isFavoriteItem(item);
   viewerUpscaleButtonEl.classList.toggle("hidden", upscaled);
   viewerUpscaleButtonEl.disabled = upscaled;
+  viewerFavoriteButtonEl.classList.remove("tone-light", "tone-dark");
+  viewerFavoriteButtonEl.classList.toggle("active", favorite);
+  viewerFavoriteButtonEl.setAttribute("aria-pressed", String(favorite));
+  viewerFavoriteButtonEl.setAttribute("aria-label", favorite ? "Unfavorite image" : "Favorite image");
+  viewerFavoriteButtonEl.title = favorite ? "Unfavorite" : "Favorite";
   if (upscaled) {
     const sourceFilename = resolveSourceFilename(item);
     const compareAvailable = Boolean(sourceFilename);
@@ -1154,7 +1565,7 @@ function applyViewerItemMeta(item) {
     const promptTitle = state.viewerPromptExpanded ? "Click to collapse prompt" : "Click to expand prompt";
     viewerMetaEl.classList.toggle("expanded", state.viewerPromptExpanded);
     viewerMetaEl.innerHTML = [
-      `<span>${escapeHtml(formatTimestamp(timestamp))}</span>`,
+      `<span class="viewer-meta-timestamp">${escapeHtml(formatTimestamp(timestamp))}</span>`,
       '<span class="viewer-meta-sep">|</span>',
       `<button type="button" class="viewer-meta-prompt${state.viewerPromptExpanded ? " expanded" : ""}" title="${promptTitle}">${escapeHtml(promptDisplay)}</button>`,
       '<span class="viewer-meta-sep">|</span>',
@@ -1171,6 +1582,7 @@ function showViewer(item, index = -1) {
   if (index < 0) {
     index = state.galleryItems.findIndex((candidate) => candidate.filename === item.filename);
   }
+  clearViewerActionFx();
   state.viewerIndex = index;
   state.viewerCompareHolding = false;
   state.viewerCompareSourceFilename = null;
@@ -1221,6 +1633,107 @@ function syncViewerWithGallery() {
   updateViewerNavState();
 }
 
+function applyPromptFromItem(item, options = {}) {
+  if (!item) return false;
+  promptInputEl.value = String(item.prompt || "");
+  updateTopbarOffset();
+  if (options.closeViewer) {
+    hideViewer();
+  }
+  promptInputEl.focus();
+  setStatus("Loaded prompt into top bar.");
+  return true;
+}
+
+function getGalleryTileByFilename(filename) {
+  const target = String(filename || "").trim();
+  if (!target) return null;
+  return [...galleryEl.querySelectorAll("[data-gallery-key]")].find(
+    (node) => node.dataset.galleryKey === galleryKeyForImage({ filename: target })
+  ) || null;
+}
+
+function refreshGalleryItemUi(filename) {
+  const item = getGalleryImageItem(filename);
+  if (!item) return false;
+  const tile = getGalleryTileByFilename(filename);
+  if (tile) {
+    updateImageTile(tile, item);
+  }
+  if (state.viewerFilename === filename) {
+    applyViewerItemMeta(item);
+  }
+  syncSelectedFilenames();
+  updateMultiSelectControls();
+  updateGalleryCount(state.galleryItems.length);
+  return true;
+}
+
+function updateGalleryItemFavoriteState(filename, favorite, options = {}) {
+  const target = String(filename || "").trim();
+  if (!target) return { updatedItem: null, structuralChange: false };
+  const structuralChange = Boolean(options.forceRender) || (state.favoritesOnly && !favorite);
+  let updatedItem = null;
+  if (structuralChange) {
+    state.galleryItems = state.galleryItems.filter((item) => item.filename !== target);
+  } else {
+    state.galleryItems = state.galleryItems.map((item) => {
+      if (item.filename !== target) {
+        return item;
+      }
+      updatedItem = { ...item, favorite: favorite ? 1 : 0 };
+      return updatedItem;
+    });
+  }
+  if (structuralChange) {
+    renderGallery({ motion: options.motion || "none" });
+    syncViewerWithGallery();
+    return { updatedItem: null, structuralChange: true };
+  }
+  refreshGalleryItemUi(target);
+  return { updatedItem, structuralChange: false };
+}
+
+async function setImageFavorite(filename, favorite) {
+  const target = String(filename || "").trim();
+  if (!target) return null;
+  const previousItems = state.galleryItems;
+  const nextFavorite = Boolean(favorite);
+  const optimisticMotion = state.favoritesOnly && !nextFavorite ? "filter-soft" : "none";
+  const optimisticResult = updateGalleryItemFavoriteState(target, nextFavorite, { motion: optimisticMotion });
+  const response = await apiFetch(`/images/${encodeURIComponent(target)}/favorite`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ favorite: nextFavorite }),
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_) {
+    payload = null;
+  }
+  if (!response.ok) {
+    state.galleryItems = previousItems;
+    renderGallery({ motion: "none" });
+    syncViewerWithGallery();
+    throw new Error(formatApiError(payload, "Failed to update favorite."));
+  }
+  const confirmedFavorite = Boolean(payload?.favorite);
+  if (confirmedFavorite !== nextFavorite) {
+    updateGalleryItemFavoriteState(target, confirmedFavorite, {
+      motion: optimisticResult.structuralChange ? "filter-soft" : "default",
+    });
+  }
+  setStatus(confirmedFavorite ? `Favorited ${target}.` : `Removed ${target} from favorites.`);
+  return payload?.item || null;
+}
+
+async function toggleImageFavoriteByFilename(filename) {
+  const item = getGalleryImageItem(filename) || (state.viewerFilename === filename ? getActiveViewerItem() : null);
+  if (!item) return null;
+  return setImageFavorite(item.filename, !isFavoriteItem(item));
+}
+
 async function copyTextToClipboard(text) {
   const value = String(text || "");
   if (!value) return false;
@@ -1252,11 +1765,7 @@ async function copyTextToClipboard(text) {
 function onViewerUsePrompt() {
   const item = getActiveViewerItem();
   if (!item) return;
-  promptInputEl.value = String(item.prompt || "");
-  updateTopbarOffset();
-  hideViewer();
-  promptInputEl.focus();
-  setStatus("Loaded prompt into top bar.");
+  applyPromptFromItem(item, { closeViewer: true });
 }
 
 async function onViewerCopyPrompt() {
@@ -1273,7 +1782,15 @@ async function onViewerCopyPrompt() {
 function onViewerUpscale() {
   const item = getActiveViewerItem();
   if (!item) return;
-  enqueueUpscaleFromItem(item);
+  if (enqueueUpscaleFromItem(item)) {
+    playViewerActionFx("upscale");
+  }
+}
+
+function onViewerFavoriteToggle() {
+  const item = getActiveViewerItem();
+  if (!item) return;
+  toggleImageFavoriteByFilename(item.filename).catch((error) => setStatus(String(error?.message || error), true));
 }
 
 function showConfirmModal(message, onConfirm, confirmLabel = "Confirm", cancelLabel = "Cancel") {
@@ -1297,6 +1814,7 @@ function removeQueuedJob(placeholderId) {
   if (!target) return false;
   const previousLength = state.queue.length;
   state.queue = state.queue.filter((job) => job.placeholderId !== target);
+  state.pendingUpscaleFxIds.delete(target);
   if (state.queue.length === previousLength) {
     return false;
   }
@@ -1416,6 +1934,7 @@ function updatePendingTile(tile, job) {
   tile.dataset.aspectWidth = String(Math.max(1, Number(job.width) || 1));
   tile.dataset.aspectHeight = String(Math.max(1, Number(job.height) || 1));
   tile.classList.add("pending");
+  tile.classList.toggle("upscale-job", job.kind === "upscale");
   tile.classList.toggle("generating", isActiveJobStatus(job.status));
   tile.classList.toggle("queued", !isActiveJobStatus(job.status));
   tile.classList.toggle("cancelling", job.status === "cancelling");
@@ -1457,6 +1976,11 @@ function createImageTile(item) {
 
   const image = document.createElement("img");
   image.loading = "lazy";
+  image.addEventListener("load", () => {
+    const filename = tile.dataset.filename || "";
+    const favoriteButton = tile.querySelector(".tile-favorite-button");
+    applyFavoriteButtonTone(favoriteButton, image, filename);
+  });
   image.addEventListener("error", () => {
     tile.remove();
     dropMissingGalleryItem(tile.dataset.filename || "");
@@ -1477,7 +2001,19 @@ function createImageTile(item) {
   const selectBadge = document.createElement("span");
   selectBadge.className = "tile-badge tile-select-badge";
   selectBadge.setAttribute("aria-hidden", "true");
-  badges.append(selectBadge);
+  const cornerActions = document.createElement("div");
+  cornerActions.className = "tile-corner-actions";
+  const favoriteButton = document.createElement("button");
+  favoriteButton.className = "tile-favorite-button";
+  favoriteButton.type = "button";
+  favoriteButton.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35 10.55 20C5.4 15.24 2 12.09 2 8.25 2 5.3 4.3 3 7.25 3c1.67 0 3.27.77 4.3 1.98A5.71 5.71 0 0 1 15.85 3C18.8 3 21.1 5.3 21.1 8.25c0 3.84-3.4 6.99-8.55 11.76L12 21.35Z"/></svg>';
+  favoriteButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const filename = tile.dataset.filename || "";
+    toggleImageFavoriteByFilename(filename).catch((error) => setStatus(String(error?.message || error), true));
+  });
+  cornerActions.append(favoriteButton, selectBadge);
 
   const meta = document.createElement("div");
   meta.className = "tile-meta";
@@ -1491,22 +2027,8 @@ function createImageTile(item) {
   download.className = "tile-download";
   download.textContent = "Download";
   download.addEventListener("click", (event) => event.stopPropagation());
-
-  const del = document.createElement("button");
-  del.className = "tile-delete";
-  del.type = "button";
-  del.title = "Delete image";
-  del.innerHTML =
-    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 7h2v8h-2v-8zm4 0h2v8h-2v-8zM7 10h2v8H7v-8z"/></svg>';
-  del.addEventListener("click", (event) => {
-    event.stopPropagation();
-    const filename = tile.dataset.filename || "";
-    showConfirmModal(`Delete "${filename}"? This cannot be undone.`, async () => {
-      await deleteImage(filename);
-    }, "Delete");
-  });
-
   primaryActions.append(download);
+
   const upscale = document.createElement("button");
   upscale.className = "tile-upscale";
   upscale.type = "button";
@@ -1519,9 +2041,36 @@ function createImageTile(item) {
     }
   });
   primaryActions.append(upscale);
+
+  const usePrompt = document.createElement("button");
+  usePrompt.className = "tile-use-prompt";
+  usePrompt.type = "button";
+  usePrompt.textContent = "Use Prompt";
+  usePrompt.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const liveItem = getGalleryImageItem(tile.dataset.filename);
+    if (liveItem) {
+      applyPromptFromItem(liveItem);
+    }
+  });
+  primaryActions.append(usePrompt);
+
+  const del = document.createElement("button");
+  del.className = "tile-delete tile-delete-text";
+  del.type = "button";
+  del.title = "Delete image";
+  del.textContent = "Delete";
+  del.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const filename = tile.dataset.filename || "";
+    showConfirmModal(`Delete "${filename}"? This cannot be undone.`, async () => {
+      await deleteImage(filename);
+    }, "Delete");
+  });
+
   actions.append(primaryActions, del);
   overlay.append(meta, actions);
-  tile.append(image, badges, overlay);
+  tile.append(image, badges, cornerActions, overlay);
   tile.addEventListener("click", () => {
     const filename = tile.dataset.filename || "";
     if (state.multiSelectMode) {
@@ -1541,6 +2090,7 @@ function createImageTile(item) {
 
 function updateImageTile(tile, item) {
   cancelScheduledTileRemoval(tile);
+  clearTileActionFx(tile, { onlyKind: "delete" });
   const upscaled = isUpscaledItem(item);
   const selected = state.selectedFilenames.has(item.filename);
   const aspectWidth = Math.max(1, Number(item.width) || 1);
@@ -1562,10 +2112,9 @@ function updateImageTile(tile, item) {
   }
 
   const timestamp = item.timestamp || item.created_at;
-  const resolution = item.width && item.height ? `${item.width}x${item.height}` : "unknown";
   const meta = tile.querySelector(".tile-meta");
   if (meta) {
-    meta.textContent = `${formatGalleryTimestamp(timestamp)} | ${shortPrompt(item.prompt, 60)} | ${resolution}`;
+    meta.textContent = formatGalleryTimestamp(timestamp);
   }
 
   const upscaleBadge = tile.querySelector(".tile-badge-upscaled");
@@ -1577,6 +2126,16 @@ function updateImageTile(tile, item) {
   if (selectBadge) {
     selectBadge.textContent = selected ? "✓" : "";
     selectBadge.style.display = state.multiSelectMode ? "" : "none";
+  }
+
+  const favoriteButton = tile.querySelector(".tile-favorite-button");
+  if (favoriteButton instanceof HTMLButtonElement) {
+    const favorite = isFavoriteItem(item);
+    favoriteButton.classList.toggle("active", favorite);
+    favoriteButton.setAttribute("aria-pressed", String(favorite));
+    favoriteButton.setAttribute("aria-label", favorite ? `Unfavorite ${item.filename}` : `Favorite ${item.filename}`);
+    favoriteButton.title = favorite ? "Unfavorite" : "Favorite";
+    applyFavoriteButtonTone(favoriteButton, image, item.filename);
   }
 
   const download = tile.querySelector(".tile-download");
@@ -1623,25 +2182,43 @@ function buildDesiredGalleryEntries() {
   return desired;
 }
 
-function renderGallery() {
+function renderGallery(options = {}) {
+  const motion = options.motion || "default";
+  const renderRevision = ++state.galleryRenderRevision;
   syncSelectedFilenames();
   updateMultiSelectControls();
   updateGalleryCount(state.galleryItems.length);
   const desiredEntries = buildDesiredGalleryEntries();
+  const existingMap = getGalleryNodeMap();
+  const relayoutDecision = resolveGalleryRelayoutDecision(
+    motion,
+    countVisibleGalleryNodes(),
+    desiredEntries.length
+  );
   const hasContent = desiredEntries.length > 0;
-  emptyStateEl.classList.toggle("hidden", hasContent);
   if (!hasContent) {
-    galleryEl.style.height = "";
     for (const tile of galleryEl.querySelectorAll("[data-gallery-key]")) {
-      scheduleTileRemoval(tile);
+      if (relayoutDecision.removalMode === "legacy") {
+        scheduleTileRemoval(tile);
+      } else if (relayoutDecision.removalMode === "batched-soft") {
+        scheduleSoftTileRemoval(tile, renderRevision);
+      } else {
+        removeTileImmediately(tile);
+      }
     }
+    if (relayoutDecision.removalMode === "batched-soft") {
+      scheduleGalleryRelayout({ animate: false });
+    } else {
+      galleryEl.style.height = "";
+    }
+    syncGalleryEmptyState({ visibleCount: 0, delayEmptyState: relayoutDecision.delayEmptyState });
     return;
   }
-
-  const existingMap = getGalleryNodeMap();
   for (const entry of desiredEntries) {
     let tile = existingMap.get(entry.key) || null;
+    let created = false;
     if (!tile) {
+      created = true;
       tile = entry.kind === "pending" ? createPendingTile(entry.value) : createImageTile(entry.value);
     } else if (entry.kind === "pending") {
       updatePendingTile(tile, entry.value);
@@ -1649,14 +2226,31 @@ function renderGallery() {
       updateImageTile(tile, entry.value);
     }
     galleryEl.append(tile);
+    if (
+      created &&
+      entry.kind === "pending" &&
+      entry.value?.kind === "upscale" &&
+      consumePendingUpscaleEntryFx(entry.value.placeholderId)
+    ) {
+      playTileActionFxOnTile(tile, "pending-upscale-enter", {
+        duration: PENDING_UPSCALE_ENTRY_FX_DURATION_MS,
+      });
+    }
     existingMap.delete(entry.key);
   }
 
   for (const tile of existingMap.values()) {
-    scheduleTileRemoval(tile);
+    if (relayoutDecision.removalMode === "legacy") {
+      scheduleTileRemoval(tile);
+    } else if (relayoutDecision.removalMode === "batched-soft") {
+      scheduleSoftTileRemoval(tile, renderRevision);
+    } else {
+      removeTileImmediately(tile);
+    }
   }
 
-  scheduleGalleryRelayout({ animate: true });
+  scheduleGalleryRelayout({ animate: relayoutDecision.animateLayout });
+  syncGalleryEmptyState({ visibleCount: desiredEntries.length, delayEmptyState: relayoutDecision.delayEmptyState });
 }
 
 function updateGalleryCount(imageCount = state.galleryItems.length) {
@@ -1718,18 +2312,27 @@ function updateGenerateButtonState() {
   generateButtonEl.title = label;
 }
 
-async function loadImages() {
+async function loadImages(options = {}) {
   const requestSeq = ++state.galleryLoadRequestSeq;
   const query = new URLSearchParams();
+  const nextQueryState = buildGalleryQueryState();
+  const renderMotion = resolveGalleryRefreshMotion(
+    state.lastGalleryQueryState,
+    nextQueryState,
+    options.motion || "default"
+  );
   query.set("limit", "500");
   query.set("newest_first", "true");
 
-  const filterValue = String(filterInputEl.value || "").trim();
+  const filterValue = nextQueryState.prompt;
   if (filterValue) {
     query.set("prompt", filterValue);
   }
-  if (state.activeColorFilter) {
-    query.set("color", state.activeColorFilter);
+  if (nextQueryState.color) {
+    query.set("color", nextQueryState.color);
+  }
+  if (nextQueryState.favoritesOnly) {
+    query.set("favorite", "true");
   }
 
   const response = await apiFetch(`/images?${query.toString()}`, { cache: "no-store" });
@@ -1749,8 +2352,9 @@ async function loadImages() {
   state.galleryColorCacheActive = Boolean(payload?.color_cache?.active);
   scheduleGalleryColorCachePoll();
   state.galleryItems = sortItems(payload.items || []);
+  state.lastGalleryQueryState = nextQueryState;
   syncSelectedFilenames();
-  renderGallery();
+  renderGallery({ motion: renderMotion });
   syncViewerWithGallery();
   syncGalleryColorCacheStatusLine();
 }
@@ -1758,9 +2362,17 @@ async function loadImages() {
 async function deleteImage(filename, options = {}) {
   const skipReload = Boolean(options.skipReload);
   const suppressStatus = Boolean(options.suppressStatus);
+  const viewerFx = Boolean(options.viewerFx);
+  const triggerFx = options.triggerFx !== false;
   const existingItems = state.galleryItems;
   const hadItem = existingItems.some((item) => item.filename === filename);
+  if (viewerFx && triggerFx) {
+    await playViewerActionFx("delete");
+  }
   if (hadItem) {
+    if (triggerFx) {
+      playTileActionFx(filename, "delete");
+    }
     state.selectedFilenames.delete(filename);
     state.galleryItems = existingItems.filter((item) => item.filename !== filename);
     if (state.viewerFilename === filename) {
@@ -1899,6 +2511,7 @@ async function downloadSelectedImagesZip() {
 }
 
 function enqueueGenerationFromPrompt() {
+  requestCompletionNotificationPermission();
   const prompt = String(promptInputEl.value || "").trim();
   if (!prompt) {
     setStatus("Prompt is required.", true);
@@ -1978,8 +2591,10 @@ function enqueueUpscaleFromItem(item) {
   };
 
   state.queue.push(job);
+  state.pendingUpscaleFxIds.add(placeholderId);
   persistClientQueueState();
   renderGallery();
+  playTileActionFx(sourceFilename, "upscale-source");
   updateGenerateButtonState();
   const outstanding = totalOutstandingJobs();
   setStatus(`Queued upscale for ${sourceFilename} -> ${targetWidth}x${targetHeight}. Queue ${outstanding}/${state.maxQueuedGenerations}.`);
@@ -2059,6 +2674,7 @@ async function processGenerationQueue() {
         } else {
           setStatus(`Saved ${payload.filename} in ${payload.duration_ms} ms (seed ${payload.seed}).`);
         }
+        showGenerationCompletionNotification(job, payload);
         state.activeJob = null;
         persistClientQueueState();
         await loadImages();
@@ -2225,6 +2841,7 @@ async function bootstrap() {
     updateTopbarOffset();
     updateReverseButton();
     updateColorSwatches();
+    updateFavoriteFilterButton();
     applyOrientationButtonState();
     updateFreezeSeedButton();
     updateProceduralLatentControls();
@@ -2315,6 +2932,10 @@ reverseOrderButtonEl.addEventListener("click", () => {
 galleryColorFiltersEl.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof Element)) return;
+  if (target.closest("#gallery-favorite-filter")) {
+    toggleFavoriteFilter().catch((error) => setStatus(String(error?.message || error), true));
+    return;
+  }
   const button = target.closest("[data-color-filter]");
   if (!(button instanceof HTMLButtonElement)) return;
   setActiveColorFilter(button.dataset.colorFilter || null).catch((error) =>
@@ -2358,6 +2979,7 @@ viewerCopyPromptButtonEl.addEventListener("click", () => {
   onViewerCopyPrompt().catch((error) => setStatus(String(error?.message || error), true));
 });
 viewerUpscaleButtonEl.addEventListener("click", onViewerUpscale);
+viewerFavoriteButtonEl.addEventListener("click", onViewerFavoriteToggle);
 viewerPrevButtonEl.addEventListener("pointerdown", (event) => event.stopPropagation());
 viewerNextButtonEl.addEventListener("pointerdown", (event) => event.stopPropagation());
 viewerPrevButtonEl.addEventListener("click", (event) => {
@@ -2481,7 +3103,7 @@ document.addEventListener("keydown", (event) => {
     showConfirmModal(
       `Delete "${item.filename}"? This cannot be undone.`,
       async () => {
-        await deleteImage(item.filename);
+        await deleteImage(item.filename, { viewerFx: true });
       },
       "Yes",
       "No"

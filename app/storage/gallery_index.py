@@ -218,6 +218,7 @@ def _create_images_table(conn: sqlite3.Connection) -> None:
             source_width INTEGER,
             source_height INTEGER,
             color_flags INTEGER,
+            favorite INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         );
         """
@@ -226,6 +227,9 @@ def _create_images_table(conn: sqlite3.Connection) -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_images_owner_filename ON images(owner_id, filename);"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_images_owner_timestamp ON images(owner_id, timestamp DESC);")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_images_owner_favorite_timestamp ON images(owner_id, favorite, timestamp DESC);"
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_images_timestamp ON images(timestamp DESC);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_images_prompt ON images(prompt);")
 
@@ -409,6 +413,7 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
         "source_width": "INTEGER",
         "source_height": "INTEGER",
         "color_flags": "INTEGER",
+        "favorite": "INTEGER NOT NULL DEFAULT 0",
     }
     for name, sql_type in required_columns.items():
         if name in existing:
@@ -461,9 +466,9 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
             INSERT INTO images (
                 owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
                 width, height, model_pack, backend, device, steps, guidance_scale, duration_ms, mode,
-                source_image, source_filename, source_width, source_height, color_flags, created_at
+                source_image, source_filename, source_width, source_height, color_flags, favorite, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(owner_id, filename) DO UPDATE SET
                 output_path=excluded.output_path,
                 prompt=excluded.prompt,
@@ -483,7 +488,8 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 source_filename=excluded.source_filename,
                 source_width=excluded.source_width,
                 source_height=excluded.source_height,
-                color_flags=excluded.color_flags
+                color_flags=excluded.color_flags,
+                favorite=CASE WHEN images.favorite != 0 THEN images.favorite ELSE excluded.favorite END
             ;
             """,
             (
@@ -508,6 +514,7 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 _to_int(record.get("source_width")),
                 _to_int(record.get("source_height")),
                 _to_int(record.get("color_flags")),
+                1 if int(record.get("favorite") or 0) != 0 else 0,
                 str(record.get("created_at") or _utc_timestamp()),
             ),
         )
@@ -570,9 +577,9 @@ def _upsert_image(
         INSERT INTO images (
             owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
             width, height, model_pack, backend, device, steps, guidance_scale, duration_ms,
-            mode, source_image, source_filename, source_width, source_height, color_flags, created_at
+            mode, source_image, source_filename, source_width, source_height, color_flags, favorite, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(owner_id, filename) DO UPDATE SET
             output_path=excluded.output_path,
             prompt=excluded.prompt,
@@ -592,7 +599,8 @@ def _upsert_image(
             source_filename=excluded.source_filename,
             source_width=excluded.source_width,
             source_height=excluded.source_height,
-            color_flags=excluded.color_flags
+            color_flags=excluded.color_flags,
+            favorite=images.favorite
         ;
         """,
         (
@@ -617,6 +625,7 @@ def _upsert_image(
             _to_int(metadata.get("source_width")),
             _to_int(metadata.get("source_height")),
             color_flags,
+            0,
             created_at,
         ),
     )
@@ -728,6 +737,7 @@ def list_images(
     owner_id: str | None = None,
     prompt_query: str | None = None,
     color_filter: str | None = None,
+    favorites_only: bool = False,
     limit: int = 100,
     offset: int = 0,
     newest_first: bool = True,
@@ -754,6 +764,8 @@ def list_images(
         if color_flag is not None:
             clauses.append("(COALESCE(color_flags, 0) & ?) != 0")
             params.append(color_flag)
+        if favorites_only:
+            clauses.append("COALESCE(favorite, 0) = 1")
         where_clause = "WHERE " + " AND ".join(clauses) if clauses else ""
 
         rows = conn.execute(
@@ -794,6 +806,36 @@ def get_image(settings: AppSettings, filename: str, owner_id: str | None = None)
     if row is None:
         return None
     return _row_to_dict(row)
+
+
+def set_image_favorite(
+    settings: AppSettings,
+    filename: str,
+    favorite: bool,
+    owner_id: str | None = None,
+) -> dict[str, Any]:
+    db_path = ensure_gallery_schema(settings)
+    scoped_owner = normalize_owner_id(owner_id) if owner_id else None
+    favorite_value = 1 if favorite else 0
+    with _open_connection(db_path) as conn:
+        if scoped_owner:
+            row = conn.execute(
+                "SELECT id FROM images WHERE owner_id = ? AND filename = ?",
+                (scoped_owner, filename),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT id FROM images WHERE filename = ?", (filename,)).fetchone()
+        if row is None:
+            raise ValueError("Image not found.")
+        conn.execute(
+            "UPDATE images SET favorite = ? WHERE id = ?",
+            (favorite_value, int(row["id"])),
+        )
+        conn.commit()
+    updated = get_image(settings, filename, owner_id=scoped_owner)
+    if updated is None:
+        raise ValueError("Image not found.")
+    return updated
 
 
 def delete_gallery(settings: AppSettings, owner_id: str | None = None) -> dict[str, int]:

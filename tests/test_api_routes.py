@@ -280,6 +280,55 @@ def test_images_route_returns_service_items(monkeypatch) -> None:
     assert payload["color_cache"]["active"] is True
 
 
+def test_images_route_forwards_favorites_filter(monkeypatch) -> None:
+    def fake_list_images(**kwargs):
+        assert kwargs == {
+            "owner_id": "example-client",
+            "prompt_query": None,
+            "color_filter": None,
+            "limit": 120,
+            "offset": 0,
+            "newest_first": True,
+            "favorites_only": True,
+        }
+        return [{"filename": "favorite.png", "favorite": 1}]
+    monkeypatch.setattr(api_main.inference, "list_images", fake_list_images)
+    monkeypatch.setattr(api_main.inference, "gallery_color_cache_status", lambda: {"active": False})
+    client = TestClient(api_main.app)
+    response = client.get("/images?favorite=true", headers=CLIENT_HEADER)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert payload["items"][0]["filename"] == "favorite.png"
+
+
+def test_image_favorite_route_forwards_payload(monkeypatch) -> None:
+    def fake_set_image_favorite(**kwargs):
+        assert kwargs == {
+            "owner_id": "example-client",
+            "filename": "favorite.png",
+            "favorite": True,
+        }
+        return {
+            "filename": "favorite.png",
+            "favorite": 1,
+            "prompt": "alpha",
+        }
+    monkeypatch.setattr(api_main.inference, "set_image_favorite", fake_set_image_favorite)
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/images/favorite.png/favorite",
+        headers=CLIENT_HEADER,
+        json={"favorite": True},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["filename"] == "favorite.png"
+    assert payload["favorite"] is True
+    assert payload["item"]["favorite"] == 1
+
+
 def test_image_file_route_serves_png(monkeypatch, workspace_tmp_path: Path) -> None:
     temp_dir = workspace_tmp_path / "api-image"
     image_path = temp_dir / "served.png"

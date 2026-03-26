@@ -213,8 +213,9 @@ $headers = @{ "X-JustRayzist-Client" = "desktop-client" }
 - `POST /upscale`
 - `GET /client-jobs`
 - `POST /client-jobs/cancel`
-- `GET /images?prompt=skyline&color=blue&limit=50&offset=0&newest_first=true`
+- `GET /images?prompt=skyline&color=blue&favorite=true&limit=50&offset=0&newest_first=true`
 - `GET /images/{filename}?client_id=<client-id>`
+- `POST /images/{filename}/favorite`
 - `POST /images/download-zip`
 - `DELETE /images/{filename}?confirm=DELETE`
 - `DELETE /gallery?confirm=DELETE`
@@ -234,7 +235,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -263,7 +264,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.4.1",
+  "app_version": "1.4.2",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -451,9 +452,9 @@ Sample response:
 }
 ```
 
-### `GET /images?prompt=skyline&color=blue&limit=50&offset=0&newest_first=true`
+### `GET /images?prompt=skyline&color=blue&favorite=true&limit=50&offset=0&newest_first=true`
 
-List images for the current client scope, with optional prompt and color filtering.
+List images for the current client scope, with optional prompt, color, and favorite filtering.
 
 Requires `X-JustRayzist-Client`.
 
@@ -466,7 +467,8 @@ Sample response:
   "offset": 0,
   "items": [
     {
-      "filename": "justrayzist_YYYYMMDD_hhmmss_000.png"
+      "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+      "favorite": 1
     }
   ],
   "color_cache": {
@@ -489,6 +491,34 @@ Sample response:
 
 ```text
 PNG binary response
+```
+
+### `POST /images/{filename}/favorite`
+
+Set or clear the favorite flag for one client-scoped image.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "favorite": true
+}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+  "favorite": true,
+  "item": {
+    "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+    "favorite": 1
+  }
+}
 ```
 
 ### `POST /images/download-zip`

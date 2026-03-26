@@ -13,13 +13,13 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 <img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
 <img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
-## New in v1.4.1
+## New in v1.4.2
 
-- the web gallery has been rebuilt around a masonry layout, with queue recovery on refresh, queue cancel controls, color-swatch filtering, and clearer active/queued job states
-- setup and startup stay streamlined: automatic VRAM-aware resource tiering, pack choice only when more than one public enabled pack is installed, and FP8-full auto-selection on sub-13GB NVIDIA systems
+- the gallery now has persisted favorites with tile and fullscreen hearts, favorite-only filtering, and API/storage support for favorite mutation and listing
+- gallery interactions feel faster and cleaner, with optimistic favorite toggles, softer filter enter/exit motion, multiselect-safe overlays, and short delete/upscale action FX
+- browser notifications now fire when image generations finish, so long runs can complete in the background without babysitting the tab
 - real FP8 packs remain supported as normal user packs with BF16 compute plus FP8-at-rest preservation where safe; native FP8 inference is not implemented in this release
-- prompt enhancement is stronger and more style-faithful, long enhanced prompts are budget-fitted instead of blindly chopped, and the Euler scheduler path has been hardened against the earlier failure mode
-- the API and docs are broader and cleaner, with ZIP download, gallery import/delete, client job cancel, and `/API` examples generated from the live route manifest
+- the `/API` surface and generated docs now cover favorites end to end, with focused tests for the new filter/mutation path and queue restore hardening for restored active jobs
 
 ## Specs
 
@@ -230,7 +230,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -259,7 +259,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.4.1",
+  "app_version": "1.4.2",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -455,4 +455,6 @@ Default model assets are provided by the following model owners and repositories
 - imagepipeline (superresolution/x2 upscaler): https://huggingface.co/imagepipeline/superresolution
 
 Model weights remain under their respective upstream licenses and terms.
+
+
 

@@ -102,6 +102,10 @@ class CancelClientJobRequest(BaseModel):
     job_id: str | None = Field(default=None, max_length=255)
 
 
+class FavoriteImageRequest(BaseModel):
+    favorite: bool = Field(default=True)
+
+
 def _resolve_owner_id(client_header: str | None, client_query: str | None = None) -> str:
     token = str(client_query or client_header or "").strip()
     if not token:
@@ -246,20 +250,24 @@ def upscale(
 def images(
     prompt: str | None = Query(default=None),
     color: Literal["black", "white", "red", "yellow", "blue", "green"] | None = Query(default=None),
+    favorite: bool = Query(default=False),
     limit: int = Query(default=120, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     newest_first: bool = Query(default=True),
     x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
 ) -> dict:
     owner_id = _resolve_owner_id(x_justrayzist_client)
-    rows = inference.list_images(
-        owner_id=owner_id,
-        prompt_query=prompt,
-        color_filter=color,
-        limit=limit,
-        offset=offset,
-        newest_first=newest_first,
-    )
+    list_kwargs = {
+        "owner_id": owner_id,
+        "prompt_query": prompt,
+        "color_filter": color,
+        "limit": limit,
+        "offset": offset,
+        "newest_first": newest_first,
+    }
+    if favorite:
+        list_kwargs["favorites_only"] = True
+    rows = inference.list_images(**list_kwargs)
     return {
         "items": rows,
         "count": len(rows),
@@ -289,6 +297,26 @@ def image_file(
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="Image file not found on disk.")
     return FileResponse(image_path, media_type="image/png", filename=safe_filename)
+
+
+@app.post("/images/{filename}/favorite")
+def image_favorite(
+    filename: str,
+    payload: FavoriteImageRequest,
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> dict:
+    owner_id = _resolve_owner_id(x_justrayzist_client)
+    try:
+        safe_filename = InferenceService.sanitize_filename(filename)
+        row = inference.set_image_favorite(owner_id=owner_id, filename=safe_filename, favorite=payload.favorite)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": "ok",
+        "filename": safe_filename,
+        "favorite": bool(row.get("favorite")),
+        "item": row,
+    }
 
 
 @app.post("/images/download-zip")

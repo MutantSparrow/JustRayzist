@@ -40,6 +40,7 @@ from app.storage.gallery_index import (
     list_images,
     normalize_owner_id,
     rebuild_gallery_color_cache,
+    set_image_favorite,
     sync_outputs_to_gallery,
 )
 
@@ -259,6 +260,7 @@ class InferenceService:
         owner_id: str,
         prompt_query: str | None = None,
         color_filter: str | None = None,
+        favorites_only: bool = False,
         limit: int = 100,
         offset: int = 0,
         newest_first: bool = True,
@@ -268,6 +270,7 @@ class InferenceService:
             owner_id=self.sanitize_owner_id(owner_id),
             prompt_query=prompt_query,
             color_filter=color_filter,
+            favorites_only=favorites_only,
             limit=limit,
             offset=offset,
             newest_first=newest_first,
@@ -275,6 +278,14 @@ class InferenceService:
 
     def get_image(self, filename: str, owner_id: str) -> dict[str, Any] | None:
         return get_image(self._settings, filename, owner_id=self.sanitize_owner_id(owner_id))
+
+    def set_image_favorite(self, owner_id: str, filename: str, favorite: bool) -> dict[str, Any]:
+        return set_image_favorite(
+            self._settings,
+            filename,
+            favorite,
+            owner_id=self.sanitize_owner_id(owner_id),
+        )
 
     def resolve_download_images(self, owner_id: str, filenames: list[str]) -> list[tuple[str, Path]]:
         safe_owner_id = self.sanitize_owner_id(owner_id)
