@@ -3,15 +3,17 @@ from __future__ import annotations
 import logging
 import os
 import random
+from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock, Thread
 from typing import Any
 
 from PIL import Image
 
 from app.config.profiles import RuntimeProfile
 from app.config.settings import AppSettings
+from app.core.cancellation import GenerationCancelledError
 from app.core.backends import SUPPORTED_BACKENDS
 from app.core.model_registry import (
     ModelComponent,
@@ -26,14 +28,18 @@ from app.core.worker.types import resolve_procedural_creativity
 from app.core.upscale_blend import UPSCALE_ENGINE_NAME, upscale_with_x2_seed_blend
 from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
 from app.storage.gallery_index import (
+    COLOR_CACHE_VERSION,
     delete_image,
     delete_gallery,
+    gallery_color_cache_needs_rebuild,
+    gallery_color_cache_version,
     get_image,
     import_gallery_source,
     index_image,
     list_import_sources,
     list_images,
     normalize_owner_id,
+    rebuild_gallery_color_cache,
     sync_outputs_to_gallery,
 )
 
@@ -59,7 +65,8 @@ def _assert_supported_backend(model_pack: ModelPack) -> None:
 class InferenceService:
     def __init__(self, settings: AppSettings):
         self._settings = settings
-        self._lock = Lock()
+        self._state_lock = Lock()
+        self._generation_lock = Lock()
         configured_pack = os.getenv("JUSTRAYZIST_PACK", "").strip()
         self._default_pack_name = configured_pack or None
         self._active_pack_name: str | None = None
@@ -67,6 +74,11 @@ class InferenceService:
         self._active_backend_name: str | None = None
         self._active_session: GenerationSession | None = None
         self._donor_pack_cache: ModelPack | None = None
+        self._client_active_jobs: dict[str, dict[str, Any]] = {}
+        self._client_cancel_events: dict[str, Event] = {}
+        self._gallery_color_cache_rebuild_active = False
+        self._gallery_color_cache_rebuild_last_error: str | None = None
+        self._gallery_color_cache_rebuild_thread: Thread | None = None
 
     @staticmethod
     def sanitize_owner_id(owner_id: str) -> str:
@@ -108,6 +120,7 @@ class InferenceService:
                 backend_status = self._active_session.runtime_status()
             except Exception:
                 backend_status = {}
+        color_cache_status = self.gallery_color_cache_status()
         return {
             "runtime_profile": self._settings.runtime_profile.name,
             "resource_tier": tier.name,
@@ -129,6 +142,113 @@ class InferenceService:
                 "fp8_storage_preserved_tensor_count", 0
             ),
             "fp8_promoted_tensor_count": backend_status.get("fp8_promoted_tensor_count", 0),
+            "gallery_color_cache_active": color_cache_status.get("active", False),
+            "gallery_color_cache_version": color_cache_status.get("version"),
+            "gallery_color_cache_target_version": color_cache_status.get("target_version"),
+            "gallery_color_cache_error": color_cache_status.get("last_error"),
+        }
+
+    def client_job_status(self, owner_id: str) -> dict[str, Any]:
+        safe_owner_id = self.sanitize_owner_id(owner_id)
+        with self._state_lock:
+            active_job = self._client_active_jobs.get(safe_owner_id)
+            return {"active_job": dict(active_job) if active_job else None}
+
+    def gallery_color_cache_status(self) -> dict[str, Any]:
+        version = gallery_color_cache_version(self._settings)
+        with self._state_lock:
+            active = self._gallery_color_cache_rebuild_active
+            last_error = self._gallery_color_cache_rebuild_last_error
+        return {
+            "active": active,
+            "version": version,
+            "target_version": COLOR_CACHE_VERSION,
+            "needs_rebuild": version != COLOR_CACHE_VERSION,
+            "last_error": last_error,
+        }
+
+    def start_gallery_color_cache_rebuild(self) -> bool:
+        if not gallery_color_cache_needs_rebuild(self._settings):
+            with self._state_lock:
+                self._gallery_color_cache_rebuild_active = False
+                self._gallery_color_cache_rebuild_last_error = None
+            return False
+        with self._state_lock:
+            if self._gallery_color_cache_rebuild_active:
+                return True
+            self._gallery_color_cache_rebuild_active = True
+            self._gallery_color_cache_rebuild_last_error = None
+
+        def _worker() -> None:
+            try:
+                updated = rebuild_gallery_color_cache(self._settings)
+                LOGGER.info("Gallery color cache rebuild completed: updated=%s", updated)
+            except Exception as exc:
+                LOGGER.exception("Gallery color cache rebuild failed.")
+                with self._state_lock:
+                    self._gallery_color_cache_rebuild_last_error = str(exc)
+            finally:
+                with self._state_lock:
+                    self._gallery_color_cache_rebuild_active = False
+
+        thread = Thread(
+            target=_worker,
+            daemon=True,
+            name="justrayzist-gallery-color-cache-rebuild",
+        )
+        with self._state_lock:
+            self._gallery_color_cache_rebuild_thread = thread
+        thread.start()
+        return True
+
+    def _set_active_client_job_locked(self, owner_id: str, payload: dict[str, Any]) -> None:
+        self._client_active_jobs[self.sanitize_owner_id(owner_id)] = dict(payload)
+
+    def _clear_active_client_job_locked(self, owner_id: str, *, job_id: str | None = None) -> None:
+        safe_owner_id = self.sanitize_owner_id(owner_id)
+        active_job = self._client_active_jobs.get(safe_owner_id)
+        if active_job is None:
+            return
+        if job_id is not None and active_job.get("job_id") != job_id:
+            return
+        self._client_active_jobs.pop(safe_owner_id, None)
+        self._client_cancel_events.pop(safe_owner_id, None)
+
+    def request_cancel_client_job(self, owner_id: str, *, job_id: str | None = None) -> dict[str, Any]:
+        safe_owner_id = self.sanitize_owner_id(owner_id)
+        session_to_cancel: GenerationSession | None = None
+        requested_job_id = str(job_id or "").strip() or None
+        active_job_id: str | None = None
+        with self._state_lock:
+            active_job = self._client_active_jobs.get(safe_owner_id)
+            if active_job is None:
+                return {
+                    "status": "ok",
+                    "cancel_requested": False,
+                    "job_id": requested_job_id,
+                    "message": "No active job.",
+                }
+            active_job_id = str(active_job.get("job_id") or "").strip() or None
+            if requested_job_id is not None and requested_job_id != active_job_id:
+                return {
+                    "status": "ok",
+                    "cancel_requested": False,
+                    "job_id": requested_job_id,
+                    "message": "Job is no longer active.",
+                }
+            active_job["status"] = "cancelling"
+            cancel_event = self._client_cancel_events.get(safe_owner_id)
+            if cancel_event is not None:
+                cancel_event.set()
+            if active_job.get("kind") == "generate" and self._active_session is not None:
+                session_to_cancel = self._active_session
+        if session_to_cancel is not None:
+            session_to_cancel.cancel_active()
+        return {
+            "status": "ok",
+            "cancel_requested": True,
+            "job_id": active_job_id,
+            "message": "Cancellation requested.",
         }
 
     def sync_gallery(self) -> int:
@@ -138,6 +258,7 @@ class InferenceService:
         self,
         owner_id: str,
         prompt_query: str | None = None,
+        color_filter: str | None = None,
         limit: int = 100,
         offset: int = 0,
         newest_first: bool = True,
@@ -146,6 +267,7 @@ class InferenceService:
             settings=self._settings,
             owner_id=self.sanitize_owner_id(owner_id),
             prompt_query=prompt_query,
+            color_filter=color_filter,
             limit=limit,
             offset=offset,
             newest_first=newest_first,
@@ -179,14 +301,14 @@ class InferenceService:
         normalized = confirm_text.strip()
         if normalized.upper() != "DELETE":
             raise ValueError("Deletion rejected. Type DELETE exactly to confirm.")
-        with self._lock:
+        with self._state_lock:
             return delete_gallery(self._settings, owner_id=self.sanitize_owner_id(owner_id))
 
     def delete_image(self, owner_id: str, filename: str, confirm_text: str) -> dict[str, int]:
         normalized = confirm_text.strip()
         if normalized.upper() != "DELETE":
             raise ValueError("Deletion rejected. Type DELETE exactly to confirm.")
-        with self._lock:
+        with self._state_lock:
             return delete_image(
                 self._settings,
                 filename,
@@ -202,7 +324,7 @@ class InferenceService:
         source_id: str,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        with self._lock:
+        with self._state_lock:
             return import_gallery_source(
                 self._settings,
                 target_owner_id=self.sanitize_owner_id(owner_id),
@@ -407,12 +529,14 @@ class InferenceService:
         scheduler_mode: str | None = None,
         enhance_prompt: bool = False,
         procedural_creativity: int = 0,
+        job_id: str | None = None,
     ) -> dict[str, Any]:
-        with self._lock:
-            effective_procedural_creativity = resolve_procedural_creativity(
-                procedural_creativity=procedural_creativity
-            )
-            safe_owner_id = self.sanitize_owner_id(owner_id)
+        effective_procedural_creativity = resolve_procedural_creativity(
+            procedural_creativity=procedural_creativity
+        )
+        safe_owner_id = self.sanitize_owner_id(owner_id)
+        cancel_event = Event()
+        with self._state_lock:
             base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name)
             session = self._session_for_pack(effective_pack, resource_tier)
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
@@ -427,112 +551,146 @@ class InferenceService:
                 effective_seed,
                 effective_procedural_creativity,
             )
-            output_path = build_output_path(self.owner_output_dir(safe_owner_id))
-
-            result = session.generate(
-                GenerationRequest(
-                    prompt=prompt,
-                    width=width,
-                    height=height,
-                    seed=effective_seed,
-                    scheduler_mode=scheduler_mode,
-                    enhance_prompt=enhance_prompt,
-                    procedural_creativity=effective_procedural_creativity,
-                )
-            )
-            self._active_backend_name = result.backend
-
-            saved_path = save_png_with_metadata(
-                image=result.image,
-                prompt=result.prompt_effective,
-                settings=self._settings,
-                output_path=output_path,
-                extra_metadata={
-                    "owner_id": safe_owner_id,
-                    "prompt_original": result.prompt_original,
-                    "prompt_effective": result.prompt_effective,
-                    "prompt_enhanced": result.prompt_enhanced,
-                    "width": width,
-                    "height": height,
-                    "steps": result.steps,
-                    "guidance_scale": result.guidance_scale,
-                    "backend": result.backend,
-                    "device": result.device,
-                    "model_pack": base_pack.name,
-                    "selected_pack": base_pack.name,
-                    "effective_pack": effective_pack.name,
-                    "derived_strategy": effective_pack.derived_strategy,
-                    "fp8_checkpoint": result.fp8_checkpoint,
-                    "fp8_fallback_used": result.fp8_fallback_used,
-                    "fp8_fallback_reason": result.fp8_fallback_reason,
-                    "fp8_runtime_mode": result.fp8_runtime_mode,
-                    "fp8_normalized_tensor_count": result.fp8_normalized_tensor_count,
-                    "fp8_storage_preserved_tensor_count": result.fp8_storage_preserved_tensor_count,
-                    "fp8_promoted_tensor_count": result.fp8_promoted_tensor_count,
-                    "duration_ms": result.duration_ms,
-                    "seed": result.seed,
-                    "scheduler_mode": result.scheduler_mode,
-                    "runtime_profile": result.runtime_profile,
-                    "resource_tier": result.resource_tier,
-                    "execution_mode": result.execution_mode,
-                    "procedural_creativity": result.procedural_creativity,
-                },
-            )
-            append_generation_metric(
-                settings=self._settings,
-                payload={
-                    "mode": "api_generate",
-                    "prompt": result.prompt_effective,
-                    "prompt_original": result.prompt_original,
-                    "prompt_effective": result.prompt_effective,
-                    "prompt_enhanced": result.prompt_enhanced,
-                    "width": width,
-                    "height": height,
-                    "output_path": str(saved_path),
-                    "owner_id": safe_owner_id,
-                    "model_pack": base_pack.name,
-                    "selected_pack": base_pack.name,
-                    "effective_pack": effective_pack.name,
-                    "derived_strategy": effective_pack.derived_strategy,
-                    "resource_tier": result.resource_tier,
-                    "procedural_creativity": result.procedural_creativity,
-                    **result.telemetry_dict(),
-                },
-            )
-            image_row = index_image(self._settings, saved_path, owner_id=safe_owner_id)
-            image_row["url"] = f"/images/{image_row['filename']}"
-            image_row["pack"] = base_pack.name
-            image_row["selected_pack"] = base_pack.name
-            image_row["effective_pack"] = effective_pack.name
-            image_row["derived_strategy"] = effective_pack.derived_strategy
-            image_row["duration_ms"] = result.duration_ms
-            image_row["seed"] = result.seed
-            image_row["scheduler_mode"] = result.scheduler_mode
-            image_row["prompt_original"] = result.prompt_original
-            image_row["prompt_effective"] = result.prompt_effective
-            image_row["prompt_enhanced"] = result.prompt_enhanced
-            image_row["runtime_profile"] = result.runtime_profile
-            image_row["resource_tier"] = result.resource_tier
-            image_row["execution_mode"] = result.execution_mode
-            image_row["backend"] = result.backend
-            image_row["fp8_fallback_used"] = result.fp8_fallback_used
-            image_row["fp8_fallback_reason"] = result.fp8_fallback_reason
-            image_row["fp8_runtime_mode"] = result.fp8_runtime_mode
-            image_row["procedural_creativity"] = result.procedural_creativity
-            LOGGER.info(
-                "Image created: owner=%s file=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s duration_ms=%s creative_mode=%s",
+            self._set_active_client_job_locked(
                 safe_owner_id,
-                image_row["filename"],
-                base_pack.name,
-                effective_pack.name,
-                result.resource_tier,
-                width,
-                height,
-                result.seed,
-                result.duration_ms,
-                result.procedural_creativity,
+                {
+                    "job_id": job_id,
+                    "kind": "generate",
+                    "status": "generating",
+                    "prompt": prompt,
+                    "width": width,
+                    "height": height,
+                    "pack": base_pack.name,
+                    "seed": effective_seed,
+                    "enhance_prompt": enhance_prompt,
+                    "procedural_creativity": effective_procedural_creativity,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                },
             )
-            return image_row
+            self._client_cancel_events[safe_owner_id] = cancel_event
+
+        output_path = build_output_path(self.owner_output_dir(safe_owner_id))
+        try:
+            with self._generation_lock:
+                if cancel_event.is_set():
+                    raise GenerationCancelledError("Generation cancelled.")
+                result = session.generate(
+                    GenerationRequest(
+                        prompt=prompt,
+                        width=width,
+                        height=height,
+                        seed=effective_seed,
+                        scheduler_mode=scheduler_mode,
+                        enhance_prompt=enhance_prompt,
+                        procedural_creativity=effective_procedural_creativity,
+                    )
+                )
+                if cancel_event.is_set():
+                    raise GenerationCancelledError("Generation cancelled.")
+                with self._state_lock:
+                    self._active_backend_name = result.backend
+
+                saved_path = save_png_with_metadata(
+                    image=result.image,
+                    prompt=result.prompt_effective,
+                    settings=self._settings,
+                    output_path=output_path,
+                    extra_metadata={
+                        "owner_id": safe_owner_id,
+                        "prompt_original": result.prompt_original,
+                        "prompt_effective": result.prompt_effective,
+                        "prompt_enhanced": result.prompt_enhanced,
+                        "width": width,
+                        "height": height,
+                        "steps": result.steps,
+                        "guidance_scale": result.guidance_scale,
+                        "backend": result.backend,
+                        "device": result.device,
+                        "model_pack": base_pack.name,
+                        "selected_pack": base_pack.name,
+                        "effective_pack": effective_pack.name,
+                        "derived_strategy": effective_pack.derived_strategy,
+                        "fp8_checkpoint": result.fp8_checkpoint,
+                        "fp8_fallback_used": result.fp8_fallback_used,
+                        "fp8_fallback_reason": result.fp8_fallback_reason,
+                        "fp8_runtime_mode": result.fp8_runtime_mode,
+                        "fp8_normalized_tensor_count": result.fp8_normalized_tensor_count,
+                        "fp8_storage_preserved_tensor_count": result.fp8_storage_preserved_tensor_count,
+                        "fp8_promoted_tensor_count": result.fp8_promoted_tensor_count,
+                        "duration_ms": result.duration_ms,
+                        "seed": result.seed,
+                        "scheduler_mode": result.scheduler_mode,
+                        "runtime_profile": result.runtime_profile,
+                        "resource_tier": result.resource_tier,
+                        "execution_mode": result.execution_mode,
+                        "procedural_creativity": result.procedural_creativity,
+                    },
+                )
+                if cancel_event.is_set():
+                    try:
+                        saved_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    raise GenerationCancelledError("Generation cancelled.")
+                append_generation_metric(
+                    settings=self._settings,
+                    payload={
+                        "mode": "api_generate",
+                        "prompt": result.prompt_effective,
+                        "prompt_original": result.prompt_original,
+                        "prompt_effective": result.prompt_effective,
+                        "prompt_enhanced": result.prompt_enhanced,
+                        "width": width,
+                        "height": height,
+                        "output_path": str(saved_path),
+                        "owner_id": safe_owner_id,
+                        "model_pack": base_pack.name,
+                        "selected_pack": base_pack.name,
+                        "effective_pack": effective_pack.name,
+                        "derived_strategy": effective_pack.derived_strategy,
+                        "resource_tier": result.resource_tier,
+                        "procedural_creativity": result.procedural_creativity,
+                        **result.telemetry_dict(),
+                    },
+                )
+                image_row = index_image(self._settings, saved_path, owner_id=safe_owner_id)
+                image_row["url"] = f"/images/{image_row['filename']}"
+                image_row["pack"] = base_pack.name
+                image_row["selected_pack"] = base_pack.name
+                image_row["effective_pack"] = effective_pack.name
+                image_row["derived_strategy"] = effective_pack.derived_strategy
+                image_row["duration_ms"] = result.duration_ms
+                image_row["seed"] = result.seed
+                image_row["scheduler_mode"] = result.scheduler_mode
+                image_row["prompt_original"] = result.prompt_original
+                image_row["prompt_effective"] = result.prompt_effective
+                image_row["prompt_enhanced"] = result.prompt_enhanced
+                image_row["runtime_profile"] = result.runtime_profile
+                image_row["resource_tier"] = result.resource_tier
+                image_row["execution_mode"] = result.execution_mode
+                image_row["backend"] = result.backend
+                image_row["fp8_fallback_used"] = result.fp8_fallback_used
+                image_row["fp8_fallback_reason"] = result.fp8_fallback_reason
+                image_row["fp8_runtime_mode"] = result.fp8_runtime_mode
+                image_row["procedural_creativity"] = result.procedural_creativity
+                image_row["job_id"] = job_id
+                LOGGER.info(
+                    "Image created: owner=%s file=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s duration_ms=%s creative_mode=%s",
+                    safe_owner_id,
+                    image_row["filename"],
+                    base_pack.name,
+                    effective_pack.name,
+                    result.resource_tier,
+                    width,
+                    height,
+                    result.seed,
+                    result.duration_ms,
+                    result.procedural_creativity,
+                )
+                return image_row
+        finally:
+            with self._state_lock:
+                self._clear_active_client_job_locked(safe_owner_id, job_id=job_id)
 
     def upscale(
         self,
@@ -542,10 +700,12 @@ class InferenceService:
         seed: int | None = None,
         scheduler_mode: str | None = None,
         enhance_prompt: bool = False,
+        job_id: str | None = None,
     ) -> dict[str, Any]:
-        with self._lock:
-            safe_owner_id = self.sanitize_owner_id(owner_id)
-            safe_filename = self.sanitize_filename(filename)
+        safe_owner_id = self.sanitize_owner_id(owner_id)
+        safe_filename = self.sanitize_filename(filename)
+        cancel_event = Event()
+        with self._state_lock:
             source_row = get_image(self._settings, safe_filename, owner_id=safe_owner_id)
             if source_row is None:
                 raise ValueError("Image not found.")
@@ -571,100 +731,144 @@ class InferenceService:
                 resource_tier.name,
                 effective_seed,
             )
-
-            with Image.open(source_path) as source_file:
-                source_image = source_file.convert("RGB")
-            source_width, source_height = source_image.size
-
-            result = upscale_with_x2_seed_blend(
-                image=source_image,
-                settings=self._settings,
-                runtime_profile=self._settings.runtime_profile.name,
-                seed=effective_seed,
-            )
-            final_width, final_height = result.output_width, result.output_height
-            output_path = build_output_path(self.owner_output_dir(safe_owner_id))
-            saved_path = save_png_with_metadata(
-                image=result.image,
-                prompt=source_prompt,
-                settings=self._settings,
-                output_path=output_path,
-                extra_metadata={
-                    "owner_id": safe_owner_id,
-                    "mode": "api_upscale",
-                    "prompt_original": source_prompt,
-                    "prompt_effective": source_prompt,
-                    "prompt_enhanced": False,
-                    "source_image": str(source_path),
-                    "source_filename": safe_filename,
-                    "source_width": source_width,
-                    "source_height": source_height,
-                    "width": final_width,
-                    "height": final_height,
-                    "steps": 0,
-                    "guidance_scale": 0.0,
-                    "backend": UPSCALE_ENGINE_NAME,
-                    "device": result.device,
-                    "model_pack": model_pack_name,
-                    "duration_ms": result.duration_ms,
-                    "seed": effective_seed,
-                    "scheduler_mode": scheduler_mode or "euler",
-                    "runtime_profile": self._settings.runtime_profile.name,
-                    "resource_tier": resource_tier.name,
-                    "execution_mode": UPSCALE_ENGINE_NAME,
-                    "request_enhance_prompt": bool(enhance_prompt),
-                    **result.telemetry_dict(),
-                },
-            )
-            append_generation_metric(
-                settings=self._settings,
-                payload={
-                    "mode": "api_upscale",
-                    "prompt": source_prompt,
-                    "prompt_original": source_prompt,
-                    "prompt_effective": source_prompt,
-                    "prompt_enhanced": False,
-                    "source_filename": safe_filename,
-                    "source_width": source_width,
-                    "source_height": source_height,
-                    "width": final_width,
-                    "height": final_height,
-                    "output_path": str(saved_path),
-                    "owner_id": safe_owner_id,
-                    "model_pack": model_pack_name,
-                    "backend": UPSCALE_ENGINE_NAME,
-                    "seed": effective_seed,
-                    "scheduler_mode": scheduler_mode or "euler",
-                    "resource_tier": resource_tier.name,
-                    "request_enhance_prompt": bool(enhance_prompt),
-                    **result.telemetry_dict(),
-                },
-            )
-            image_row = index_image(self._settings, saved_path, owner_id=safe_owner_id)
-            image_row["url"] = f"/images/{image_row['filename']}"
-            image_row["pack"] = model_pack_name
-            image_row["duration_ms"] = result.duration_ms
-            image_row["seed"] = effective_seed
-            image_row["scheduler_mode"] = scheduler_mode or "euler"
-            image_row["prompt_original"] = source_prompt
-            image_row["prompt_effective"] = source_prompt
-            image_row["prompt_enhanced"] = False
-            image_row["runtime_profile"] = self._settings.runtime_profile.name
-            image_row["resource_tier"] = resource_tier.name
-            image_row["execution_mode"] = UPSCALE_ENGINE_NAME
-            image_row["upscale_engine"] = UPSCALE_ENGINE_NAME
-            LOGGER.info(
-                "Image upscaled: owner=%s source=%s file=%s size=%dx%d seed=%s duration_ms=%s",
+            self._set_active_client_job_locked(
                 safe_owner_id,
-                safe_filename,
-                image_row["filename"],
-                final_width,
-                final_height,
-                effective_seed,
-                result.duration_ms,
+                {
+                    "job_id": job_id,
+                    "kind": "upscale",
+                    "status": "upscaling",
+                    "filename": safe_filename,
+                    "source_filename": safe_filename,
+                    "width": source_row.get("width", source_row.get("source_width", 0)) or 0,
+                    "height": source_row.get("height", source_row.get("source_height", 0)) or 0,
+                    "pack": model_pack_name,
+                    "seed": effective_seed,
+                    "enhance_prompt": bool(enhance_prompt),
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                },
             )
-            self._active_backend_name = UPSCALE_ENGINE_NAME
-            return image_row
+            self._client_cancel_events[safe_owner_id] = cancel_event
+
+        try:
+            with self._generation_lock:
+                if cancel_event.is_set():
+                    raise GenerationCancelledError("Upscale cancelled.")
+                with Image.open(source_path) as source_file:
+                    source_image = source_file.convert("RGB")
+                source_width, source_height = source_image.size
+                with self._state_lock:
+                    active_job = self._client_active_jobs.get(safe_owner_id)
+                    if active_job is not None:
+                        active_job["width"] = source_width * 2
+                        active_job["height"] = source_height * 2
+                if cancel_event.is_set():
+                    raise GenerationCancelledError("Upscale cancelled.")
+
+                result = upscale_with_x2_seed_blend(
+                    image=source_image,
+                    settings=self._settings,
+                    runtime_profile=self._settings.runtime_profile.name,
+                    seed=effective_seed,
+                    is_cancel_requested=cancel_event.is_set,
+                )
+                if cancel_event.is_set():
+                    raise GenerationCancelledError("Upscale cancelled.")
+
+                final_width, final_height = result.output_width, result.output_height
+                output_path = build_output_path(self.owner_output_dir(safe_owner_id))
+                saved_path = save_png_with_metadata(
+                    image=result.image,
+                    prompt=source_prompt,
+                    settings=self._settings,
+                    output_path=output_path,
+                    extra_metadata={
+                        "owner_id": safe_owner_id,
+                        "mode": "api_upscale",
+                        "prompt_original": source_prompt,
+                        "prompt_effective": source_prompt,
+                        "prompt_enhanced": False,
+                        "source_image": str(source_path),
+                        "source_filename": safe_filename,
+                        "source_width": source_width,
+                        "source_height": source_height,
+                        "width": final_width,
+                        "height": final_height,
+                        "steps": 0,
+                        "guidance_scale": 0.0,
+                        "backend": UPSCALE_ENGINE_NAME,
+                        "device": result.device,
+                        "model_pack": model_pack_name,
+                        "duration_ms": result.duration_ms,
+                        "seed": effective_seed,
+                        "scheduler_mode": scheduler_mode or "euler",
+                        "runtime_profile": self._settings.runtime_profile.name,
+                        "resource_tier": resource_tier.name,
+                        "execution_mode": UPSCALE_ENGINE_NAME,
+                        "request_enhance_prompt": bool(enhance_prompt),
+                        **result.telemetry_dict(),
+                    },
+                )
+                if cancel_event.is_set():
+                    try:
+                        saved_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    raise GenerationCancelledError("Upscale cancelled.")
+
+                append_generation_metric(
+                    settings=self._settings,
+                    payload={
+                        "mode": "api_upscale",
+                        "prompt": source_prompt,
+                        "prompt_original": source_prompt,
+                        "prompt_effective": source_prompt,
+                        "prompt_enhanced": False,
+                        "source_filename": safe_filename,
+                        "source_width": source_width,
+                        "source_height": source_height,
+                        "width": final_width,
+                        "height": final_height,
+                        "output_path": str(saved_path),
+                        "owner_id": safe_owner_id,
+                        "model_pack": model_pack_name,
+                        "backend": UPSCALE_ENGINE_NAME,
+                        "seed": effective_seed,
+                        "scheduler_mode": scheduler_mode or "euler",
+                        "resource_tier": resource_tier.name,
+                        "request_enhance_prompt": bool(enhance_prompt),
+                        **result.telemetry_dict(),
+                    },
+                )
+                image_row = index_image(self._settings, saved_path, owner_id=safe_owner_id)
+                image_row["url"] = f"/images/{image_row['filename']}"
+                image_row["pack"] = model_pack_name
+                image_row["duration_ms"] = result.duration_ms
+                image_row["seed"] = effective_seed
+                image_row["scheduler_mode"] = scheduler_mode or "euler"
+                image_row["prompt_original"] = source_prompt
+                image_row["prompt_effective"] = source_prompt
+                image_row["prompt_enhanced"] = False
+                image_row["runtime_profile"] = self._settings.runtime_profile.name
+                image_row["resource_tier"] = resource_tier.name
+                image_row["execution_mode"] = UPSCALE_ENGINE_NAME
+                image_row["upscale_engine"] = UPSCALE_ENGINE_NAME
+                image_row["job_id"] = job_id
+                LOGGER.info(
+                    "Image upscaled: owner=%s source=%s file=%s size=%dx%d seed=%s duration_ms=%s",
+                    safe_owner_id,
+                    safe_filename,
+                    image_row["filename"],
+                    final_width,
+                    final_height,
+                    effective_seed,
+                    result.duration_ms,
+                )
+                with self._state_lock:
+                    self._active_backend_name = UPSCALE_ENGINE_NAME
+                return image_row
+        finally:
+            with self._state_lock:
+                self._clear_active_client_job_locked(safe_owner_id, job_id=job_id)
 
     @staticmethod
     def sanitize_filename(filename: str) -> str:

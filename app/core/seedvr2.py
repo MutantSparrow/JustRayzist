@@ -20,6 +20,7 @@ from typing import Any
 from PIL import Image
 
 from app.config.settings import AppSettings
+from app.core.cancellation import GenerationCancelledError
 from app.core.memory import now_perf
 
 SEEDVR2_MODEL_REPO = "themindstudio/SeedVR2-3B-FP8-e4m3fn"
@@ -567,6 +568,7 @@ def _run_attempt_with_hard_timeout(
     output_path: Path,
     timeout_seconds: int,
     verbose_runtime: bool,
+    is_cancel_requested: Any | None = None,
 ) -> tuple[str, dict[str, Any]]:
     context = multiprocessing.get_context("spawn")
     result_queue = context.Queue()
@@ -583,7 +585,24 @@ def _run_attempt_with_hard_timeout(
         daemon=True,
     )
     process.start()
-    process.join(timeout=max(1, int(timeout_seconds)))
+    cancel_requested = is_cancel_requested if callable(is_cancel_requested) else lambda: False
+    timeout_seconds = max(1, int(timeout_seconds))
+    deadline = now_perf() + timeout_seconds
+    while process.is_alive():
+        if cancel_requested():
+            process.terminate()
+            process.join(timeout=5)
+            message = {
+                "status": "cancelled",
+                "error": "SeedVR2 attempt cancelled by user request.",
+            }
+            result_queue.close()
+            result_queue.join_thread()
+            return "cancelled", message
+        remaining = deadline - now_perf()
+        if remaining <= 0:
+            break
+        process.join(timeout=min(0.2, max(0.01, remaining)))
 
     message: dict[str, Any] = {}
     if process.is_alive():
@@ -896,6 +915,7 @@ def upscale_with_seedvr2(
     seed: int | None = None,
     timeout_seconds: int = SEEDVR2_DEFAULT_TIMEOUT_SECONDS,
     reuse_runner: bool = True,
+    is_cancel_requested: Any | None = None,
 ) -> SeedVR2UpscaleResult:
     if not isinstance(image, Image.Image):
         raise ValueError("image must be a PIL.Image.Image instance.")
@@ -937,6 +957,7 @@ def upscale_with_seedvr2(
         max(target_short, target_long),
     )
     effective_seed = int(seed if seed is not None else 42)
+    cancel_requested = is_cancel_requested if callable(is_cancel_requested) else lambda: False
 
     tmp_root = settings.paths.root_dir / ".build" / "seedvr2_tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
@@ -950,6 +971,8 @@ def upscale_with_seedvr2(
         source.save(input_path, format="PNG")
 
         for attempt_idx, attempt in enumerate(attempts):
+            if cancel_requested():
+                raise GenerationCancelledError("Upscale cancelled.")
             output_path = tmp_dir / f"output_tier_{attempt.tier}.png"
             args = _make_runtime_args(
                 input_path=input_path,
@@ -972,8 +995,11 @@ def upscale_with_seedvr2(
                     output_path=output_path,
                     timeout_seconds=attempt_timeout_seconds,
                     verbose_runtime=verbose_runtime,
+                    is_cancel_requested=cancel_requested,
                 )
                 duration_ms = int((now_perf() - started) * 1000)
+                if status == "cancelled":
+                    raise GenerationCancelledError(str(message.get("error") or "Upscale cancelled."))
                 if status == "timeout":
                     timeout_hit = True
                     raise TimeoutError(str(message.get("error") or "SeedVR2 attempt timed out."))

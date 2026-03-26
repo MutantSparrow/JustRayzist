@@ -15,6 +15,7 @@ const deleteGalleryButtonEl = document.getElementById("delete-gallery-button");
 const killServerButtonEl = document.getElementById("kill-server-button");
 const filterInputEl = document.getElementById("filter-input");
 const reverseOrderButtonEl = document.getElementById("reverse-order-button");
+const galleryColorFiltersEl = document.getElementById("gallery-color-filters");
 const galleryDensitySliderEl = document.getElementById("gallery-density-slider");
 const multiSelectToggleEl = document.getElementById("multi-select-toggle");
 const multiSelectActionsEl = document.getElementById("multi-select-actions");
@@ -64,6 +65,7 @@ const requiredUi = [
   ["kill-server-button", killServerButtonEl],
   ["filter-input", filterInputEl],
   ["reverse-order-button", reverseOrderButtonEl],
+  ["gallery-color-filters", galleryColorFiltersEl],
   ["gallery-density-slider", galleryDensitySliderEl],
   ["multi-select-toggle", multiSelectToggleEl],
   ["multi-select-actions", multiSelectActionsEl],
@@ -103,6 +105,12 @@ if (missingUi.length) {
 
 const CLIENT_ID_STORAGE_KEY = "justrayzist.client_id";
 const GALLERY_COLUMNS_STORAGE_KEY = "justrayzist.gallery_columns";
+const CLIENT_QUEUE_STORAGE_KEY = "justrayzist.client_queue";
+const CLIENT_JOB_POLL_INTERVAL_MS = 1500;
+const CLIENT_QUEUE_STORAGE_VERSION = 2;
+const GALLERY_COLOR_FILTERS = ["black", "white", "red", "yellow", "blue", "green"];
+const GALLERY_COLOR_CACHE_STATUS_MESSAGE = "Updating gallery color cache...";
+const GALLERY_COLOR_CACHE_POLL_INTERVAL_MS = 2500;
 
 function createClientId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -147,6 +155,7 @@ const state = {
   galleryColumns: getStoredGalleryColumns(),
   currentSeed: null,
   newestFirst: true,
+  activeColorFilter: null,
   filterTimer: null,
   maxQueuedGenerations: 5,
   queue: [],
@@ -174,6 +183,10 @@ const state = {
   zipAbortController: null,
   galleryColumnFrame: null,
   pendingGalleryColumns: 4,
+  galleryRelayoutFrame: null,
+  clientJobPollTimer: null,
+  galleryColorCacheActive: false,
+  galleryColorCachePollTimer: null,
 };
 
 function randomSeed() {
@@ -197,6 +210,37 @@ function updateTopbarOffset() {
 function setStatus(message, isError = false) {
   statusLineEl.textContent = String(message || "");
   statusLineEl.classList.toggle("error", Boolean(isError));
+}
+
+function clearGalleryColorCachePoll() {
+  if (!state.galleryColorCachePollTimer) return;
+  window.clearTimeout(state.galleryColorCachePollTimer);
+  state.galleryColorCachePollTimer = null;
+}
+
+function syncGalleryColorCacheStatusLine() {
+  if (state.queue.length > 0 || state.activeJob) {
+    return;
+  }
+  if (state.galleryColorCacheActive) {
+    if (!statusLineEl.classList.contains("error")) {
+      setStatus(GALLERY_COLOR_CACHE_STATUS_MESSAGE);
+    }
+    return;
+  }
+  if (statusLineEl.textContent === GALLERY_COLOR_CACHE_STATUS_MESSAGE && !statusLineEl.classList.contains("error")) {
+    setStatus("Ready.");
+  }
+}
+
+function scheduleGalleryColorCachePoll() {
+  clearGalleryColorCachePoll();
+  if (!state.galleryColorCacheActive) {
+    return;
+  }
+  state.galleryColorCachePollTimer = window.setTimeout(() => {
+    loadImages().catch((error) => setStatus(String(error?.message || error), true));
+  }, GALLERY_COLOR_CACHE_POLL_INTERVAL_MS);
 }
 
 function isSettingsOpen() {
@@ -355,6 +399,281 @@ function buildDownloadUrl(filename) {
   return `/images/${encodeURIComponent(filename)}?${query.toString()}`;
 }
 
+function sanitizeJobStatus(rawValue, kind = "generate") {
+  const value = String(rawValue || "").trim().toLowerCase();
+  if (value === "queued") return "queued";
+  if (value === "cancelling") return "cancelling";
+  if (value === "upscaling") return kind === "upscale" ? "upscaling" : "generating";
+  return "generating";
+}
+
+function isActiveJobStatus(status) {
+  return sanitizeJobStatus(status) !== "queued";
+}
+
+function normalizeJobTimestamp(rawValue) {
+  const value = Number(rawValue);
+  if (Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  return Date.now();
+}
+
+function sanitizeJobKind(rawValue) {
+  return rawValue === "upscale" ? "upscale" : "generate";
+}
+
+function normalizeStoredJob(rawJob, overrides = {}) {
+  if (!rawJob || typeof rawJob !== "object") return null;
+  const placeholderId = String(
+    overrides.placeholderId || rawJob.placeholderId || rawJob.job_id || "",
+  ).trim();
+  if (!placeholderId) return null;
+  const kind = sanitizeJobKind(overrides.kind || rawJob.kind);
+  const width = Math.max(1, Number(overrides.width ?? rawJob.width) || 1);
+  const height = Math.max(1, Number(overrides.height ?? rawJob.height) || 1);
+  return {
+    kind,
+    placeholderId,
+    prompt: kind === "generate" ? String(overrides.prompt ?? rawJob.prompt ?? "").trim() : "",
+    filename: kind === "upscale" ? String(overrides.filename ?? rawJob.filename ?? "").trim() : "",
+    source_filename:
+      kind === "upscale"
+        ? String(overrides.source_filename ?? rawJob.source_filename ?? rawJob.filename ?? "").trim()
+        : "",
+    width,
+    height,
+    pack: rawJob.pack ?? null,
+    seed: rawJob.seed ?? null,
+    enhance_prompt: Boolean(overrides.enhance_prompt ?? rawJob.enhance_prompt),
+    procedural_creativity: Number(overrides.procedural_creativity ?? rawJob.procedural_creativity ?? 0),
+    status: sanitizeJobStatus(overrides.status || rawJob.status || "queued", kind),
+    enqueuedAt: normalizeJobTimestamp(overrides.enqueuedAt ?? rawJob.enqueuedAt ?? rawJob.enqueued_at),
+    queueIndex: Number(overrides.queueIndex ?? rawJob.queueIndex ?? 0),
+    remoteInFlight: Boolean(overrides.remoteInFlight ?? rawJob.remoteInFlight),
+  };
+}
+
+function serializeQueuedJob(job) {
+  return {
+    kind: sanitizeJobKind(job.kind),
+    placeholderId: String(job.placeholderId || ""),
+    prompt: String(job.prompt || ""),
+    filename: String(job.filename || ""),
+    source_filename: String(job.source_filename || ""),
+    width: Math.max(1, Number(job.width) || 1),
+    height: Math.max(1, Number(job.height) || 1),
+    pack: job.pack ?? null,
+    seed: job.seed ?? null,
+    enhance_prompt: Boolean(job.enhance_prompt),
+    procedural_creativity: Number(job.procedural_creativity || 0),
+    status: sanitizeJobStatus(job.status, sanitizeJobKind(job.kind)),
+    enqueuedAt: normalizeJobTimestamp(job.enqueuedAt),
+    remoteInFlight: Boolean(job.remoteInFlight),
+  };
+}
+
+function buildPendingSnapshot() {
+  const items = [];
+  if (state.activeJob) {
+    items.push({
+      ...serializeQueuedJob(state.activeJob),
+      queueIndex: -1,
+    });
+  }
+  state.queue.forEach((job, index) => {
+    items.push({
+      ...serializeQueuedJob({ ...job, status: "queued" }),
+      queueIndex: index,
+    });
+  });
+  return items;
+}
+
+function syncPendingJobsFromQueueState() {
+  const next = [];
+  if (state.activeJob) {
+    next.push({
+      ...serializeQueuedJob(state.activeJob),
+      status: sanitizeJobStatus(state.activeJob.status, state.activeJob.kind),
+    });
+  }
+  for (const job of state.queue) {
+    next.push({
+      ...serializeQueuedJob(job),
+      status: "queued",
+    });
+  }
+  state.pendingJobs = next;
+}
+
+function persistClientQueueState() {
+  syncPendingJobsFromQueueState();
+  try {
+    const payload = {
+      version: CLIENT_QUEUE_STORAGE_VERSION,
+      pending_jobs: buildPendingSnapshot(),
+    };
+    window.localStorage.setItem(CLIENT_QUEUE_STORAGE_KEY, JSON.stringify(payload));
+  } catch (_) {
+  }
+}
+
+function pendingJobsFromStoredPayload(payload) {
+  const pendingJobs = Array.isArray(payload?.pending_jobs) ? payload.pending_jobs : null;
+  if (pendingJobs) {
+    return pendingJobs;
+  }
+  const legacyJobs = [];
+  const activeJob = payload?.active_job || null;
+  if (activeJob) {
+    legacyJobs.push({
+      ...activeJob,
+      status: "generating",
+      queueIndex: -1,
+    });
+  }
+  const queuedJobs = Array.isArray(payload?.queued_jobs) ? payload.queued_jobs : [];
+  queuedJobs.forEach((job, index) => {
+    legacyJobs.push({
+      ...job,
+      status: "queued",
+      queueIndex: index,
+    });
+  });
+  return legacyJobs;
+}
+
+function restoreClientQueueState() {
+  state.queue = [];
+  state.activeJob = null;
+  syncPendingJobsFromQueueState();
+  try {
+    const raw = window.localStorage.getItem(CLIENT_QUEUE_STORAGE_KEY);
+    if (!raw) return;
+    const payload = JSON.parse(raw);
+    const pendingJobs = pendingJobsFromStoredPayload(payload);
+    const normalizedPendingJobs = pendingJobs
+      .map((job, index) =>
+        normalizeStoredJob(job, {
+          status: isActiveJobStatus(job?.status) ? job?.status : "queued",
+          remoteInFlight: isActiveJobStatus(job?.status),
+          queueIndex: Number(job?.queueIndex ?? index),
+        })
+      )
+      .filter(Boolean);
+    const activeJobs = normalizedPendingJobs.filter((job) => isActiveJobStatus(job.status));
+    state.activeJob = activeJobs.length > 0 ? activeJobs[0] : null;
+    state.queue = normalizedPendingJobs
+      .filter((job) => job.status !== "generating")
+      .sort((left, right) => {
+        const leftIndex = Number(left.queueIndex ?? Number.MAX_SAFE_INTEGER);
+        const rightIndex = Number(right.queueIndex ?? Number.MAX_SAFE_INTEGER);
+        if (leftIndex !== rightIndex) {
+          return leftIndex - rightIndex;
+        }
+        return left.enqueuedAt - right.enqueuedAt;
+      })
+      .map((job) => ({
+        ...job,
+        status: "queued",
+        remoteInFlight: false,
+      }));
+    syncPendingJobsFromQueueState();
+  } catch (_) {
+    state.queue = [];
+    state.activeJob = null;
+    syncPendingJobsFromQueueState();
+  }
+}
+
+function stopClientJobPolling() {
+  if (state.clientJobPollTimer === null) return;
+  window.clearTimeout(state.clientJobPollTimer);
+  state.clientJobPollTimer = null;
+}
+
+function scheduleClientJobPoll() {
+  if (!state.activeJob || !state.activeJob.remoteInFlight) {
+    stopClientJobPolling();
+    return;
+  }
+  if (state.clientJobPollTimer !== null) {
+    return;
+  }
+  state.clientJobPollTimer = window.setTimeout(async () => {
+    state.clientJobPollTimer = null;
+    try {
+      await refreshClientJobState({ loadImagesOnRemoteCompletion: true });
+    } catch (error) {
+      setStatus(String(error?.message || error), true);
+    } finally {
+      if (state.activeJob && state.activeJob.remoteInFlight) {
+        scheduleClientJobPoll();
+      }
+    }
+  }, CLIENT_JOB_POLL_INTERVAL_MS);
+}
+
+async function refreshClientJobState(options = {}) {
+  const loadImagesOnRemoteCompletion = Boolean(options.loadImagesOnRemoteCompletion);
+  const response = await apiFetch("/client-jobs", { cache: "no-store" });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_) {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(formatApiError(payload, "Failed to load client job state."));
+  }
+  const remoteJob = normalizeStoredJob(payload?.active_job, {
+    status: payload?.active_job?.status || "generating",
+    remoteInFlight: true,
+  });
+
+  if (remoteJob) {
+    const matchingQueuedJob =
+      state.queue.find((job) => job.placeholderId === remoteJob.placeholderId) || null;
+    const matchingActiveJob =
+      state.activeJob && state.activeJob.placeholderId === remoteJob.placeholderId ? state.activeJob : null;
+    state.queue = state.queue.filter((job) => job.placeholderId !== remoteJob.placeholderId);
+    state.activeJob = normalizeStoredJob(
+      {
+        ...matchingQueuedJob,
+        ...matchingActiveJob,
+        ...remoteJob,
+      },
+      {
+        placeholderId: remoteJob.placeholderId,
+        status: remoteJob.status,
+        remoteInFlight: true,
+        enqueuedAt:
+          matchingActiveJob?.enqueuedAt ??
+          matchingQueuedJob?.enqueuedAt ??
+          remoteJob.enqueuedAt,
+      },
+    );
+    persistClientQueueState();
+    renderGallery();
+    updateGenerateButtonState();
+    scheduleClientJobPoll();
+    return;
+  }
+
+  stopClientJobPolling();
+  if (state.activeJob && state.activeJob.remoteInFlight) {
+    state.activeJob = null;
+    persistClientQueueState();
+    renderGallery();
+    updateGenerateButtonState();
+    if (loadImagesOnRemoteCompletion) {
+      await loadImages();
+    }
+    processGenerationQueue().catch((error) => setStatus(String(error?.message || error), true));
+  }
+}
+
 function galleryKeyForPending(job) {
   return `pending:${job.placeholderId}`;
 }
@@ -376,6 +695,84 @@ function getGalleryNodeMap() {
     map.set(node.dataset.galleryKey, node);
   }
   return map;
+}
+
+function getResponsiveGalleryColumns(desired) {
+  const next = Math.max(1, Number(desired) || 1);
+  if (window.innerWidth <= 600) return 1;
+  if (window.innerWidth <= 960) return Math.min(2, next);
+  if (window.innerWidth <= 1280) return Math.min(3, next);
+  return next;
+}
+
+function getGalleryGap() {
+  const styles = window.getComputedStyle(galleryEl);
+  const raw = parseFloat(styles.gap || styles.rowGap || "0");
+  return Number.isFinite(raw) ? raw : 16;
+}
+
+function getTileAspectRatio(tile) {
+  const width = Number(tile?.dataset?.aspectWidth || 0);
+  const height = Number(tile?.dataset?.aspectHeight || 0);
+  if (width > 0 && height > 0) {
+    return width / height;
+  }
+  return 1;
+}
+
+function applyMasonryLayout() {
+  const nodes = [...galleryEl.querySelectorAll("[data-gallery-key]")].filter(
+    (node) => !node.classList.contains("removing"),
+  );
+  if (nodes.length === 0) {
+    galleryEl.style.height = "";
+    return;
+  }
+
+  const gap = getGalleryGap();
+  const maxResponsiveColumns = getResponsiveGalleryColumns(state.galleryColumns);
+  const containerWidth = Math.max(0, galleryEl.clientWidth);
+  const maxFitColumns = Math.max(1, Math.floor((containerWidth + gap) / (180 + gap)) || 1);
+  const columns = Math.max(1, Math.min(maxResponsiveColumns, maxFitColumns));
+  const columnWidth = Math.max(1, Math.floor((containerWidth - gap * (columns - 1)) / columns));
+  const heights = new Array(columns).fill(0);
+
+  for (const node of nodes) {
+    const ratio = getTileAspectRatio(node);
+    const tileHeight = Math.max(120, Math.round(columnWidth / Math.max(0.1, ratio)));
+    let columnIndex = 0;
+    for (let index = 1; index < heights.length; index += 1) {
+      if (heights[index] < heights[columnIndex]) {
+        columnIndex = index;
+      }
+    }
+    node.style.width = `${columnWidth}px`;
+    node.style.height = `${tileHeight}px`;
+    node.style.left = `${columnIndex * (columnWidth + gap)}px`;
+    node.style.top = `${heights[columnIndex]}px`;
+    heights[columnIndex] += tileHeight + gap;
+  }
+
+  galleryEl.style.height = `${Math.max(0, Math.max(...heights) - gap)}px`;
+}
+
+function applyGalleryLayout() {
+  applyMasonryLayout();
+}
+
+function scheduleGalleryRelayout({ animate = false } = {}) {
+  const before = animate ? captureGalleryPositions() : null;
+  if (state.galleryRelayoutFrame !== null) {
+    window.cancelAnimationFrame(state.galleryRelayoutFrame);
+    state.galleryRelayoutFrame = null;
+  }
+  state.galleryRelayoutFrame = window.requestAnimationFrame(() => {
+    state.galleryRelayoutFrame = null;
+    applyGalleryLayout();
+    if (before) {
+      window.requestAnimationFrame(() => animateGalleryLayout(before));
+    }
+  });
 }
 
 function captureGalleryPositions() {
@@ -448,7 +845,8 @@ function scheduleTileRemoval(tile) {
     if (tile.parentElement === galleryEl) {
       tile.remove();
     }
-    requestAnimationFrame(() => animateGalleryLayout(before));
+    scheduleGalleryRelayout({ animate: false });
+    window.requestAnimationFrame(() => animateGalleryLayout(before));
   };
   tile.addEventListener("transitionend", cleanup, { once: true });
   handle.timeoutId = window.setTimeout(cleanup, 240);
@@ -476,7 +874,6 @@ function cancelZipDownload() {
 function setGalleryColumns(count, options = {}) {
   const next = Math.max(3, Math.min(8, Number(count) || 4));
   const animate = Boolean(options.animate);
-  const before = animate ? captureGalleryPositions() : null;
   state.galleryColumns = next;
   state.pendingGalleryColumns = next;
   galleryDensitySliderEl.value = String(next);
@@ -485,9 +882,7 @@ function setGalleryColumns(count, options = {}) {
     window.localStorage.setItem(GALLERY_COLUMNS_STORAGE_KEY, String(next));
   } catch (_) {
   }
-  if (before) {
-    requestAnimationFrame(() => animateGalleryLayout(before));
-  }
+  scheduleGalleryRelayout({ animate });
 }
 
 function scheduleGalleryColumns(count) {
@@ -609,6 +1004,25 @@ function updateReverseButton() {
     reverseOrderButtonEl.textContent = "Oldest First";
     reverseOrderButtonEl.classList.add("reversed");
   }
+}
+
+function updateColorSwatches() {
+  const buttons = galleryColorFiltersEl.querySelectorAll("[data-color-filter]");
+  for (const button of buttons) {
+    const color = String(button.dataset.colorFilter || "").trim().toLowerCase();
+    const active = color && color === state.activeColorFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+}
+
+async function setActiveColorFilter(color) {
+  const normalized = GALLERY_COLOR_FILTERS.includes(String(color || "").trim().toLowerCase())
+    ? String(color || "").trim().toLowerCase()
+    : null;
+  state.activeColorFilter = state.activeColorFilter === normalized ? null : normalized;
+  updateColorSwatches();
+  await loadImages();
 }
 
 function updateFreezeSeedButton() {
@@ -878,6 +1292,60 @@ function hideConfirmModal() {
   confirmModalEl.setAttribute("aria-hidden", "true");
 }
 
+function removeQueuedJob(placeholderId) {
+  const target = String(placeholderId || "").trim();
+  if (!target) return false;
+  const previousLength = state.queue.length;
+  state.queue = state.queue.filter((job) => job.placeholderId !== target);
+  if (state.queue.length === previousLength) {
+    return false;
+  }
+  persistClientQueueState();
+  renderGallery();
+  updateGenerateButtonState();
+  return true;
+}
+
+async function requestActiveJobCancel(job) {
+  if (!job || !job.placeholderId || !state.activeJob || state.activeJob.placeholderId !== job.placeholderId) {
+    return false;
+  }
+  if (state.activeJob.status !== "cancelling") {
+    state.activeJob.status = "cancelling";
+    persistClientQueueState();
+    renderGallery();
+  }
+  const response = await apiFetch("/client-jobs/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: job.placeholderId }),
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_) {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(formatApiError(payload, "Failed to cancel active job."));
+  }
+  setStatus(String(payload?.message || "Cancellation requested."));
+  return true;
+}
+
+async function cancelPendingJobById(placeholderId) {
+  const target = String(placeholderId || "").trim();
+  if (!target) return false;
+  if (state.activeJob && state.activeJob.placeholderId === target) {
+    return requestActiveJobCancel(state.activeJob);
+  }
+  const removed = removeQueuedJob(target);
+  if (removed) {
+    setStatus("Queued job cancelled.");
+  }
+  return removed;
+}
+
 function startDisconnectEffect() {
   disconnectOverlayEl.classList.remove("active");
   disconnectOverlayEl.classList.remove("hidden");
@@ -894,18 +1362,16 @@ function stopDisconnectEffect() {
   disconnectOverlayEl.setAttribute("aria-hidden", "true");
 }
 
-function findPendingJob(placeholderId) {
-  return state.pendingJobs.find((job) => job.placeholderId === placeholderId) || null;
-}
-
-function removePendingJob(placeholderId) {
-  state.pendingJobs = state.pendingJobs.filter((job) => job.placeholderId !== placeholderId);
-}
-
 function pendingJobLabel(job, queuePosition) {
   const isUpscale = job.kind === "upscale";
+  if (job.status === "cancelling") {
+    return "CANCELLING...";
+  }
   if (job.status === "generating") {
     return isUpscale ? "UPSCALING..." : "GENERATING...";
+  }
+  if (job.status === "upscaling") {
+    return "UPSCALING...";
   }
   if (queuePosition >= 0) {
     const prefix = isUpscale ? "UPSCALE QUEUED" : "QUEUED";
@@ -916,7 +1382,7 @@ function pendingJobLabel(job, queuePosition) {
 
 function createPendingTile(job) {
   const tile = document.createElement("article");
-  tile.className = "tile generating";
+  tile.className = "tile pending";
   tile.dataset.galleryKey = galleryKeyForPending(job);
   tile.dataset.placeholderId = job.placeholderId;
 
@@ -927,6 +1393,16 @@ function createPendingTile(job) {
   const spinner = document.createElement("div");
   spinner.className = "tile-spinner";
   canvas.append(spinner);
+
+  const cancelButton = document.createElement("button");
+  cancelButton.className = "tile-pending-cancel";
+  cancelButton.type = "button";
+  cancelButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const placeholderId = tile.dataset.placeholderId || "";
+    cancelPendingJobById(placeholderId).catch((error) => setStatus(String(error?.message || error), true));
+  });
+  canvas.append(cancelButton);
   updatePendingTile(tile, job);
   tile.classList.add("entering");
   finalizeEnteringTile(tile);
@@ -937,15 +1413,27 @@ function updatePendingTile(tile, job) {
   cancelScheduledTileRemoval(tile);
   tile.dataset.galleryKey = galleryKeyForPending(job);
   tile.dataset.placeholderId = job.placeholderId;
-  tile.classList.add("generating");
+  tile.dataset.aspectWidth = String(Math.max(1, Number(job.width) || 1));
+  tile.dataset.aspectHeight = String(Math.max(1, Number(job.height) || 1));
+  tile.classList.add("pending");
+  tile.classList.toggle("generating", isActiveJobStatus(job.status));
+  tile.classList.toggle("queued", !isActiveJobStatus(job.status));
+  tile.classList.toggle("cancelling", job.status === "cancelling");
   const canvas = tile.querySelector(".tile-placeholder");
   const spinner = tile.querySelector(".tile-spinner");
+  const cancelButton = tile.querySelector(".tile-pending-cancel");
   if (canvas) {
     canvas.style.aspectRatio = `${job.width} / ${job.height}`;
   }
   if (spinner) {
     const queuePosition = state.queue.findIndex((queued) => queued.placeholderId === job.placeholderId);
     spinner.textContent = pendingJobLabel(job, queuePosition);
+  }
+  if (cancelButton instanceof HTMLButtonElement) {
+    cancelButton.textContent = job.status === "cancelling" ? "Cancelling" : "Cancel";
+    cancelButton.disabled = job.status === "cancelling";
+    cancelButton.setAttribute("aria-label", `Cancel ${job.kind === "upscale" ? "upscale" : "generation"} job`);
+    cancelButton.title = "Cancel";
   }
 }
 
@@ -1055,8 +1543,12 @@ function updateImageTile(tile, item) {
   cancelScheduledTileRemoval(tile);
   const upscaled = isUpscaledItem(item);
   const selected = state.selectedFilenames.has(item.filename);
+  const aspectWidth = Math.max(1, Number(item.width) || 1);
+  const aspectHeight = Math.max(1, Number(item.height) || 1);
   tile.dataset.galleryKey = galleryKeyForImage(item);
   tile.dataset.filename = item.filename;
+  tile.dataset.aspectWidth = String(aspectWidth);
+  tile.dataset.aspectHeight = String(aspectHeight);
   tile.classList.toggle("multiselect-active", state.multiSelectMode);
   tile.classList.toggle("selected", selected);
 
@@ -1105,9 +1597,19 @@ function updateImageTile(tile, item) {
 }
 
 function buildDesiredGalleryEntries() {
-  const pending = state.newestFirst ? [...state.pendingJobs] : [];
+  const pendingJobs = [...state.pendingJobs];
+  const activePending = pendingJobs.find((job) => isActiveJobStatus(job.status)) || null;
+  const queuedPending = pendingJobs
+    .filter((job) => !isActiveJobStatus(job.status))
+    .sort((left, right) =>
+      state.newestFirst ? right.enqueuedAt - left.enqueuedAt : left.enqueuedAt - right.enqueuedAt
+    );
+  const pendingDisplay = state.newestFirst
+    ? [...(activePending ? [activePending] : []), ...queuedPending]
+    : [...queuedPending, ...(activePending ? [activePending] : [])];
+  const pending = state.newestFirst ? pendingDisplay : [];
   const items = [...state.galleryItems];
-  const trailingPending = state.newestFirst ? [] : [...state.pendingJobs];
+  const trailingPending = state.newestFirst ? [] : pendingDisplay;
   const desired = [];
   for (const job of pending) {
     desired.push({ key: galleryKeyForPending(job), kind: "pending", value: job });
@@ -1122,7 +1624,6 @@ function buildDesiredGalleryEntries() {
 }
 
 function renderGallery() {
-  const before = captureGalleryPositions();
   syncSelectedFilenames();
   updateMultiSelectControls();
   updateGalleryCount(state.galleryItems.length);
@@ -1130,6 +1631,7 @@ function renderGallery() {
   const hasContent = desiredEntries.length > 0;
   emptyStateEl.classList.toggle("hidden", hasContent);
   if (!hasContent) {
+    galleryEl.style.height = "";
     for (const tile of galleryEl.querySelectorAll("[data-gallery-key]")) {
       scheduleTileRemoval(tile);
     }
@@ -1154,7 +1656,7 @@ function renderGallery() {
     scheduleTileRemoval(tile);
   }
 
-  requestAnimationFrame(() => animateGalleryLayout(before));
+  scheduleGalleryRelayout({ animate: true });
 }
 
 function updateGalleryCount(imageCount = state.galleryItems.length) {
@@ -1226,6 +1728,9 @@ async function loadImages() {
   if (filterValue) {
     query.set("prompt", filterValue);
   }
+  if (state.activeColorFilter) {
+    query.set("color", state.activeColorFilter);
+  }
 
   const response = await apiFetch(`/images?${query.toString()}`, { cache: "no-store" });
   if (!response.ok) {
@@ -1241,10 +1746,13 @@ async function loadImages() {
   if (requestSeq !== state.galleryLoadRequestSeq) {
     return;
   }
+  state.galleryColorCacheActive = Boolean(payload?.color_cache?.active);
+  scheduleGalleryColorCachePoll();
   state.galleryItems = sortItems(payload.items || []);
   syncSelectedFilenames();
   renderGallery();
   syncViewerWithGallery();
+  syncGalleryColorCacheStatusLine();
 }
 
 async function deleteImage(filename, options = {}) {
@@ -1416,16 +1924,12 @@ function enqueueGenerationFromPrompt() {
     seed,
     enhance_prompt: state.promptEnhance,
     procedural_creativity: state.proceduralCreativity,
+    enqueuedAt: Date.now(),
+    remoteInFlight: false,
   };
 
   state.queue.push(job);
-  state.pendingJobs.push({
-    kind: "generate",
-    placeholderId,
-    width: dimensions.width,
-    height: dimensions.height,
-    status: "queued",
-  });
+  persistClientQueueState();
   renderGallery();
   updateGenerateButtonState();
   const outstanding = totalOutstandingJobs();
@@ -1468,16 +1972,13 @@ function enqueueUpscaleFromItem(item) {
     seed,
     pack: preferredPack,
     enhance_prompt: state.promptEnhance,
+    source_filename: sourceFilename,
+    enqueuedAt: Date.now(),
+    remoteInFlight: false,
   };
 
   state.queue.push(job);
-  state.pendingJobs.push({
-    kind: "upscale",
-    placeholderId,
-    width: targetWidth,
-    height: targetHeight,
-    status: "queued",
-  });
+  persistClientQueueState();
   renderGallery();
   updateGenerateButtonState();
   const outstanding = totalOutstandingJobs();
@@ -1492,13 +1993,16 @@ async function processGenerationQueue() {
 
   try {
     while (state.queue.length > 0 || state.activeJob) {
+      if (state.activeJob && state.activeJob.remoteInFlight) {
+        scheduleClientJobPoll();
+        break;
+      }
       if (!state.activeJob) {
         state.activeJob = state.queue.shift() || null;
         if (!state.activeJob) break;
-        const pending = findPendingJob(state.activeJob.placeholderId);
-        if (pending) {
-          pending.status = "generating";
-        }
+        state.activeJob.status = state.activeJob.kind === "upscale" ? "upscaling" : "generating";
+        state.activeJob.remoteInFlight = false;
+        persistClientQueueState();
         renderGallery();
         updateGenerateButtonState();
       }
@@ -1516,12 +2020,14 @@ async function processGenerationQueue() {
         const endpoint = isUpscaleJob ? "/upscale" : "/generate";
         const payloadBody = isUpscaleJob
           ? {
+              job_id: job.placeholderId,
               filename: job.filename,
               pack: job.pack,
               seed: job.seed,
               enhance_prompt: job.enhance_prompt,
             }
           : {
+              job_id: job.placeholderId,
               prompt: job.prompt,
               width: job.width,
               height: job.height,
@@ -1536,6 +2042,13 @@ async function processGenerationQueue() {
         });
         const payload = await response.json();
         if (!response.ok) {
+          if (response.status === 409) {
+            setStatus(isUpscaleJob ? "Upscale cancelled." : "Generation cancelled.");
+            state.activeJob = null;
+            persistClientQueueState();
+            await loadImages();
+            continue;
+          }
           throw new Error(formatApiError(payload, isUpscaleJob ? "Upscale failed." : "Generation failed."));
         }
         if (isUpscaleJob) {
@@ -1546,12 +2059,12 @@ async function processGenerationQueue() {
         } else {
           setStatus(`Saved ${payload.filename} in ${payload.duration_ms} ms (seed ${payload.seed}).`);
         }
-        removePendingJob(job.placeholderId);
         state.activeJob = null;
+        persistClientQueueState();
         await loadImages();
       } catch (error) {
-        removePendingJob(job.placeholderId);
         state.activeJob = null;
+        persistClientQueueState();
         renderGallery();
         setStatus(String(error?.message || error), true);
       } finally {
@@ -1581,7 +2094,10 @@ async function onDeleteGallery() {
     }
     hideViewer();
     state.galleryItems = [];
+    state.queue = [];
+    state.activeJob = null;
     state.pendingJobs = [];
+    persistClientQueueState();
     clearMultiSelection();
     renderGallery();
     emptyStateEl.classList.remove("hidden");
@@ -1704,9 +2220,11 @@ function endDrag(event) {
 
 async function bootstrap() {
   try {
+    restoreClientQueueState();
     setGalleryColumns(state.galleryColumns);
     updateTopbarOffset();
     updateReverseButton();
+    updateColorSwatches();
     applyOrientationButtonState();
     updateFreezeSeedButton();
     updateProceduralLatentControls();
@@ -1716,7 +2234,15 @@ async function bootstrap() {
     updateViewerNavState();
     updateGenerateButtonState();
     await loadImages();
-    setStatus("Ready.");
+    await refreshClientJobState();
+    if (state.queue.length > 0 || state.activeJob) {
+      renderGallery();
+      processGenerationQueue().catch((error) => setStatus(String(error?.message || error), true));
+    } else if (state.galleryColorCacheActive) {
+      setStatus(GALLERY_COLOR_CACHE_STATUS_MESSAGE);
+    } else {
+      setStatus("Ready.");
+    }
   } catch (error) {
     setStatus(String(error?.message || error), true);
   }
@@ -1762,7 +2288,10 @@ promptInputEl.addEventListener("keydown", (event) => {
 promptInputEl.addEventListener("input", updateTopbarOffset);
 promptInputEl.addEventListener("mouseup", updateTopbarOffset);
 promptInputEl.addEventListener("touchend", updateTopbarOffset);
-window.addEventListener("resize", updateTopbarOffset);
+window.addEventListener("resize", () => {
+  updateTopbarOffset();
+  scheduleGalleryRelayout({ animate: true });
+});
 window.addEventListener(
   "scroll",
   () => {
@@ -1782,6 +2311,15 @@ reverseOrderButtonEl.addEventListener("click", () => {
   state.newestFirst = !state.newestFirst;
   updateReverseButton();
   loadImages().catch((error) => setStatus(String(error?.message || error), true));
+});
+galleryColorFiltersEl.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const button = target.closest("[data-color-filter]");
+  if (!(button instanceof HTMLButtonElement)) return;
+  setActiveColorFilter(button.dataset.colorFilter || null).catch((error) =>
+    setStatus(String(error?.message || error), true)
+  );
 });
 galleryDensitySliderEl.addEventListener("input", () => {
   scheduleGalleryColumns(galleryDensitySliderEl.value);

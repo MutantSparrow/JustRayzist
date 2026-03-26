@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import colorsys
 import shutil
 import sqlite3
 from contextlib import contextmanager
@@ -38,6 +39,47 @@ _WINDOWS_RESERVED_NAMES = {
     "lpt8",
     "lpt9",
 }
+COLOR_FLAG_BLACK = 1
+COLOR_FLAG_WHITE = 2
+COLOR_FLAG_RED = 4
+COLOR_FLAG_YELLOW = 8
+COLOR_FLAG_BLUE = 16
+COLOR_FLAG_GREEN = 32
+COLOR_FLAG_BY_NAME = {
+    "black": COLOR_FLAG_BLACK,
+    "white": COLOR_FLAG_WHITE,
+    "red": COLOR_FLAG_RED,
+    "yellow": COLOR_FLAG_YELLOW,
+    "blue": COLOR_FLAG_BLUE,
+    "green": COLOR_FLAG_GREEN,
+}
+_COLOR_ANALYSIS_SIZE = 64
+_COLOR_ALPHA_MIN = 32
+_COLOR_BLACK_VALUE_MAX = 0.19
+_COLOR_WHITE_VALUE_MIN = 0.82
+_COLOR_WHITE_SATURATION_MAX = 0.20
+_COLOR_BLACK_SATURATION_MAX = 0.22
+_COLOR_BLACK_DOMINANT_RATIO_MIN = 0.32
+_COLOR_WHITE_DOMINANT_RATIO_MIN = 0.26
+_COLOR_CHROMA_VALUE_MIN = 0.30
+_COLOR_RED_SATURATION_MIN = 0.50
+_COLOR_YELLOW_SATURATION_MIN = 0.40
+_COLOR_GREEN_SATURATION_MIN = 0.32
+_COLOR_BLUE_SATURATION_MIN = 0.42
+_COLOR_RED_DOMINANT_RATIO_MIN = 0.18
+_COLOR_YELLOW_DOMINANT_RATIO_MIN = 0.13
+_COLOR_GREEN_DOMINANT_RATIO_MIN = 0.11
+_COLOR_BLUE_DOMINANT_RATIO_MIN = 0.15
+_COLOR_RED_HUE_MIN = 325.0
+_COLOR_RED_HUE_MAX = 14.0
+_COLOR_YELLOW_HUE_MIN = 36.0
+_COLOR_YELLOW_HUE_MAX = 68.0
+_COLOR_GREEN_HUE_MIN = 82.0
+_COLOR_GREEN_HUE_MAX = 160.0
+_COLOR_BLUE_HUE_MIN = 198.0
+_COLOR_BLUE_HUE_MAX = 252.0
+COLOR_CACHE_VERSION = "dominant_v6"
+_GALLERY_META_COLOR_CACHE_VERSION_KEY = "color_cache_version"
 
 
 def _utc_timestamp() -> str:
@@ -175,6 +217,7 @@ def _create_images_table(conn: sqlite3.Connection) -> None:
             source_filename TEXT,
             source_width INTEGER,
             source_height INTEGER,
+            color_flags INTEGER,
             created_at TEXT NOT NULL
         );
         """
@@ -185,6 +228,18 @@ def _create_images_table(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_images_owner_timestamp ON images(owner_id, timestamp DESC);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_images_timestamp ON images(timestamp DESC);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_images_prompt ON images(prompt);")
+
+
+def _create_gallery_meta_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS gallery_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
 
 
 def _images_has_legacy_unique_filename(conn: sqlite3.Connection) -> bool:
@@ -224,8 +279,123 @@ def _read_png_metadata(image_path: Path) -> dict[str, Any]:
     return {str(key): value for key, value in info.items()}
 
 
+def _resolve_color_filter_flag(color_filter: str | None) -> int | None:
+    if color_filter is None:
+        return None
+    normalized = str(color_filter or "").strip().lower()
+    if not normalized:
+        return None
+    return COLOR_FLAG_BY_NAME.get(normalized)
+
+
+def _classify_image_color_flags(image_path: Path) -> int:
+    with Image.open(image_path) as original:
+        rgba = original.convert("RGBA")
+        resampling = getattr(getattr(Image, "Resampling", Image), "BOX", Image.BILINEAR)
+        sample = rgba.resize((_COLOR_ANALYSIS_SIZE, _COLOR_ANALYSIS_SIZE), resample=resampling)
+
+    classified_pixels = 0
+    black_pixels = 0
+    white_pixels = 0
+    red_pixels = 0
+    yellow_pixels = 0
+    green_pixels = 0
+    blue_pixels = 0
+
+    for red, green, blue, alpha in sample.getdata():
+        if int(alpha) < _COLOR_ALPHA_MIN:
+            continue
+        classified_pixels += 1
+        red_f = float(red) / 255.0
+        green_f = float(green) / 255.0
+        blue_f = float(blue) / 255.0
+        hue, saturation, value = colorsys.rgb_to_hsv(red_f, green_f, blue_f)
+        hue_deg = hue * 360.0
+
+        if value <= _COLOR_BLACK_VALUE_MAX and saturation <= _COLOR_BLACK_SATURATION_MAX:
+            black_pixels += 1
+            continue
+
+        if value >= _COLOR_WHITE_VALUE_MIN and saturation <= _COLOR_WHITE_SATURATION_MAX:
+            white_pixels += 1
+
+        if value < _COLOR_CHROMA_VALUE_MIN:
+            continue
+        if (
+            saturation >= _COLOR_RED_SATURATION_MIN
+            and (hue_deg >= _COLOR_RED_HUE_MIN or hue_deg < _COLOR_RED_HUE_MAX)
+        ):
+            red_pixels += 1
+        elif (
+            saturation >= _COLOR_YELLOW_SATURATION_MIN
+            and _COLOR_YELLOW_HUE_MIN <= hue_deg < _COLOR_YELLOW_HUE_MAX
+        ):
+            yellow_pixels += 1
+        elif (
+            saturation >= _COLOR_GREEN_SATURATION_MIN
+            and _COLOR_GREEN_HUE_MIN <= hue_deg < _COLOR_GREEN_HUE_MAX
+        ):
+            green_pixels += 1
+        elif (
+            saturation >= _COLOR_BLUE_SATURATION_MIN
+            and _COLOR_BLUE_HUE_MIN <= hue_deg < _COLOR_BLUE_HUE_MAX
+        ):
+            blue_pixels += 1
+
+    if classified_pixels <= 0:
+        return 0
+
+    black_ratio = black_pixels / classified_pixels
+    white_ratio = white_pixels / classified_pixels
+    red_ratio = red_pixels / classified_pixels
+    yellow_ratio = yellow_pixels / classified_pixels
+    green_ratio = green_pixels / classified_pixels
+    blue_ratio = blue_pixels / classified_pixels
+
+    candidates: list[tuple[int, float]] = []
+    if black_ratio >= _COLOR_BLACK_DOMINANT_RATIO_MIN:
+        candidates.append((COLOR_FLAG_BLACK, black_ratio))
+    if white_ratio >= _COLOR_WHITE_DOMINANT_RATIO_MIN:
+        candidates.append((COLOR_FLAG_WHITE, white_ratio))
+    if red_ratio >= _COLOR_RED_DOMINANT_RATIO_MIN:
+        candidates.append((COLOR_FLAG_RED, red_ratio))
+    if yellow_ratio >= _COLOR_YELLOW_DOMINANT_RATIO_MIN:
+        candidates.append((COLOR_FLAG_YELLOW, yellow_ratio))
+    if green_ratio >= _COLOR_GREEN_DOMINANT_RATIO_MIN:
+        candidates.append((COLOR_FLAG_GREEN, green_ratio))
+    if blue_ratio >= _COLOR_BLUE_DOMINANT_RATIO_MIN:
+        candidates.append((COLOR_FLAG_BLUE, blue_ratio))
+
+    if not candidates:
+        return 0
+    candidates.sort(key=lambda item: item[1], reverse=True)
+    return candidates[0][0]
+
+
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
+
+
+def _get_gallery_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM gallery_meta WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return None
+    value = row["value"]
+    return str(value) if value is not None else None
+
+
+def _set_gallery_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO gallery_meta (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value=excluded.value,
+            updated_at=excluded.updated_at
+        ;
+        """,
+        (str(key), str(value), _utc_timestamp()),
+    )
 
 
 def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
@@ -238,6 +408,7 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
         "source_filename": "TEXT",
         "source_width": "INTEGER",
         "source_height": "INTEGER",
+        "color_flags": "INTEGER",
     }
     for name, sql_type in required_columns.items():
         if name in existing:
@@ -246,6 +417,7 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> None:
+    _create_gallery_meta_table(conn)
     if not _table_exists(conn, "images"):
         _create_images_table(conn)
         return
@@ -289,9 +461,9 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
             INSERT INTO images (
                 owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
                 width, height, model_pack, backend, device, steps, guidance_scale, duration_ms, mode,
-                source_image, source_filename, source_width, source_height, created_at
+                source_image, source_filename, source_width, source_height, color_flags, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(owner_id, filename) DO UPDATE SET
                 output_path=excluded.output_path,
                 prompt=excluded.prompt,
@@ -310,7 +482,8 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 source_image=excluded.source_image,
                 source_filename=excluded.source_filename,
                 source_width=excluded.source_width,
-                source_height=excluded.source_height
+                source_height=excluded.source_height,
+                color_flags=excluded.color_flags
             ;
             """,
             (
@@ -334,6 +507,7 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 record.get("source_filename"),
                 _to_int(record.get("source_width")),
                 _to_int(record.get("source_height")),
+                _to_int(record.get("color_flags")),
                 str(record.get("created_at") or _utc_timestamp()),
             ),
         )
@@ -345,6 +519,7 @@ def ensure_gallery_schema(settings: AppSettings) -> Path:
     db_path = _gallery_db_path(settings)
     with _open_connection(db_path) as conn:
         _migrate_images_schema(conn, settings)
+        _create_gallery_meta_table(conn)
         conn.commit()
     return db_path
 
@@ -388,15 +563,16 @@ def _upsert_image(
     created_at = _utc_timestamp()
     filename = image_path.name
     resolved_owner = normalize_owner_id(owner_id) if owner_id else _owner_id_from_output_path(settings, image_path)
+    color_flags = _classify_image_color_flags(image_path)
 
     conn.execute(
         """
         INSERT INTO images (
             owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
             width, height, model_pack, backend, device, steps, guidance_scale, duration_ms,
-            mode, source_image, source_filename, source_width, source_height, created_at
+            mode, source_image, source_filename, source_width, source_height, color_flags, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(owner_id, filename) DO UPDATE SET
             output_path=excluded.output_path,
             prompt=excluded.prompt,
@@ -415,7 +591,8 @@ def _upsert_image(
             source_image=excluded.source_image,
             source_filename=excluded.source_filename,
             source_width=excluded.source_width,
-            source_height=excluded.source_height
+            source_height=excluded.source_height,
+            color_flags=excluded.color_flags
         ;
         """,
         (
@@ -439,6 +616,7 @@ def _upsert_image(
             metadata.get("source_filename"),
             _to_int(metadata.get("source_width")),
             _to_int(metadata.get("source_height")),
+            color_flags,
             created_at,
         ),
     )
@@ -486,10 +664,70 @@ def sync_outputs_to_gallery(settings: AppSettings) -> int:
     return indexed + removed_missing
 
 
+def _rebuild_color_flags(
+    conn: sqlite3.Connection,
+    settings: AppSettings,
+    *,
+    owner_id: str | None = None,
+    batch_size: int = 100,
+) -> int:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if owner_id:
+        clauses.append("owner_id = ?")
+        params.append(owner_id)
+    rows = conn.execute(
+        "SELECT id, output_path, color_flags FROM images"
+        + (f" WHERE {' AND '.join(clauses)}" if clauses else ""),
+        tuple(params),
+    ).fetchall()
+    updated = 0
+    processed = 0
+    for row in rows:
+        try:
+            image_path = _resolve_managed_output_path(settings, row["output_path"])
+            color_flags = _classify_image_color_flags(image_path) if image_path.exists() else 0
+        except Exception:
+            color_flags = 0
+        if int(row["color_flags"] or 0) == int(color_flags):
+            processed += 1
+        else:
+            conn.execute(
+                "UPDATE images SET color_flags = ? WHERE id = ?",
+                (int(color_flags), int(row["id"])),
+            )
+            updated += 1
+            processed += 1
+        if processed % max(1, batch_size) == 0:
+            conn.commit()
+    return updated
+
+
+def gallery_color_cache_version(settings: AppSettings) -> str | None:
+    db_path = ensure_gallery_schema(settings)
+    with _open_connection(db_path) as conn:
+        return _get_gallery_meta(conn, _GALLERY_META_COLOR_CACHE_VERSION_KEY)
+
+
+def gallery_color_cache_needs_rebuild(settings: AppSettings) -> bool:
+    version = gallery_color_cache_version(settings)
+    return version != COLOR_CACHE_VERSION
+
+
+def rebuild_gallery_color_cache(settings: AppSettings, *, batch_size: int = 100) -> int:
+    db_path = ensure_gallery_schema(settings)
+    with _open_connection(db_path) as conn:
+        updated = _rebuild_color_flags(conn, settings, batch_size=batch_size)
+        _set_gallery_meta(conn, _GALLERY_META_COLOR_CACHE_VERSION_KEY, COLOR_CACHE_VERSION)
+        conn.commit()
+    return updated
+
+
 def list_images(
     settings: AppSettings,
     owner_id: str | None = None,
     prompt_query: str | None = None,
+    color_filter: str | None = None,
     limit: int = 100,
     offset: int = 0,
     newest_first: bool = True,
@@ -499,6 +737,7 @@ def list_images(
     safe_offset = max(0, offset)
     order_keyword = "DESC" if newest_first else "ASC"
     scoped_owner = normalize_owner_id(owner_id) if owner_id else None
+    color_flag = _resolve_color_filter_flag(color_filter)
     with _open_connection(db_path) as conn:
         removed_missing = _prune_missing_rows(conn, settings, owner_id=scoped_owner)
         if removed_missing:
@@ -512,6 +751,9 @@ def list_images(
         if prompt_query:
             clauses.append("prompt LIKE ?")
             params.append(f"%{prompt_query}%")
+        if color_flag is not None:
+            clauses.append("(COALESCE(color_flags, 0) & ?) != 0")
+            params.append(color_flag)
         where_clause = "WHERE " + " AND ".join(clauses) if clauses else ""
 
         rows = conn.execute(
@@ -798,3 +1040,5 @@ def import_gallery_source(
         "failed": failed,
         "errors": errors[:20],
     }
+
+

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.api import main as api_main
+from app.core.cancellation import GenerationCancelledError
 
 CLIENT_HEADER = {"X-JustRayzist-Client": "Example-Client"}
 
@@ -28,6 +29,7 @@ def test_generate_route_forwards_current_payload(monkeypatch) -> None:
             "width": 832,
             "height": 1248,
             "pack_name": "Rayzist_bf16",
+            "job_id": "pending_123",
             "seed": 123,
             "scheduler_mode": "dpm",
             "enhance_prompt": True,
@@ -56,6 +58,7 @@ def test_generate_route_forwards_current_payload(monkeypatch) -> None:
             "width": 832,
             "height": 1248,
             "pack": "Rayzist_bf16",
+            "job_id": "pending_123",
             "seed": 123,
             "scheduler_mode": "dpm",
             "enhance_prompt": True,
@@ -86,6 +89,7 @@ def test_generate_route_rejects_invalid_procedural_creativity() -> None:
 def test_generate_route_accepts_slider_only_payload(monkeypatch) -> None:
     def fake_generate(**kwargs):
         assert kwargs["procedural_creativity"] == 1
+        assert kwargs["job_id"] is None
         return {
             "filename": "generated.png",
             "output_path": "S:/STABLEDIFFUSION/JustRayzist/outputs/example-client/generated.png",
@@ -116,11 +120,132 @@ def test_generate_route_accepts_slider_only_payload(monkeypatch) -> None:
     assert response.json()["filename"] == "generated.png"
 
 
+def test_generate_route_maps_cancellation_to_409(monkeypatch) -> None:
+    def fake_generate(**_kwargs):
+        raise GenerationCancelledError("Generation cancelled.")
+
+    monkeypatch.setattr(api_main.inference, "generate", fake_generate)
+
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/generate",
+        headers=CLIENT_HEADER,
+        json={"prompt": "hello world", "width": 1024, "height": 1024},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Generation cancelled."
+
+
+def test_upscale_route_forwards_job_id(monkeypatch) -> None:
+    def fake_upscale(**kwargs):
+        assert kwargs == {
+            "owner_id": "example-client",
+            "filename": "source.png",
+            "pack_name": "Rayzist_bf16",
+            "job_id": "pending_upscale_123",
+            "seed": 987,
+            "scheduler_mode": "euler",
+            "enhance_prompt": False,
+        }
+        return {
+            "filename": "upscaled.png",
+            "output_path": "S:/STABLEDIFFUSION/JustRayzist/outputs/example-client/upscaled.png",
+            "source_filename": "source.png",
+            "duration_ms": 2345,
+            "url": "/images/upscaled.png",
+        }
+
+    monkeypatch.setattr(api_main.inference, "upscale", fake_upscale)
+
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/upscale",
+        headers=CLIENT_HEADER,
+        json={
+            "filename": "source.png",
+            "pack": "Rayzist_bf16",
+            "job_id": "pending_upscale_123",
+            "seed": 987,
+            "scheduler_mode": "euler",
+            "enhance_prompt": False,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["filename"] == "upscaled.png"
+
+
+def test_upscale_route_maps_cancellation_to_409(monkeypatch) -> None:
+    def fake_upscale(**_kwargs):
+        raise GenerationCancelledError("Upscale cancelled.")
+
+    monkeypatch.setattr(api_main.inference, "upscale", fake_upscale)
+
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/upscale",
+        headers=CLIENT_HEADER,
+        json={"filename": "source.png"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Upscale cancelled."
+
+
+def test_client_jobs_route_requires_client_header() -> None:
+    client = TestClient(api_main.app)
+    response = client.get("/client-jobs")
+    assert response.status_code == 400
+    assert "Missing client id" in response.json()["detail"]
+
+
+def test_client_jobs_route_returns_service_payload(monkeypatch) -> None:
+    def fake_client_job_status(**kwargs):
+        assert kwargs == {"owner_id": "example-client"}
+        return {
+            "active_job": {
+                "job_id": "pending_123",
+                "kind": "generate",
+                "status": "generating",
+                "width": 1024,
+                "height": 1024,
+            }
+        }
+
+    monkeypatch.setattr(api_main.inference, "client_job_status", fake_client_job_status)
+
+    client = TestClient(api_main.app)
+    response = client.get("/client-jobs", headers=CLIENT_HEADER)
+    assert response.status_code == 200
+    assert response.json()["active_job"]["job_id"] == "pending_123"
+
+
+def test_client_jobs_cancel_route_forwards_payload(monkeypatch) -> None:
+    def fake_cancel(**kwargs):
+        assert kwargs == {"owner_id": "example-client", "job_id": "pending_123"}
+        return {
+            "status": "ok",
+            "cancel_requested": True,
+            "job_id": "pending_123",
+            "message": "Cancellation requested.",
+        }
+
+    monkeypatch.setattr(api_main.inference, "request_cancel_client_job", fake_cancel)
+
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/client-jobs/cancel",
+        headers=CLIENT_HEADER,
+        json={"job_id": "pending_123"},
+    )
+    assert response.status_code == 200
+    assert response.json()["cancel_requested"] is True
+
+
 def test_images_route_returns_service_items(monkeypatch) -> None:
     def fake_list_images(**kwargs):
         assert kwargs == {
             "owner_id": "example-client",
             "prompt_query": "alpha",
+            "color_filter": "blue",
             "limit": 20,
             "offset": 5,
             "newest_first": False,
@@ -130,17 +255,29 @@ def test_images_route_returns_service_items(monkeypatch) -> None:
             {"filename": "b.png", "prompt": "beta"},
         ]
 
+
+    def fake_color_cache_status():
+        return {
+            "active": True,
+            "version": None,
+            "target_version": "dominant_v6",
+            "needs_rebuild": True,
+            "last_error": None,
+        }
+
     monkeypatch.setattr(api_main.inference, "list_images", fake_list_images)
+    monkeypatch.setattr(api_main.inference, "gallery_color_cache_status", fake_color_cache_status)
 
     client = TestClient(api_main.app)
     response = client.get(
-        "/images?prompt=alpha&limit=20&offset=5&newest_first=false",
+        "/images?prompt=alpha&color=blue&limit=20&offset=5&newest_first=false",
         headers=CLIENT_HEADER,
     )
     assert response.status_code == 200
     payload = response.json()
     assert payload["count"] == 2
     assert payload["items"][0]["filename"] == "a.png"
+    assert payload["color_cache"]["active"] is True
 
 
 def test_image_file_route_serves_png(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -198,6 +335,9 @@ def test_api_manifest_route_lists_bulk_download_route() -> None:
     assert payload["count"] >= 1
     items = payload["items"]
     assert any(item["path"] == "/images/download-zip" for item in items)
+    assert any(item["path"] == "/client-jobs" for item in items)
+    assert any(item["path"] == "/client-jobs/cancel" for item in items)
+    assert any(item["path"].startswith("/images?") and "color=blue" in item["path"] for item in items)
     assert any(item["path"] == "/health" for item in items)
 
 
@@ -234,4 +374,8 @@ def test_server_kill_route_schedules_shutdown(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["message"] == "Server shutdown initiated."
     assert called["count"] == 1
+
+
+
+
 

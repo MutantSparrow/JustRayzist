@@ -222,6 +222,61 @@ class DiffusersZImageBackend:
     _PROCEDURAL_LATENT_NOISE_MIX_LEVEL3 = 0.91
     _PROCEDURAL_LATENT_PREPROCESS = "procedural_normalize_mix"
     _PROCEDURAL_LATENT_RECIPE_VERSION = "proc_v4"
+    _PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS = 4000
+    _PROMPT_ENHANCEMENT_PRIMARY_MAX_NEW_TOKENS = 120
+    _PROMPT_ENHANCEMENT_RETRY_MAX_NEW_TOKENS = 160
+    _PROMPT_ENHANCEMENT_PIPELINE_MAX_SEQUENCE_LENGTH = 512
+    _PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET = 480
+    _PROMPT_STYLE_PATTERNS: tuple[str, ...] = (
+        r"\banime\b",
+        r"\bmanga\b",
+        r"\bcartoon\b",
+        r"\billustration\b",
+        r"\bcomic(?: book)?\b",
+        r"\bcel(?:-| )shad(?:e|ed|ing)\b",
+        r"\bpixel art\b",
+        r"\boil painting\b",
+        r"\bwatercolou?r\b",
+        r"\bgouache\b",
+        r"\bpastel\b",
+        r"\bconcept art\b",
+        r"\bmatte painting\b",
+        r"\bphotograph(?:y|ic)?\b",
+        r"\bphoto(?:realistic)?\b",
+        r"\bcinematic\b",
+        r"\beditorial\b",
+        r"\b3d render\b",
+        r"\b3d\b",
+        r"\bcgi\b",
+        r"\bdigital painting\b",
+        r"\bsketch\b",
+        r"\bcharcoal\b",
+        r"\bink(?: drawing)?\b",
+    )
+    _PROMPT_PRIORITY_KEYWORDS: tuple[str, ...] = (
+        "lighting",
+        "light",
+        "rim light",
+        "backlight",
+        "composition",
+        "framing",
+        "camera",
+        "lens",
+        "shot on",
+        "close-up",
+        "portrait",
+        "wide shot",
+        "environment",
+        "background",
+        "interior",
+        "exterior",
+        "studio",
+        "sunset",
+        "night",
+        "material",
+        "texture",
+        "color palette",
+    )
 
     def __init__(
         self,
@@ -235,6 +290,7 @@ class DiffusersZImageBackend:
         self._loaded: LoadedZImagePipeline | None = None
         self._img2img_pipe: Any | None = None
         self._active_scheduler_mode_by_pipe: dict[int, str] = {}
+        self._base_scheduler_config_by_pipe: dict[int, dict[str, Any]] = {}
         self._effective_execution_mode: str = "unknown"
         self._initial_execution_mode: str = "unknown"
         self._backend_name: str = self.BACKEND_NAME
@@ -262,6 +318,22 @@ class DiffusersZImageBackend:
         self._preflight_fallback_triggered = False
         self._high_runtime_fallback_latched = False
         self._high_runtime_pressure_hits = 0
+
+    @staticmethod
+    def _interrupt_pipe(pipe: Any | None) -> None:
+        if pipe is None:
+            return
+        if hasattr(pipe, "_interrupt"):
+            try:
+                setattr(pipe, "_interrupt", True)
+            except Exception:
+                return
+
+    def cancel_active(self) -> None:
+        loaded = self._loaded
+        if loaded is not None:
+            self._interrupt_pipe(loaded.pipeline)
+        self._interrupt_pipe(self._img2img_pipe)
 
     def _build_pipeline(self) -> LoadedZImagePipeline:
         return build_zimage_pipeline(
@@ -663,17 +735,23 @@ class DiffusersZImageBackend:
 
         from diffusers import DPMSolverMultistepScheduler, FlowMatchEulerDiscreteScheduler
 
-        current_config = dict(pipe.scheduler.config)
+        base_config = self._base_scheduler_config_by_pipe.setdefault(pipe_id, dict(pipe.scheduler.config))
         requested_mode = mode
 
         def _build_euler_scheduler() -> Any:
-            shift = current_config.get("shift")
+            shift = base_config.get("shift")
             if shift is None:
-                shift = current_config.get("flow_shift", 3.0)
+                shift = base_config.get("flow_shift", 3.0)
+            if base_config.get("use_dynamic_shifting", False):
+                LOGGER.warning(
+                    "FlowMatch Euler dynamic shifting is incompatible with the current Z-Image pipeline; "
+                    "forcing static shift for %s.",
+                    getattr(self._model_pack, "name", "<unknown-pack>"),
+                )
             return FlowMatchEulerDiscreteScheduler.from_config(
-                current_config,
+                base_config,
                 shift=shift,
-                use_dynamic_shifting=current_config.get("use_dynamic_shifting", False),
+                use_dynamic_shifting=False,
             )
 
         if mode in {
@@ -681,9 +759,9 @@ class DiffusersZImageBackend:
             self._SCHEDULER_DPM_EXP_LIGHT,
             self._SCHEDULER_DPM_DDIM,
         }:
-            base_flow_shift = current_config.get("flow_shift")
+            base_flow_shift = base_config.get("flow_shift")
             if base_flow_shift is None:
-                base_flow_shift = current_config.get("shift", 3.0)
+                base_flow_shift = base_config.get("shift", 3.0)
             dpm_kwargs: dict[str, Any] = {
                 "algorithm_type": "sde-dpmsolver++",
                 "solver_order": 2,
@@ -705,7 +783,7 @@ class DiffusersZImageBackend:
                 dpm_kwargs["use_dynamic_shifting"] = True
                 dpm_kwargs["time_shift_type"] = "exponential"
                 dpm_kwargs["timestep_spacing"] = "leading"
-            scheduler = DPMSolverMultistepScheduler.from_config(current_config, **dpm_kwargs)
+            scheduler = DPMSolverMultistepScheduler.from_config(base_config, **dpm_kwargs)
             is_img2img_pipe = "img2img" in pipe.__class__.__name__.lower()
             if is_img2img_pipe and not hasattr(scheduler, "scale_noise"):
                 LOGGER.warning(
@@ -724,6 +802,28 @@ class DiffusersZImageBackend:
         else:
             LOGGER.debug("Scheduler mode set to %s", mode)
         return mode
+
+    @staticmethod
+    def _is_scheduler_incompatibility_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        indicators = (
+            "scheduler",
+            "timestep",
+            "sigma",
+            "flowmatch",
+            "divide by zero",
+            "nan",
+            "non-finite",
+            "invalid value",
+        )
+        return any(indicator in message for indicator in indicators)
+
+    def _resolve_scheduler_retry_mode(self, current_mode: str, exc: Exception) -> str | None:
+        if current_mode != self._SCHEDULER_EULER:
+            return None
+        if not self._is_scheduler_incompatibility_error(exc):
+            return None
+        return self._SCHEDULER_DPM_EXP_LIGHT
 
     def _ensure_loaded(self) -> LoadedZImagePipeline:
         if self._loaded is None:
@@ -1783,10 +1883,13 @@ class DiffusersZImageBackend:
     @staticmethod
     def _build_rewrite_prompt(tokenizer: Any, prompt: str) -> str:
         system = (
-            "Rewrite the input. Preserve intent and return exactly one rewritten prompt with stronger visual "
-            "detail. Do not include analysis. Use concrete visual details only. Prefer natural language over "
-            "tag lists. Keep under 125 tokens. Include: subject, environment, lighting, composition/camera "
-            "if relevant, style/medium."
+            "Rewrite the input as exactly one stronger image-generation prompt. Preserve the user's intent and "
+            "preserve any explicit medium or style exactly. If the user says anime, keep it anime. If the user "
+            "says oil painting, keep it painterly. If the user says photograph, cinematic, editorial, or 3D render, "
+            "keep that visual mode and do not drift into a conflicting style. Expand only with concrete visible "
+            "details that improve subject clarity, environment, lighting, composition, materials, mood, and camera "
+            "when relevant. Prefer clear structured natural language over tag soup. Avoid filler adjectives unless "
+            "they describe something visible. Output the rewritten prompt only, with no analysis or explanation."
         )
         user_message = (
             "Rewrite this image prompt for better visual fidelity and specificity.\n\n"
@@ -1861,12 +1964,180 @@ class DiffusersZImageBackend:
             if len(words) >= 6 and unique_ratio < 0.34:
                 return "low_lexical_diversity"
 
-        if original_text and len(text) < len(original_text):
-            return "shorter_than_input"
-
         if text == original_text:
             return "unchanged"
         return "ok"
+
+    @staticmethod
+    def _render_pipeline_prompt(tokenizer: Any, prompt: str) -> str:
+        if hasattr(tokenizer, "apply_chat_template"):
+            messages = [{"role": "user", "content": prompt}]
+            try:
+                rendered = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=True,
+                )
+                if isinstance(rendered, str) and rendered.strip():
+                    return rendered
+            except TypeError:
+                try:
+                    rendered = tokenizer.apply_chat_template(
+                        messages,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                    )
+                    if isinstance(rendered, str) and rendered.strip():
+                        return rendered
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return prompt
+
+    @classmethod
+    def _pipeline_prompt_token_length(cls, tokenizer: Any, prompt: str) -> int:
+        rendered = cls._render_pipeline_prompt(tokenizer, prompt)
+        encoded = tokenizer(rendered, return_tensors="pt", truncation=False)
+        input_ids = getattr(encoded, "input_ids", None)
+        if input_ids is None and isinstance(encoded, dict):
+            input_ids = encoded.get("input_ids")
+        if input_ids is None:
+            raise ValueError("Tokenizer did not return input_ids while measuring prompt length.")
+        return int(input_ids.shape[-1])
+
+    @staticmethod
+    def _split_prompt_clauses(text: str) -> list[str]:
+        if not text:
+            return []
+        clauses = re.split(r"(?<=[,;:.])\s+|\n+", text)
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for clause in clauses:
+            normalized = clause.strip(" ,;:.")
+            if not normalized:
+                continue
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(normalized)
+        return cleaned
+
+    @classmethod
+    def _extract_style_constraints(cls, text: str) -> tuple[str, ...]:
+        matches: list[str] = []
+        seen: set[str] = set()
+        for pattern in cls._PROMPT_STYLE_PATTERNS:
+            for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+                value = match.group(0).strip()
+                key = value.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                matches.append(value)
+        return tuple(matches)
+
+    @classmethod
+    def _compress_prompt_to_token_budget(
+        cls,
+        *,
+        tokenizer: Any,
+        original_prompt: str,
+        candidate_prompt: str,
+        max_tokens: int | None = None,
+    ) -> str | None:
+        budget = int(max_tokens or cls._PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET)
+        candidate = re.sub(r"\s+", " ", candidate_prompt).strip()
+        if not candidate:
+            return None
+        try:
+            if cls._pipeline_prompt_token_length(tokenizer, candidate) <= budget:
+                return candidate
+        except Exception:
+            return candidate
+
+        style_constraints = cls._extract_style_constraints(original_prompt)
+        prefix_parts: list[str] = []
+        lower_candidate = candidate.lower()
+        for style in style_constraints:
+            if style.lower() not in lower_candidate:
+                prefix_parts.append(style)
+        prefix = ", ".join(prefix_parts).strip()
+
+        clauses = cls._split_prompt_clauses(candidate)
+        if not clauses:
+            return None
+
+        prioritized: list[str] = []
+        seen: set[str] = set()
+
+        def push(part: str) -> None:
+            normalized = part.strip(" ,;:.")
+            if not normalized:
+                return
+            key = normalized.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            prioritized.append(normalized)
+
+        if prefix:
+            push(prefix)
+        push(clauses[0])
+        for clause in clauses[1:]:
+            clause_lower = clause.lower()
+            if any(keyword in clause_lower for keyword in cls._PROMPT_PRIORITY_KEYWORDS):
+                push(clause)
+        for clause in clauses[1:]:
+            push(clause)
+
+        assembled: list[str] = []
+        best: str | None = None
+        separator = ", "
+        for part in prioritized:
+            trial = separator.join(assembled + [part]).strip()
+            try:
+                token_length = cls._pipeline_prompt_token_length(tokenizer, trial)
+            except Exception:
+                token_length = 0
+            if token_length <= budget:
+                assembled.append(part)
+                best = trial
+
+        if best is None:
+            return None
+
+        for style in style_constraints:
+            if style.lower() not in best.lower():
+                return None
+        return best
+
+    @classmethod
+    def _fit_prompt_to_budget(
+        cls,
+        *,
+        tokenizer: Any,
+        original_prompt: str,
+        enhanced_prompt: str,
+    ) -> tuple[str, bool]:
+        fitted = cls._compress_prompt_to_token_budget(
+            tokenizer=tokenizer,
+            original_prompt=original_prompt,
+            candidate_prompt=enhanced_prompt,
+        )
+        if fitted is not None and cls._rewrite_quality_ok(original_prompt, fitted):
+            return fitted[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], True
+
+        fallback_original = cls._compress_prompt_to_token_budget(
+            tokenizer=tokenizer,
+            original_prompt=original_prompt,
+            candidate_prompt=original_prompt,
+        )
+        if fallback_original is not None:
+            return fallback_original[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
+        return original_prompt[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
 
     @staticmethod
     @contextmanager
@@ -1917,7 +2188,7 @@ class DiffusersZImageBackend:
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
         eos_token_id = getattr(tokenizer, "eos_token_id", None)
         generate_kwargs: dict[str, Any] = {
-            "max_new_tokens": 72,
+            "max_new_tokens": self._PROMPT_ENHANCEMENT_PRIMARY_MAX_NEW_TOKENS,
             "do_sample": False,
         }
         if pad_token_id is not None:
@@ -1935,7 +2206,7 @@ class DiffusersZImageBackend:
             enhancement_seed=seed,
         )
         if rejection_reason == "ok":
-            return rewritten[:4000]
+            return rewritten[: self._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS]
 
         retryable_reasons = {
             "repeated_characters",
@@ -1952,7 +2223,7 @@ class DiffusersZImageBackend:
             retry_kwargs["do_sample"] = True
             retry_kwargs["temperature"] = 0.72
             retry_kwargs["top_p"] = 0.92
-            retry_kwargs["max_new_tokens"] = 96
+            retry_kwargs["max_new_tokens"] = self._PROMPT_ENHANCEMENT_RETRY_MAX_NEW_TOKENS
             rewritten_retry, retry_reason = self._run_rewrite_attempt(
                 tokenizer=tokenizer,
                 text_encoder=text_encoder,
@@ -1963,10 +2234,10 @@ class DiffusersZImageBackend:
                 enhancement_seed=seed,
             )
             if retry_reason == "ok":
-                return rewritten_retry[:4000]
+                return rewritten_retry[: self._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS]
             rejection_reason = retry_reason
 
-        if rejection_reason in {"empty", "too_short", "shorter_than_input", "unchanged"}:
+        if rejection_reason in {"empty", "too_short", "unchanged"}:
             LOGGER.debug(
                 "Prompt enhancement skipped (%s); using original prompt.",
                 rejection_reason,
@@ -2039,9 +2310,17 @@ class DiffusersZImageBackend:
             if restore_sequential:
                 self._restore_pipe_after_prompt_enhancement(pipe)
 
+        tokenizer = getattr(pipe, "tokenizer", None)
         if self._rewrite_quality_ok(prompt_original, enhanced_candidate):
-            prompt_effective = enhanced_candidate
-            prompt_enhanced = True
+            if tokenizer is not None:
+                prompt_effective, prompt_enhanced = self._fit_prompt_to_budget(
+                    tokenizer=tokenizer,
+                    original_prompt=prompt_original,
+                    enhanced_prompt=enhanced_candidate,
+                )
+            else:
+                prompt_effective = enhanced_candidate[: self._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS]
+                prompt_enhanced = True
         else:
             if enhanced_candidate.strip() != prompt_original.strip():
                 LOGGER.warning(
@@ -2498,16 +2777,40 @@ class DiffusersZImageBackend:
         execution_mode_before_generate = self._effective_execution_mode
         cuda_free_before_generate, _ = self._cuda_free_total_snapshot(torch)
         started = now_perf()
-        with torch.inference_mode():
-            output = pipe(
-                prompt=prompt_effective,
-                width=request.width,
-                height=request.height,
-                num_inference_steps=steps,
-                guidance_scale=guidance_scale,
-                generator=generator,
-                latents=procedural_latents,
+        try:
+            with torch.inference_mode():
+                output = pipe(
+                    prompt=prompt_effective,
+                    width=request.width,
+                    height=request.height,
+                    num_inference_steps=steps,
+                    guidance_scale=guidance_scale,
+                    generator=generator,
+                    latents=procedural_latents,
+                )
+        except (RuntimeError, ValueError, FloatingPointError) as exc:
+            retry_mode = self._resolve_scheduler_retry_mode(scheduler_mode, exc)
+            if retry_mode is None:
+                raise
+            LOGGER.warning(
+                "Scheduler mode %s failed for pack %s (%s). Retrying once with %s.",
+                scheduler_mode,
+                getattr(self._model_pack, "name", "<unknown-pack>"),
+                exc,
+                retry_mode,
             )
+            self._clear_cuda_cache(torch)
+            scheduler_mode = self._apply_scheduler_mode(pipe, retry_mode)
+            with torch.inference_mode():
+                output = pipe(
+                    prompt=prompt_effective,
+                    width=request.width,
+                    height=request.height,
+                    num_inference_steps=steps,
+                    guidance_scale=guidance_scale,
+                    generator=generator,
+                    latents=procedural_latents,
+                )
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         duration_ms = int((now_perf() - started) * 1000)

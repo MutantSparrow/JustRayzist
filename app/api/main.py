@@ -16,8 +16,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.api_manifest import api_manifest_payload
-from app.config import load_settings
 from app.api.inference_service import InferenceService
+from app.config import load_settings
+from app.core.cancellation import GenerationCancelledError
 from app.core.logging import configure_logging
 from app.core.model_registry import ModelPackValidationError
 from app.storage.gallery_index import ensure_gallery_schema
@@ -32,6 +33,7 @@ inference = InferenceService(settings=settings)
 async def lifespan(_: FastAPI):
     ensure_gallery_schema(settings)
     inference.sync_gallery()
+    inference.start_gallery_color_cache_rebuild()
     yield
 
 
@@ -51,6 +53,7 @@ class GenerateRequest(BaseModel):
     width: int = Field(default=1024, ge=64, le=2048)
     height: int = Field(default=1024, ge=64, le=2048)
     pack: str | None = Field(default=None)
+    job_id: str | None = Field(default=None, max_length=255)
     seed: int | None = Field(default=None)
     scheduler_mode: Literal["euler", "dpm"] | None = Field(default=None)
     enhance_prompt: bool = Field(default=False)
@@ -66,6 +69,7 @@ class GenerateRequest(BaseModel):
 class UpscaleRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
     pack: str | None = Field(default=None)
+    job_id: str | None = Field(default=None, max_length=255)
     seed: int | None = Field(default=None)
     scheduler_mode: Literal["euler", "dpm"] | None = Field(default=None)
     enhance_prompt: bool = Field(default=False)
@@ -92,6 +96,10 @@ class BulkDownloadRequest(BaseModel):
         if not cleaned:
             raise ValueError("At least one filename is required.")
         return cleaned
+
+
+class CancelClientJobRequest(BaseModel):
+    job_id: str | None = Field(default=None, max_length=255)
 
 
 def _resolve_owner_id(client_header: str | None, client_query: str | None = None) -> str:
@@ -145,6 +153,23 @@ def model_packs() -> dict:
     return {"items": packs, "count": len(packs)}
 
 
+@app.get("/client-jobs")
+def client_jobs(
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> dict:
+    owner_id = _resolve_owner_id(x_justrayzist_client)
+    return inference.client_job_status(owner_id=owner_id)
+
+
+@app.post("/client-jobs/cancel")
+def client_jobs_cancel(
+    payload: CancelClientJobRequest | None = Body(default=None),
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> dict:
+    owner_id = _resolve_owner_id(x_justrayzist_client)
+    return inference.request_cancel_client_job(owner_id=owner_id, job_id=payload.job_id if payload else None)
+
+
 @app.get("/api-manifest", include_in_schema=False)
 def api_manifest() -> dict:
     return api_manifest_payload()
@@ -163,6 +188,7 @@ def generate(
             width=payload.width,
             height=payload.height,
             pack_name=payload.pack,
+            job_id=payload.job_id,
             seed=payload.seed,
             scheduler_mode=payload.scheduler_mode,
             enhance_prompt=payload.enhance_prompt,
@@ -170,6 +196,8 @@ def generate(
         )
     except HTTPException:
         raise
+    except GenerationCancelledError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ModelPackValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
@@ -193,12 +221,15 @@ def upscale(
             owner_id=owner_id,
             filename=payload.filename,
             pack_name=payload.pack,
+            job_id=payload.job_id,
             seed=payload.seed,
             scheduler_mode=payload.scheduler_mode,
             enhance_prompt=payload.enhance_prompt,
         )
     except HTTPException:
         raise
+    except GenerationCancelledError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ModelPackValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
@@ -214,6 +245,7 @@ def upscale(
 @app.get("/images")
 def images(
     prompt: str | None = Query(default=None),
+    color: Literal["black", "white", "red", "yellow", "blue", "green"] | None = Query(default=None),
     limit: int = Query(default=120, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     newest_first: bool = Query(default=True),
@@ -223,11 +255,18 @@ def images(
     rows = inference.list_images(
         owner_id=owner_id,
         prompt_query=prompt,
+        color_filter=color,
         limit=limit,
         offset=offset,
         newest_first=newest_first,
     )
-    return {"items": rows, "count": len(rows), "limit": limit, "offset": offset}
+    return {
+        "items": rows,
+        "count": len(rows),
+        "limit": limit,
+        "offset": offset,
+        "color_cache": inference.gallery_color_cache_status(),
+    }
 
 
 @app.get("/images/{filename}")

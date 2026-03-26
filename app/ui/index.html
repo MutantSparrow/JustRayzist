@@ -6,7 +6,7 @@
   <title>JustRayzist</title>
   <link rel="icon" type="image/x-icon" href="/img/favicon.ico">
   <link rel="shortcut icon" href="/img/favicon.ico">
-  <link rel="stylesheet" href="/ui/styles.css?v=20260305_02">
+  <link rel="stylesheet" href="/ui/styles.css?v=20260326_02">
 </head>
 <body>
   <header class="topbar">
@@ -106,21 +106,29 @@
       <div class="gallery-tools-left">
         <input id="filter-input" type="text" placeholder="Filter by prompt keywords">
         <button id="reverse-order-button" class="reverse-button" type="button">Newest First</button>
+        <div id="gallery-color-filters" class="gallery-color-filters" aria-label="Filter gallery by color">
+          <button class="color-swatch swatch-black" type="button" data-color-filter="black" aria-label="Filter black images" aria-pressed="false" title="Black"></button>
+          <button class="color-swatch swatch-white" type="button" data-color-filter="white" aria-label="Filter white images" aria-pressed="false" title="White"></button>
+          <button class="color-swatch swatch-red" type="button" data-color-filter="red" aria-label="Filter red images" aria-pressed="false" title="Red"></button>
+          <button class="color-swatch swatch-yellow" type="button" data-color-filter="yellow" aria-label="Filter yellow images" aria-pressed="false" title="Yellow"></button>
+          <button class="color-swatch swatch-blue" type="button" data-color-filter="blue" aria-label="Filter blue images" aria-pressed="false" title="Blue"></button>
+          <button class="color-swatch swatch-green" type="button" data-color-filter="green" aria-label="Filter green images" aria-pressed="false" title="Green"></button>
+        </div>
       </div>
       <div class="gallery-tools-right">
         <div class="gallery-density" aria-label="Images per row">
+          <span class="gallery-density-icon gallery-density-icon-large" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <rect x="4" y="4" width="16" height="16"></rect>
+            </svg>
+          </span>
+          <input id="gallery-density-slider" class="gallery-density-slider" type="range" min="3" max="8" step="1" value="4" aria-label="Images per row">
           <span class="gallery-density-icon gallery-density-icon-small" aria-hidden="true">
             <svg viewBox="0 0 24 24" focusable="false">
               <rect x="6" y="6" width="5" height="5"></rect>
               <rect x="13" y="6" width="5" height="5"></rect>
               <rect x="6" y="13" width="5" height="5"></rect>
               <rect x="13" y="13" width="5" height="5"></rect>
-            </svg>
-          </span>
-          <input id="gallery-density-slider" class="gallery-density-slider" type="range" min="3" max="8" step="1" value="4" aria-label="Images per row">
-          <span class="gallery-density-icon gallery-density-icon-large" aria-hidden="true">
-            <svg viewBox="0 0 24 24" focusable="false">
-              <rect x="4" y="4" width="16" height="16"></rect>
             </svg>
           </span>
         </div>
@@ -189,6 +197,6 @@
     <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
   </section>
 
-  <script src="/ui/app.js?v=20260305_02"></script>
+  <script src="/ui/app.js?v=20260326_01"></script>
 </body>
 </html>

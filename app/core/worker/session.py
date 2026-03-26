@@ -61,6 +61,13 @@ class GenerationSession:
         self.stats.generation_count += 1
         return result
 
+    def cancel_active(self) -> None:
+        if self._backend is None:
+            return
+        cancel = getattr(self._backend, "cancel_active", None)
+        if callable(cancel):
+            cancel()
+
     def recycle(self, reason: str) -> None:
         LOGGER.info("Recycling generation session backend. Reason: %s", reason)
         self._backend = None

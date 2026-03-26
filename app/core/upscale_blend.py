@@ -8,6 +8,7 @@ from typing import Any
 from PIL import Image
 
 from app.config.settings import AppSettings
+from app.core.cancellation import GenerationCancelledError
 from app.core.memory import now_perf
 from app.core.seedvr2 import SEEDVR2_DEFAULT_TIMEOUT_SECONDS, upscale_with_seedvr2
 from app.core.upscale import upscale_image
@@ -94,6 +95,7 @@ def upscale_with_x2_seed_blend(
     blend_alpha: float | None = None,
     seed_timeout_seconds: int = SEEDVR2_DEFAULT_TIMEOUT_SECONDS,
     upscaler_checkpoint: Path | None = None,
+    is_cancel_requested: Any | None = None,
 ) -> BlendUpscaleResult:
     if not isinstance(image, Image.Image):
         raise ValueError("image must be a PIL.Image.Image instance.")
@@ -108,6 +110,10 @@ def upscale_with_x2_seed_blend(
 
     effective_alpha = _resolve_blend_alpha(blend_alpha)
     source = image.convert("RGB")
+    cancel_requested = is_cancel_requested if callable(is_cancel_requested) else lambda: False
+
+    if cancel_requested():
+        raise GenerationCancelledError("Upscale cancelled.")
 
     total_started = now_perf()
 
@@ -118,6 +124,8 @@ def upscale_with_x2_seed_blend(
         profile_name=runtime_profile,
     )
     x2_duration_ms = int((now_perf() - x2_started) * 1000)
+    if cancel_requested():
+        raise GenerationCancelledError("Upscale cancelled.")
 
     seed_started = now_perf()
     seed_result = upscale_with_seedvr2(
@@ -127,8 +135,11 @@ def upscale_with_x2_seed_blend(
         seed=seed,
         timeout_seconds=seed_timeout_seconds,
         reuse_runner=True,
+        is_cancel_requested=cancel_requested,
     )
     seed_duration_ms = int((now_perf() - seed_started) * 1000)
+    if cancel_requested():
+        raise GenerationCancelledError("Upscale cancelled.")
 
     if x2_result.image.size != seed_result.image.size:
         raise RuntimeError(
@@ -140,6 +151,8 @@ def upscale_with_x2_seed_blend(
     blended_image = Image.blend(seed_result.image, x2_result.image, effective_alpha).convert("RGB")
     blend_duration_ms = int((now_perf() - blend_started) * 1000)
     duration_ms = int((now_perf() - total_started) * 1000)
+    if cancel_requested():
+        raise GenerationCancelledError("Upscale cancelled.")
 
     return BlendUpscaleResult(
         image=blended_image,

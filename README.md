@@ -13,14 +13,13 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 <img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
 <img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
-## New in v1.4.0
+## New in v1.4.1
 
-- startup is simpler: no user profile choice, automatic VRAM-aware resource tiering, and pack selection only when more than one public enabled pack is installed
-- setup can now auto-pick `Rayzist_fp8_full` on sub-13GB NVIDIA systems, while higher-VRAM installs stay on the BF16 default pack
-- real FP8 packs are now supported as normal user packs, but they currently run as BF16 compute with FP8-at-rest preservation where safe; native FP8 inference is not implemented in this release
-- public pack discovery now respects both `user_visible` and `enabled`, while constrained runs can still derive internal `<base>__auto_fp8_storage` variants when useful
-- the API and gallery flows are broader and cleaner, with ZIP download, gallery import/delete, and `/API` examples generated from the live route manifest
-- engineering tooling now includes pack/resource comparison commands such as `pack-compare`, `pack-compare-suite`, and `prompt-grid-benchmark`
+- the web gallery has been rebuilt around a masonry layout, with queue recovery on refresh, queue cancel controls, color-swatch filtering, and clearer active/queued job states
+- setup and startup stay streamlined: automatic VRAM-aware resource tiering, pack choice only when more than one public enabled pack is installed, and FP8-full auto-selection on sub-13GB NVIDIA systems
+- real FP8 packs remain supported as normal user packs with BF16 compute plus FP8-at-rest preservation where safe; native FP8 inference is not implemented in this release
+- prompt enhancement is stronger and more style-faithful, long enhanced prompts are budget-fitted instead of blindly chopped, and the Euler scheduler path has been hardened against the earlier failure mode
+- the API and docs are broader and cleaner, with ZIP download, gallery import/delete, client job cancel, and `/API` examples generated from the live route manifest
 
 ## Specs
 
@@ -36,7 +35,7 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 - Multi-user LAN workspaces with per-user gallery isolation and import support
 - Model pack system to support custom Z-Image-Turbo models, VAEs or encoder models
 - PNG metadata writing and SQLite gallery indexing
-- Web gallery with filtering, fullscreen, compare-hold for upscaled images, queued jobs, and `/API` testing page
+- Web gallery with masonry layout, color swatch filtering, queued job recovery/cancel, fullscreen compare-hold, and `/API` testing page
 - CLI workflows for generation, mixed-model upscaling, soak runs, soak reporting, SeedVR2 benchmarks, and procedural latent previews
 - Lane-aware bootstrap packaging (`cu126`, `cu128`) with GPU driver preflight
 
@@ -231,7 +230,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -243,6 +242,10 @@ Sample response:
   "fp8_runtime_mode": null,
   "fp8_storage_preserved_tensor_count": 0,
   "fp8_promoted_tensor_count": 0,
+  "gallery_color_cache_active": false,
+  "gallery_color_cache_version": "dominant_v6",
+  "gallery_color_cache_target_version": "dominant_v6",
+  "gallery_color_cache_error": null,
   "offline_mode": true
 }
 ```
@@ -256,7 +259,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.4.0",
+  "app_version": "1.4.1",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -294,7 +297,11 @@ Sample response:
     "fp8_runtime_mode": null,
     "fp8_normalized_tensor_count": 0,
     "fp8_storage_preserved_tensor_count": 0,
-    "fp8_promoted_tensor_count": 0
+    "fp8_promoted_tensor_count": 0,
+    "gallery_color_cache_active": false,
+    "gallery_color_cache_version": "dominant_v6",
+    "gallery_color_cache_target_version": "dominant_v6",
+    "gallery_color_cache_error": null
   }
 }
 ```
@@ -328,6 +335,7 @@ Sample request body:
 
 ```json
 {
+  "job_id": "pending_1712345678901_abcd1234",
   "prompt": "A cinematic skyline at sunrise",
   "width": 1024,
   "height": 1024,
@@ -366,6 +374,7 @@ Sample request body:
 
 ```json
 {
+  "job_id": "pending_upscale_1712345678901_abcd1234",
   "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
   "pack": "Rayzist_bf16",
   "seed": 123456,

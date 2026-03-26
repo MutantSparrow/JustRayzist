@@ -63,6 +63,13 @@ Launcher flow:
 2. Select local-only or LAN listen mode.
 3. Let the app auto-detect a memory strategy from available VRAM.
 
+## Web Gallery
+
+- Masonry gallery layout is now the default.
+- Pending jobs survive refresh for the same client and can be cancelled directly from the gallery.
+- Color swatches beside `Newest First` filter the gallery by dominant image color.
+- The first launch after a color-classifier update may briefly show `Updating gallery color cache...` while the cached gallery color data is rebuilt in the background.
+
 ## Auto Resource Tiering
 
 Normal runs no longer ask the user to choose `high`, `balanced`, or `constrained`.
@@ -204,7 +211,9 @@ $headers = @{ "X-JustRayzist-Client" = "desktop-client" }
 - `GET /model-packs`
 - `POST /generate`
 - `POST /upscale`
-- `GET /images?prompt=skyline&limit=50&offset=0&newest_first=true`
+- `GET /client-jobs`
+- `POST /client-jobs/cancel`
+- `GET /images?prompt=skyline&color=blue&limit=50&offset=0&newest_first=true`
 - `GET /images/{filename}?client_id=<client-id>`
 - `POST /images/download-zip`
 - `DELETE /images/{filename}?confirm=DELETE`
@@ -225,7 +234,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -237,6 +246,10 @@ Sample response:
   "fp8_runtime_mode": null,
   "fp8_storage_preserved_tensor_count": 0,
   "fp8_promoted_tensor_count": 0,
+  "gallery_color_cache_active": false,
+  "gallery_color_cache_version": "dominant_v6",
+  "gallery_color_cache_target_version": "dominant_v6",
+  "gallery_color_cache_error": null,
   "offline_mode": true
 }
 ```
@@ -250,7 +263,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.4.0",
+  "app_version": "1.4.1",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -288,7 +301,11 @@ Sample response:
     "fp8_runtime_mode": null,
     "fp8_normalized_tensor_count": 0,
     "fp8_storage_preserved_tensor_count": 0,
-    "fp8_promoted_tensor_count": 0
+    "fp8_promoted_tensor_count": 0,
+    "gallery_color_cache_active": false,
+    "gallery_color_cache_version": "dominant_v6",
+    "gallery_color_cache_target_version": "dominant_v6",
+    "gallery_color_cache_error": null
   }
 }
 ```
@@ -322,6 +339,7 @@ Sample request body:
 
 ```json
 {
+  "job_id": "pending_1712345678901_abcd1234",
   "prompt": "A cinematic skyline at sunrise",
   "width": 1024,
   "height": 1024,
@@ -360,6 +378,7 @@ Sample request body:
 
 ```json
 {
+  "job_id": "pending_upscale_1712345678901_abcd1234",
   "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
   "pack": "Rayzist_bf16",
   "seed": 123456,
@@ -381,9 +400,60 @@ Sample response:
 }
 ```
 
-### `GET /images?prompt=skyline&limit=50&offset=0&newest_first=true`
+### `GET /client-jobs`
 
-List images for the current client scope.
+Return the current active generation or upscale job for the requesting client.
+
+Requires `X-JustRayzist-Client`.
+
+Sample response:
+
+```json
+{
+  "active_job": {
+    "job_id": "pending_1712345678901_abcd1234",
+    "kind": "generate",
+    "status": "generating",
+    "prompt": "A cinematic skyline at sunrise",
+    "width": 1024,
+    "height": 1024,
+    "pack": "Rayzist_bf16",
+    "seed": 123456,
+    "enhance_prompt": false,
+    "procedural_creativity": 0,
+    "started_at": "2026-03-25T12:34:56+00:00"
+  }
+}
+```
+
+### `POST /client-jobs/cancel`
+
+Cancel the current active client-scoped job or a specific active job id.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "job_id": "pending_1712345678901_abcd1234"
+}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "cancel_requested": true,
+  "job_id": "pending_1712345678901_abcd1234",
+  "message": "Cancellation requested."
+}
+```
+
+### `GET /images?prompt=skyline&color=blue&limit=50&offset=0&newest_first=true`
+
+List images for the current client scope, with optional prompt and color filtering.
 
 Requires `X-JustRayzist-Client`.
 
@@ -398,7 +468,14 @@ Sample response:
     {
       "filename": "justrayzist_YYYYMMDD_hhmmss_000.png"
     }
-  ]
+  ],
+  "color_cache": {
+    "active": false,
+    "version": "dominant_v6",
+    "target_version": "dominant_v6",
+    "needs_rebuild": false,
+    "last_error": null
+  }
 }
 ```
 
