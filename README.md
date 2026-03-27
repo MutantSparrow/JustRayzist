@@ -17,8 +17,8 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 
 - the app now supports managed LoRA libraries end to end: staged `.safetensors` upload, metadata editing, trigger-word detection, session-scoped multi-LoRA application, stored previews, and LoRA metadata in outputs and fullscreen details
 - the LoRA drawer and editor were redesigned with a proper library grid, richer hover controls, weight presets, upload progress, stronger modal behavior, and a cleaner right-side panel layout
-- gallery and fullscreen actions were normalized around the same icon-button language, including multiselect tools, fullscreen preview actions, delete confirmations, and a tighter overall layout pass
 - multiple Z-Image LoRA compatibility issues were fixed, including offline `weight_name` loading, legacy/dotted key normalization, `lora_unet_*` local conversion, `qkv` splitting, diffusers-native `diffusion_model.*` handling, and multi-adapter warning suppression
+- gallery and fullscreen actions were normalized around the same icon-button language, including multiselect tools, fullscreen preview actions, delete confirmations, and a tighter overall layout pass
 - launcher/runtime polish continues in this release with the model-pack chooser fix, corrected dtype argument handling in the Z-Image pipeline factory, refreshed generated API docs, and focused coverage for LoRA/library behavior; native FP8 inference is not implemented in this release
 
 <p align="center">
