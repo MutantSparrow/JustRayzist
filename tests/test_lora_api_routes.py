@@ -12,7 +12,7 @@ def _capabilities() -> dict[str, object]:
         "supported": True,
         "active_pack": "Rayzist_bf16",
         "max_active": 3,
-        "min_weight": 0.0,
+        "min_weight": -2.0,
         "max_weight": 2.0,
         "default_weight": 1.0,
     }
@@ -189,6 +189,41 @@ def test_generate_route_forwards_loras_payload(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["lora_count"] == 1
+
+
+def test_generate_route_accepts_negative_lora_weight(monkeypatch) -> None:
+    def fake_generate(**kwargs):
+        assert kwargs["loras"] == [{"id": "cinematic-style", "weight": -1.25}]
+        return {
+            "filename": "generated.png",
+            "output_path": "S:/STABLEDIFFUSION/JustRayzist/outputs/example-client/generated.png",
+            "prompt": "hello world",
+            "width": 1024,
+            "height": 1024,
+            "duration_ms": 1234,
+            "url": "/images/generated.png",
+            "prompt_enhanced": False,
+            "scheduler_mode": "dpm",
+            "lora_count": 1,
+            "loras": [{"id": "cinematic-style", "name": "cinematic-style", "weight": -1.25}],
+        }
+
+    monkeypatch.setattr(api_main.inference, "generate", fake_generate)
+
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/generate",
+        headers=CLIENT_HEADER,
+        json={
+            "prompt": "hello world",
+            "width": 1024,
+            "height": 1024,
+            "loras": [{"id": "cinematic-style", "weight": -1.25}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["loras"][0]["weight"] == -1.25
 
 
 def test_generate_route_rejects_duplicate_lora_ids() -> None:

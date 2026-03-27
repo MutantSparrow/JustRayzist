@@ -13,11 +13,11 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 <img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
 <img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
-## New in v1.5.1
+## New in v1.5.2
 
-- packaged in-place updates are fixed for `v1.5.x` releases: the updater now mirrors managed app directories in place instead of trying to hard-delete roots like `app/`, which could fail on Windows during self-update
-- the packaged update path still preserves local runtime content such as `models/`, `outputs/`, `data/`, and `.venv/` while replacing tracked app files from the selected release asset
-- this is a hotfix release on top of the `v1.5.0` feature set, including the new managed LoRA library flow, gallery/fullscreen action refresh, layout cleanup, and broader Z-Image LoRA compatibility fixes; native FP8 inference is not implemented in this release
+- fixes a LoRA runtime regression where adapters could be loaded and recorded into metadata while remaining globally disabled on the pipeline, making different LoRA weights produce identical images
+- restores visible LoRA strength changes again across enabled, stacked, and no-LoRA generations by re-enabling adapters after runtime selection and keeping the stale-adapter cleanup path intact
+- expands the LoRA strength range to `-2.0` through `+2.0` in `0.25` steps, while keeping the managed multi-LoRA drawer flow, gallery/fullscreen refresh, and packaged self-updater fixes from `v1.5.0` and `v1.5.1`; native FP8 inference is not implemented in this release
 
 <p align="center">
   <img width="900" alt="LoRA library preview" src="readme_images/lora_preview.png" />
@@ -240,7 +240,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -270,7 +270,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.5.1",
+  "app_version": "1.5.2",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -370,7 +370,7 @@ Sample response:
     "supported": true,
     "active_pack": "Rayzist_bf16",
     "max_active": 3,
-    "min_weight": 0.0,
+    "min_weight": -2.0,
     "max_weight": 2.0,
     "default_weight": 1.0
   }
@@ -471,7 +471,7 @@ Sample response:
     "supported": true,
     "active_pack": "Rayzist_bf16",
     "max_active": 3,
-    "min_weight": 0.0,
+    "min_weight": -2.0,
     "max_weight": 2.0,
     "default_weight": 1.0
   }

@@ -22,9 +22,18 @@ class _FakeLoraPipe:
         self.adapter_names = None
         self.adapter_weights = None
         self.fuse_calls: list[dict[str, object]] = []
+        self.delete_calls: list[list[str]] = []
+        self.loaded_adapters: set[str] = set()
+        self.disable_calls = 0
+        self.enable_calls = 0
 
     def load_lora_weights(self, source, **kwargs) -> None:
+        adapter_name = kwargs.get("adapter_name")
+        if isinstance(adapter_name, str) and adapter_name in self.loaded_adapters:
+            raise ValueError(f"Adapter name {adapter_name} already in use in the model - please select a new adapter name.")
         self.load_calls.append({"source": source, **kwargs})
+        if isinstance(adapter_name, str):
+            self.loaded_adapters.add(adapter_name)
 
     def set_adapters(self, adapter_names, adapter_weights=None) -> None:
         self.adapter_names = list(adapter_names)
@@ -37,7 +46,20 @@ class _FakeLoraPipe:
         return None
 
     def delete_adapters(self, adapter_names) -> None:
+        names = [adapter_names] if isinstance(adapter_names, str) else list(adapter_names)
+        self.delete_calls.append(names)
+        for name in names:
+            self.loaded_adapters.discard(name)
         return None
+
+    def disable_lora(self) -> None:
+        self.disable_calls += 1
+
+    def enable_lora(self) -> None:
+        self.enable_calls += 1
+
+    def get_list_adapters(self) -> dict[str, list[str]]:
+        return {"transformer": sorted(self.loaded_adapters)}
 
 
 def test_append_lora_triggers_adds_unique_missing_trigger_words() -> None:
@@ -206,6 +228,29 @@ def test_convert_zimage_legacy_lora_state_dict_to_diffusers_preserves_diffusers_
         assert torch.equal(converted[key], value)
 
 
+def test_convert_zimage_legacy_lora_state_dict_to_diffusers_applies_alpha_to_diffusers_keys() -> None:
+    diffusers_state_dict = {
+        "diffusion_model.layers.0.attention.to_q.lora_A.weight": torch.ones((2, 2)),
+        "diffusion_model.layers.0.attention.to_q.lora_B.weight": torch.full((2, 2), 3.0),
+        "diffusion_model.layers.0.attention.to_q.alpha": torch.tensor(4.0),
+    }
+
+    converted, format_label = DiffusersZImageBackend._convert_zimage_legacy_lora_state_dict_to_diffusers(
+        "diffusers-alpha-style",
+        diffusers_state_dict,
+    )
+
+    assert format_label == "legacy-zimage"
+    assert torch.equal(
+        converted["transformer.layers.0.attention.to_q.lora_A.weight"],
+        torch.ones((2, 2)) * 2.0,
+    )
+    assert torch.equal(
+        converted["transformer.layers.0.attention.to_q.lora_B.weight"],
+        torch.full((2, 2), 3.0),
+    )
+
+
 def test_convert_zimage_legacy_lora_state_dict_to_diffusers_rejects_unknown_layout() -> None:
     with pytest.raises(ValueError, match="unsupported Z-Image key layout near 'layers.0.attention.out.weight'"):
         DiffusersZImageBackend._convert_zimage_legacy_lora_state_dict_to_diffusers(
@@ -214,7 +259,7 @@ def test_convert_zimage_legacy_lora_state_dict_to_diffusers_rejects_unknown_layo
         )
 
 
-def test_load_lora_adapters_always_passes_state_dict_payload(monkeypatch) -> None:
+def test_load_lora_adapters_always_passes_state_dict_payload(monkeypatch, caplog) -> None:
     backend = object.__new__(DiffusersZImageBackend)
     pipe = _FakeLoraPipe()
     lora = LoraSelection(
@@ -226,10 +271,14 @@ def test_load_lora_adapters_always_passes_state_dict_payload(monkeypatch) -> Non
     monkeypatch.setattr(
         zimage_module,
         "load_safetensors_file",
-        lambda path, device="cpu": {"transformer.layers.0.attn.to_q.lora_A.weight": object()},
+        lambda path, device="cpu": {
+            "transformer.layers.0.attn.to_q.lora_A.weight": object(),
+            "transformer.layers.0.attn.to_q.lora_B.weight": object(),
+        },
     )
 
-    backend._load_lora_adapters(pipe, (lora,))
+    with caplog.at_level("INFO"):
+        backend._load_lora_adapters(pipe, (lora,))
 
     assert len(pipe.load_calls) == 1
     state_dict_source = pipe.load_calls[0]["source"]
@@ -239,14 +288,78 @@ def test_load_lora_adapters_always_passes_state_dict_payload(monkeypatch) -> Non
     assert pipe.load_calls[0]["local_files_only"] is True
     assert pipe.adapter_names == ["cinematic-style"]
     assert pipe.adapter_weights == [1.25]
-    assert pipe.fuse_calls == [
-        {
-            "components": ["transformer"],
-            "adapter_names": ["cinematic-style"],
-            "lora_scale": 1.0,
-            "safe_fusing": True,
-        }
-    ]
+    assert pipe.enable_calls == 1
+    assert pipe.fuse_calls == []
+    assert "Activating LoRAs ids=['cinematic-style'] weights=[1.25]" in caplog.text
+    assert "runtime_path=unfused" in caplog.text
+
+
+def test_load_lora_adapters_passes_exact_user_weights_for_stacked_adapters(monkeypatch) -> None:
+    backend = object.__new__(DiffusersZImageBackend)
+    pipe = _FakeLoraPipe()
+    loras = (
+        LoraSelection(
+            id="style-one",
+            path=Path("S:/STABLEDIFFUSION/JustRayzist/models/loras/style-one.safetensors"),
+            weight=0.5,
+        ),
+        LoraSelection(
+            id="style-two",
+            path=Path("S:/STABLEDIFFUSION/JustRayzist/models/loras/style-two.safetensors"),
+            weight=1.0,
+        ),
+        LoraSelection(
+            id="style-three",
+            path=Path("S:/STABLEDIFFUSION/JustRayzist/models/loras/style-three.safetensors"),
+            weight=1.5,
+        ),
+    )
+
+    monkeypatch.setattr(
+        zimage_module,
+        "load_safetensors_file",
+        lambda path, device="cpu": {
+            "transformer.layers.0.attention.to_q.lora_A.weight": torch.ones((2, 2)),
+            "transformer.layers.0.attention.to_q.lora_B.weight": torch.ones((2, 2)),
+        },
+    )
+
+    backend._load_lora_adapters(pipe, loras)
+
+    assert pipe.adapter_names == ["style-one", "style-two", "style-three"]
+    assert pipe.adapter_weights == [0.5, 1.0, 1.5]
+    assert pipe.enable_calls == 1
+    assert pipe.fuse_calls == []
+
+
+def test_load_lora_adapters_clears_stale_conflicting_adapter_names_before_reload(monkeypatch, caplog) -> None:
+    backend = object.__new__(DiffusersZImageBackend)
+    pipe = _FakeLoraPipe()
+    pipe.loaded_adapters.add("natalia-lora")
+    lora = LoraSelection(
+        id="natalia-lora",
+        path=Path("S:/STABLEDIFFUSION/JustRayzist/models/loras/natalia-lora.safetensors"),
+        weight=1.0,
+    )
+
+    monkeypatch.setattr(
+        zimage_module,
+        "load_safetensors_file",
+        lambda path, device="cpu": {
+            "transformer.layers.0.attention.to_q.lora_A.weight": torch.ones((2, 2)),
+            "transformer.layers.0.attention.to_q.lora_B.weight": torch.ones((2, 2)),
+        },
+    )
+
+    with caplog.at_level("INFO"):
+        backend._load_lora_adapters(pipe, (lora,))
+
+    assert pipe.delete_calls == [["natalia-lora"]]
+    assert pipe.disable_calls == 1
+    assert pipe.enable_calls == 1
+    assert pipe.adapter_names == ["natalia-lora"]
+    assert pipe.adapter_weights == [1.0]
+    assert "Clearing stale LoRA adapters before reload ids=['natalia-lora']" in caplog.text
 
 
 def test_load_lora_adapters_normalizes_legacy_dotted_lora_keys(monkeypatch) -> None:

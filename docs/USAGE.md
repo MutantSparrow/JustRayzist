@@ -242,7 +242,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -272,7 +272,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.5.1",
+  "app_version": "1.5.2",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -372,7 +372,7 @@ Sample response:
     "supported": true,
     "active_pack": "Rayzist_bf16",
     "max_active": 3,
-    "min_weight": 0.0,
+    "min_weight": -2.0,
     "max_weight": 2.0,
     "default_weight": 1.0
   }
@@ -473,7 +473,7 @@ Sample response:
     "supported": true,
     "active_pack": "Rayzist_bf16",
     "max_active": 3,
-    "min_weight": 0.0,
+    "min_weight": -2.0,
     "max_weight": 2.0,
     "default_weight": 1.0
   }

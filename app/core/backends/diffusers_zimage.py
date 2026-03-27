@@ -2469,6 +2469,47 @@ class DiffusersZImageBackend:
             scale_up /= 2
         return down_weight * scale_down, up_weight * scale_up
 
+    @classmethod
+    def _apply_diffusers_native_alpha_scale(
+        cls,
+        lora_id: str,
+        canonical_state_dict: dict[str, Any],
+    ) -> dict[str, Any]:
+        working_state_dict = dict(canonical_state_dict)
+        finalized: dict[str, Any] = {}
+
+        for key in list(working_state_dict.keys()):
+            if not key.endswith(".lora_A.weight"):
+                continue
+
+            up_key = key.replace(".lora_A.weight", ".lora_B.weight")
+            alpha_key = key.replace(".lora_A.weight", ".alpha")
+            if up_key not in working_state_dict:
+                raise ValueError(
+                    f"LoRA '{lora_id}' is missing the matching B weight for '{key}'."
+                )
+
+            down_weight = working_state_dict.pop(key)
+            up_weight = working_state_dict.pop(up_key)
+            if alpha_key in working_state_dict:
+                alpha_value = working_state_dict.pop(alpha_key)
+                down_weight, up_weight = cls._apply_zimage_alpha_scale(
+                    down_weight,
+                    up_weight,
+                    alpha_value,
+                )
+
+            finalized[cls._ensure_transformer_lora_key(key)] = down_weight
+            finalized[cls._ensure_transformer_lora_key(up_key)] = up_weight
+
+        leftover_keys = [key for key in working_state_dict.keys() if not key.endswith(".alpha")]
+        if leftover_keys:
+            sample_key = leftover_keys[0]
+            raise ValueError(
+                f"LoRA '{lora_id}' uses an unsupported Z-Image key layout near '{sample_key}'."
+            )
+        return finalized
+
     @staticmethod
     def _ensure_transformer_lora_key(key: str) -> str:
         return key if key.startswith("transformer.") else f"transformer.{key}"
@@ -2514,15 +2555,7 @@ class DiffusersZImageBackend:
         )
 
         if canonical_has_diffusers and not canonical_has_non_diffusers:
-            finalized: dict[str, Any] = {}
-            for key, value in canonical_state_dict.items():
-                if key.endswith(".alpha"):
-                    continue
-                if ".lora_A.weight" not in key and ".lora_B.weight" not in key:
-                    raise ValueError(
-                        f"LoRA '{lora_id}' uses an unsupported Z-Image key layout near '{key}'."
-                    )
-                finalized[cls._ensure_transformer_lora_key(key)] = value
+            finalized = cls._apply_diffusers_native_alpha_scale(lora_id, canonical_state_dict)
             if not finalized:
                 raise ValueError(f"LoRA '{lora_id}' did not contain any diffusers LoRA weights.")
             return finalized, format_label
@@ -2599,18 +2632,28 @@ class DiffusersZImageBackend:
 
         adapter_names = [lora.id for lora in loras]
         adapter_weights = [float(lora.weight) for lora in loras]
+        loaded_adapter_names = self._list_loaded_lora_adapters(pipe)
+        conflicting_adapter_names = [name for name in adapter_names if name in loaded_adapter_names]
+        if conflicting_adapter_names:
+            LOGGER.info(
+                "Clearing stale LoRA adapters before reload ids=%s",
+                conflicting_adapter_names,
+            )
+            self._clear_lora_adapters(pipe, adapter_names=conflicting_adapter_names)
+        adapter_formats: dict[str, str] = {}
         for lora in loras:
             raw_state_dict = load_safetensors_file(str(lora.path), device="cpu")
             prepared_state_dict, format_label = self._convert_zimage_legacy_lora_state_dict_to_diffusers(
                 lora.id,
                 raw_state_dict,
             )
+            adapter_formats[lora.id] = format_label
             if format_label != "diffusers-native":
                 LOGGER.info(
                     "Detected %s LoRA format for '%s'; converting locally to diffusers format.",
                     format_label,
                     lora.id,
-                    )
+                )
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings(
@@ -2634,16 +2677,50 @@ class DiffusersZImageBackend:
                     ) from exc
                 raise
         pipe.set_adapters(adapter_names, adapter_weights=adapter_weights)
-        pipe.fuse_lora(
-            components=["transformer"],
-            adapter_names=adapter_names,
-            lora_scale=1.0,
-            safe_fusing=True,
+        if hasattr(pipe, "enable_lora"):
+            try:
+                pipe.enable_lora()
+            except Exception:
+                pass
+        LOGGER.info(
+            "Activating LoRAs ids=%s weights=%s formats=%s runtime_path=%s",
+            adapter_names,
+            adapter_weights,
+            {name: adapter_formats.get(name, "unknown") for name in adapter_names},
+            "unfused",
         )
+
+    def _list_loaded_lora_adapters(self, pipe: Any) -> set[str]:
+        try:
+            if hasattr(pipe, "get_list_adapters"):
+                adapters_by_component = pipe.get_list_adapters()
+                loaded_adapter_names: set[str] = set()
+                if isinstance(adapters_by_component, dict):
+                    for names in adapters_by_component.values():
+                        if isinstance(names, (list, tuple, set)):
+                            loaded_adapter_names.update(str(name) for name in names)
+                return loaded_adapter_names
+        except Exception:
+            pass
+
+        try:
+            transformer = getattr(pipe, "transformer", None)
+            peft_config = getattr(transformer, "peft_config", None)
+            if isinstance(peft_config, dict):
+                return {str(name) for name in peft_config.keys()}
+        except Exception:
+            pass
+
+        return set()
 
     def _clear_lora_adapters(self, pipe: Any, adapter_names: list[str] | None = None) -> None:
         if not self._pipe_supports_lora(pipe):
             return
+        if hasattr(pipe, "disable_lora"):
+            try:
+                pipe.disable_lora()
+            except Exception:
+                pass
         try:
             pipe.unfuse_lora(components=["transformer"])
         except Exception:
@@ -2653,7 +2730,12 @@ class DiffusersZImageBackend:
             try:
                 pipe.delete_adapters(target_names)
             except Exception:
-                pass
+                transformer = getattr(pipe, "transformer", None)
+                if transformer is not None and hasattr(transformer, "delete_adapters"):
+                    try:
+                        transformer.delete_adapters(target_names)
+                    except Exception:
+                        pass
 
     def drop_lora_adapters(self, lora_ids: list[str] | None = None) -> None:
         if self._loaded is None:

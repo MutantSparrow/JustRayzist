@@ -178,16 +178,17 @@ const PENDING_UPSCALE_ENTRY_FX_DURATION_MS = 220;
 const VIEWER_STAGE_FX_DURATION_MS = 210;
 const DEFAULT_LORA_WEIGHT = 1.0;
 const MAX_ACTIVE_LORAS = 3;
-const MIN_LORA_WEIGHT = 0.0;
+const MIN_LORA_WEIGHT = -2.0;
 const MAX_LORA_WEIGHT = 2.0;
-const LORA_STRENGTH_PRESETS = [
-  { label: "Weak", value: 0.25 },
-  { label: "Low", value: 0.5 },
-  { label: "Medium", value: 0.75 },
-  { label: "Normal", value: 1.0 },
-  { label: "Strong", value: 1.25 },
-  { label: "Very Strong", value: 1.5 },
-];
+const LORA_STRENGTH_PRESETS = (() => {
+  const presets = [];
+  for (let value = MIN_LORA_WEIGHT; value <= MAX_LORA_WEIGHT + 0.0001; value += 0.25) {
+    const rounded = Math.round(value * 100) / 100;
+    if (Math.abs(rounded) < 0.0001) continue;
+    presets.push({ value: rounded });
+  }
+  return presets;
+})();
 
 function createClientId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -226,6 +227,7 @@ function getStoredGalleryColumns() {
 function normalizeLoraWeight(rawValue) {
   const value = Number(rawValue);
   if (!Number.isFinite(value)) return DEFAULT_LORA_WEIGHT;
+  if (Math.abs(value) < 0.0001) return DEFAULT_LORA_WEIGHT;
   let best = LORA_STRENGTH_PRESETS[0];
   for (const preset of LORA_STRENGTH_PRESETS) {
     if (Math.abs(preset.value - value) < Math.abs(best.value - value)) {
@@ -618,13 +620,19 @@ function cloneLoraSelections(selections) {
 
 function loraStrengthPresetForWeight(weight) {
   const normalized = normalizeLoraWeight(weight);
-  return LORA_STRENGTH_PRESETS.find((item) => item.value === normalized) || LORA_STRENGTH_PRESETS[3];
+  return (
+    LORA_STRENGTH_PRESETS.find((item) => item.value === normalized)
+    || LORA_STRENGTH_PRESETS.find((item) => item.value === DEFAULT_LORA_WEIGHT)
+    || LORA_STRENGTH_PRESETS[0]
+  );
 }
 
 function loraStrengthPresetIndex(weight) {
   const normalized = normalizeLoraWeight(weight);
   const index = LORA_STRENGTH_PRESETS.findIndex((item) => item.value === normalized);
-  return index >= 0 ? index : 3;
+  if (index >= 0) return index;
+  const defaultIndex = LORA_STRENGTH_PRESETS.findIndex((item) => item.value === DEFAULT_LORA_WEIGHT);
+  return defaultIndex >= 0 ? defaultIndex : 0;
 }
 
 function loraStrengthPresetAt(index) {
@@ -728,7 +736,7 @@ function formatLoraWeight(value) {
 
 function formatLoraPresetLabel(value) {
   const preset = loraStrengthPresetForWeight(value);
-  return `${preset.label} (${preset.value.toFixed(2)})`;
+  return preset.value > 0 ? `+${preset.value.toFixed(2)}` : preset.value.toFixed(2);
 }
 
 function parseImageLoras(item) {

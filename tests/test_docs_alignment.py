@@ -53,7 +53,7 @@ def test_user_docs_describe_auto_resource_tiering() -> None:
         assert "--profile balanced" not in text
         assert "--profile constrained" not in text
 
-    assert "New in v1.5.1" in readme
+    assert "New in v1.5.2" in readme
     assert "resource_tier" in readme
     assert "resource_tier" in usage
     assert "auto resource-tiering" in troubleshooting.lower()
