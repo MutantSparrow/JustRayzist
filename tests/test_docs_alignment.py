@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -53,7 +53,7 @@ def test_user_docs_describe_auto_resource_tiering() -> None:
         assert "--profile balanced" not in text
         assert "--profile constrained" not in text
 
-    assert "New in v1.5.0" in readme
+    assert "New in v1.5.1" in readme
     assert "resource_tier" in readme
     assert "resource_tier" in usage
     assert "auto resource-tiering" in troubleshooting.lower()
@@ -115,6 +115,7 @@ def test_api_tester_uses_manifest_feed() -> None:
     assert "API_MANIFEST_PATH" in api_docs
     assert 'fetch(API_MANIFEST_PATH' in api_docs
     assert "requires_client" in api_docs
+
 
 
 

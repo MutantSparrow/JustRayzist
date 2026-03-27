@@ -13,13 +13,11 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 <img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
 <img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
-## New in v1.5.0
+## New in v1.5.1
 
-- the app now supports managed LoRA libraries end to end: staged `.safetensors` upload, metadata editing, trigger-word detection, session-scoped multi-LoRA application, stored previews, and LoRA metadata in outputs and fullscreen details
-- the LoRA drawer and editor were redesigned with a proper library grid, richer hover controls, weight presets, upload progress, stronger modal behavior, and a cleaner right-side panel layout
-- multiple Z-Image LoRA compatibility issues were fixed, including offline `weight_name` loading, legacy/dotted key normalization, `lora_unet_*` local conversion, `qkv` splitting, diffusers-native `diffusion_model.*` handling, and multi-adapter warning suppression
-- gallery and fullscreen actions were normalized around the same icon-button language, including multiselect tools, fullscreen preview actions, delete confirmations, and a tighter overall layout pass
-- launcher/runtime polish continues in this release with the model-pack chooser fix, corrected dtype argument handling in the Z-Image pipeline factory, refreshed generated API docs, and focused coverage for LoRA/library behavior; native FP8 inference is not implemented in this release
+- packaged in-place updates are fixed for `v1.5.x` releases: the updater now mirrors managed app directories in place instead of trying to hard-delete roots like `app/`, which could fail on Windows during self-update
+- the packaged update path still preserves local runtime content such as `models/`, `outputs/`, `data/`, and `.venv/` while replacing tracked app files from the selected release asset
+- this is a hotfix release on top of the `v1.5.0` feature set, including the new managed LoRA library flow, gallery/fullscreen action refresh, layout cleanup, and broader Z-Image LoRA compatibility fixes; native FP8 inference is not implemented in this release
 
 <p align="center">
   <img width="900" alt="LoRA library preview" src="readme_images/lora_preview.png" />
@@ -242,7 +240,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -272,7 +270,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.5.0",
+  "app_version": "1.5.1",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -687,6 +685,7 @@ Default model assets are provided by the following model owners and repositories
 - imagepipeline (superresolution/x2 upscaler): https://huggingface.co/imagepipeline/superresolution
 
 Model weights remain under their respective upstream licenses and terms.
+
 
 
 
