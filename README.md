@@ -21,6 +21,10 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 - multiple Z-Image LoRA compatibility issues were fixed, including offline `weight_name` loading, legacy/dotted key normalization, `lora_unet_*` local conversion, `qkv` splitting, diffusers-native `diffusion_model.*` handling, and multi-adapter warning suppression
 - launcher/runtime polish continues in this release with the model-pack chooser fix, corrected dtype argument handling in the Z-Image pipeline factory, refreshed generated API docs, and focused coverage for LoRA/library behavior; native FP8 inference is not implemented in this release
 
+<p align="center">
+  <img width="900" alt="LoRA library preview" src="readme_images/lora_preview.png" />
+</p>
+
 ## Specs
 
 - FastAPI web API + browser UI
@@ -34,8 +38,9 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 - Run it locally or open it to LAN access
 - Multi-user LAN workspaces with per-user gallery isolation and import support
 - Model pack system to support custom Z-Image-Turbo models, VAEs or encoder models
+- Managed multi-LoRA library support with up to 3 active LoRAs per generation
 - PNG metadata writing and SQLite gallery indexing
-- Web gallery with masonry layout, color swatch filtering, queued job recovery/cancel, fullscreen compare-hold, and `/API` testing page
+- Web gallery with masonry layout, favorites, color swatch filtering, queued job recovery/cancel, fullscreen compare-hold, and `/API` testing page
 - CLI workflows for generation, mixed-model upscaling, soak runs, soak reporting, SeedVR2 benchmarks, and procedural latent previews
 - Lane-aware bootstrap packaging (`cu126`, `cu128`) with GPU driver preflight
 
@@ -682,6 +687,7 @@ Default model assets are provided by the following model owners and repositories
 - imagepipeline (superresolution/x2 upscaler): https://huggingface.co/imagepipeline/superresolution
 
 Model weights remain under their respective upstream licenses and terms.
+
 
 
 
