@@ -195,10 +195,11 @@ function Replace-ManagedDirectory {
   }
 
   $targetPath = Join-Path $TargetRoot $RelativePath
-  if (Test-Path $targetPath) {
-    Remove-Item -Path $targetPath -Recurse -Force
-  }
-  Invoke-RobocopySafe -Source $sourcePath -Destination $targetPath
+  # Mirror managed app directories in place instead of deleting the target
+  # directory first. Windows can transiently hold handles inside packaged app
+  # folders during self-update, and robocopy /MIR is much more reliable here
+  # than Remove-Item on the directory root.
+  Invoke-RobocopySafe -Source $sourcePath -Destination $targetPath -ExtraArgs @("/MIR")
 }
 
 function Merge-ManagedDirectory {
