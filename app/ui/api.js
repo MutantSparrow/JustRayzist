@@ -69,7 +69,8 @@ function renderEndpoints() {
     description.textContent = `${endpoint.description}${scopeSuffix}`;
 
     const requestPre = document.createElement("pre");
-    requestPre.textContent = endpoint.request == null ? "(no body)" : asJson(endpoint.request);
+    requestPre.textContent =
+      endpoint.request == null ? "(no body)" : typeof endpoint.request === "string" ? endpoint.request : asJson(endpoint.request);
 
     const responsePre = document.createElement("pre");
     responsePre.textContent =
@@ -82,7 +83,8 @@ function renderEndpoints() {
     useButton.addEventListener("click", () => {
       methodEl.value = endpoint.method;
       pathEl.value = endpoint.path;
-      bodyEl.value = endpoint.request == null ? "{}" : asJson(endpoint.request);
+      bodyEl.value =
+        endpoint.request == null || typeof endpoint.request === "string" ? "{}" : asJson(endpoint.request);
     });
 
     card.append(route, description, useButton);

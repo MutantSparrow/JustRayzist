@@ -6,11 +6,13 @@ import re
 import string
 import inspect
 import random
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
 from PIL import Image
+from safetensors.torch import load_file as load_safetensors_file
 
 from app.config.profiles import RuntimeProfile
 from app.config.settings import AppSettings
@@ -24,7 +26,7 @@ from app.core.memory import (
 from app.core.model_registry import ModelPack
 from app.core.pipeline_factory import LoadedZImagePipeline, build_zimage_pipeline
 from app.core.upscale import upscale_image
-from app.core.worker.types import GenerationRequest, resolve_procedural_creativity
+from app.core.worker.types import GenerationRequest, LoraSelection, resolve_procedural_creativity
 
 LOGGER = logging.getLogger(__name__)
 
@@ -57,6 +59,7 @@ class GenerationResult:
     prompt_original: str
     prompt_effective: str
     prompt_enhanced: bool
+    prompt_effective_base: str | None = None
     mode: str = "text2img"
     upscale_duration_ms: int | None = None
     refine_duration_ms: int | None = None
@@ -110,6 +113,9 @@ class GenerationResult:
     fp8_storage_preserved_tensor_count: int = 0
     fp8_promoted_tensor_count: int = 0
     fp8_normalized_tensor_names: tuple[str, ...] = ()
+    loras: tuple[dict[str, Any], ...] = ()
+    lora_count: int = 0
+    lora_trigger_words: tuple[str, ...] = ()
 
     def telemetry_dict(self) -> dict[str, Any]:
         return {
@@ -123,6 +129,7 @@ class GenerationResult:
             "prompt_original": self.prompt_original,
             "prompt_effective": self.prompt_effective,
             "prompt_enhanced": self.prompt_enhanced,
+            "prompt_effective_base": self.prompt_effective_base,
             "mode": self.mode,
             "upscale_duration_ms": self.upscale_duration_ms,
             "refine_duration_ms": self.refine_duration_ms,
@@ -184,6 +191,9 @@ class GenerationResult:
             "fp8_storage_preserved_tensor_count": self.fp8_storage_preserved_tensor_count,
             "fp8_promoted_tensor_count": self.fp8_promoted_tensor_count,
             "fp8_normalized_tensor_names": list(self.fp8_normalized_tensor_names),
+            "loras": [dict(item) for item in self.loras],
+            "lora_count": self.lora_count,
+            "lora_trigger_words": list(self.lora_trigger_words),
         }
 
 
@@ -843,6 +853,9 @@ class DiffusersZImageBackend:
 
     def runtime_status(self) -> dict[str, Any]:
         selected_pack = getattr(self._model_pack, "base_name", None) or getattr(self._model_pack, "name", None)
+        lora_capable = True
+        if self._loaded is not None:
+            lora_capable = self._pipe_supports_lora(self._loaded.pipeline)
         return {
             "backend": self._backend_name,
             "execution_mode": self._effective_execution_mode,
@@ -857,6 +870,7 @@ class DiffusersZImageBackend:
             "fp8_storage_preserved_tensor_count": self._fp8_storage_preserved_tensor_count,
             "fp8_promoted_tensor_count": self._fp8_promoted_tensor_count,
             "fp8_normalized_tensor_names": list(self._fp8_normalized_tensor_names),
+            "lora_capable": lora_capable,
         }
 
     def _ensure_img2img_pipe(self) -> Any:
@@ -2330,6 +2344,322 @@ class DiffusersZImageBackend:
             prompt_enhanced = False
         return prompt_original, prompt_effective, prompt_enhanced
 
+    @staticmethod
+    def _pipe_supports_lora(pipe: Any) -> bool:
+        required = ("load_lora_weights", "set_adapters", "fuse_lora", "unfuse_lora", "delete_adapters")
+        return all(hasattr(pipe, name) for name in required)
+
+    @staticmethod
+    def _normalize_lora_trigger_phrase(raw_value: str) -> str:
+        normalized = re.sub(r"\s+", " ", str(raw_value or "").strip())
+        return normalized.strip(",;| ")
+
+    @classmethod
+    def _append_lora_triggers(
+        cls,
+        prompt: str,
+        loras: tuple[LoraSelection, ...],
+    ) -> tuple[str, tuple[str, ...]]:
+        base_prompt = re.sub(r"\s+", " ", str(prompt or "").strip())
+        if not loras:
+            return base_prompt, ()
+
+        prompt_lower = base_prompt.lower()
+        additions: list[str] = []
+        seen: set[str] = set()
+        for lora in loras:
+            for raw_trigger in lora.trigger_words:
+                trigger = cls._normalize_lora_trigger_phrase(raw_trigger)
+                lowered = trigger.lower()
+                if not trigger or lowered in seen:
+                    continue
+                seen.add(lowered)
+                if lowered in prompt_lower:
+                    continue
+                additions.append(trigger)
+
+        if not additions:
+            return base_prompt, ()
+        if not base_prompt:
+            return ", ".join(additions), tuple(additions)
+        return f"{base_prompt}, {', '.join(additions)}", tuple(additions)
+
+    @staticmethod
+    def _split_zimage_lora_key(key: str) -> tuple[str, str]:
+        suffixes = (
+            ".lora_down.weight",
+            ".lora_up.weight",
+            ".lora_A.weight",
+            ".lora_B.weight",
+            ".lora.down.weight",
+            ".lora.up.weight",
+            ".alpha",
+        )
+        for suffix in suffixes:
+            if key.endswith(suffix):
+                return key[: -len(suffix)], suffix
+        return key, ""
+
+    @staticmethod
+    def _convert_lora_unet_key_to_legacy_zimage_key(key: str) -> str:
+        base, suffix = DiffusersZImageBackend._split_zimage_lora_key(key.removeprefix("lora_unet_"))
+        protected = {
+            ("to", "q"),
+            ("to", "k"),
+            ("to", "v"),
+            ("to", "out"),
+            ("feed", "forward"),
+        }
+        protected_by_length: dict[int, set[tuple[str, ...]]] = {}
+        for ngram in protected:
+            protected_by_length.setdefault(len(ngram), set()).add(ngram)
+
+        parts = base.split("_")
+        merged: list[str] = []
+        index = 0
+        candidate_lengths = sorted(protected_by_length.keys(), reverse=True)
+        while index < len(parts):
+            matched = False
+            for candidate_length in candidate_lengths:
+                if index + candidate_length > len(parts):
+                    continue
+                window = tuple(parts[index : index + candidate_length])
+                if window in protected_by_length[candidate_length]:
+                    merged.append("_".join(window))
+                    index += candidate_length
+                    matched = True
+                    break
+            if matched:
+                continue
+            merged.append(parts[index])
+            index += 1
+        return ".".join(merged) + suffix
+
+    @staticmethod
+    def _normalize_legacy_zimage_lora_key(key: str) -> str:
+        updated_key = str(key).replace(".lora.down.weight", ".lora_down.weight").replace(
+            ".lora.up.weight", ".lora_up.weight"
+        )
+        updated_key = re.sub(
+            r"\.out(?=\.(?:lora_down|lora_up|lora_A|lora_B|alpha)\b)",
+            ".to_out.0",
+            updated_key,
+        )
+        return updated_key
+
+    @classmethod
+    def _normalize_legacy_zimage_lora_state_dict(cls, state_dict: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        normalized: dict[str, Any] = {}
+        changed = False
+        for key, value in state_dict.items():
+            normalized_key = cls._normalize_legacy_zimage_lora_key(str(key))
+            if normalized_key != str(key):
+                changed = True
+            normalized[normalized_key] = value
+        return normalized, changed
+
+    @staticmethod
+    def _apply_zimage_alpha_scale(down_weight: Any, up_weight: Any, alpha_value: Any) -> tuple[Any, Any]:
+        rank = int(down_weight.shape[0])
+        alpha = float(alpha_value.item())
+        scale_down = alpha / rank
+        scale_up = 1.0
+        while scale_down * 2 < scale_up:
+            scale_down *= 2
+            scale_up /= 2
+        return down_weight * scale_down, up_weight * scale_up
+
+    @staticmethod
+    def _ensure_transformer_lora_key(key: str) -> str:
+        return key if key.startswith("transformer.") else f"transformer.{key}"
+
+    @staticmethod
+    def _split_qkv_lora_up_weight(up_weight: Any) -> tuple[Any, Any, Any]:
+        return tuple(up_weight.chunk(3, dim=0))
+
+    @classmethod
+    def _convert_zimage_legacy_lora_state_dict_to_diffusers(
+        cls,
+        lora_id: str,
+        state_dict: dict[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        string_keys = [str(key) for key in state_dict.keys()]
+        has_lora_unet = any("lora_unet_" in key for key in string_keys)
+        has_diffusion_model = any(key.startswith("diffusion_model.") for key in string_keys)
+        has_default = any("default." in key for key in string_keys)
+        has_legacy_dotted = any(".lora.down.weight" in key or ".lora.up.weight" in key for key in string_keys)
+        has_non_diffusers = any(".lora_down.weight" in key or ".lora_up.weight" in key for key in string_keys)
+        has_diffusers = any(".lora_A.weight" in key or ".lora_B.weight" in key for key in string_keys)
+        has_alphas = any(key.endswith(".alpha") for key in string_keys)
+
+        format_label = "diffusers-native"
+        if has_lora_unet:
+            format_label = "lora_unet"
+        elif has_diffusion_model or has_default or has_legacy_dotted or has_non_diffusers or has_alphas:
+            format_label = "legacy-zimage"
+
+        canonical_state_dict: dict[str, Any] = {}
+        for raw_key, value in state_dict.items():
+            canonical_key = str(raw_key).replace("default.", "")
+            if canonical_key.startswith("diffusion_model."):
+                canonical_key = canonical_key.removeprefix("diffusion_model.")
+            if canonical_key.startswith("lora_unet_"):
+                canonical_key = cls._convert_lora_unet_key_to_legacy_zimage_key(canonical_key)
+            canonical_key = cls._normalize_legacy_zimage_lora_key(canonical_key)
+            canonical_state_dict[canonical_key] = value
+
+        canonical_has_diffusers = any(".lora_A.weight" in key or ".lora_B.weight" in key for key in canonical_state_dict.keys())
+        canonical_has_non_diffusers = any(
+            ".lora_down.weight" in key or ".lora_up.weight" in key for key in canonical_state_dict.keys()
+        )
+
+        if canonical_has_diffusers and not canonical_has_non_diffusers:
+            finalized: dict[str, Any] = {}
+            for key, value in canonical_state_dict.items():
+                if key.endswith(".alpha"):
+                    continue
+                if ".lora_A.weight" not in key and ".lora_B.weight" not in key:
+                    raise ValueError(
+                        f"LoRA '{lora_id}' uses an unsupported Z-Image key layout near '{key}'."
+                    )
+                finalized[cls._ensure_transformer_lora_key(key)] = value
+            if not finalized:
+                raise ValueError(f"LoRA '{lora_id}' did not contain any diffusers LoRA weights.")
+            return finalized, format_label
+
+        if not canonical_has_non_diffusers:
+            sample_key = next(iter(canonical_state_dict.keys()), "<empty>")
+            raise ValueError(
+                f"LoRA '{lora_id}' uses an unsupported Z-Image key layout near '{sample_key}'."
+            )
+
+        working_state_dict = dict(canonical_state_dict)
+        converted_state_dict: dict[str, Any] = {}
+        for key in list(working_state_dict.keys()):
+            if not key.endswith(".lora_down.weight"):
+                continue
+
+            up_key = key.replace(".lora_down.weight", ".lora_up.weight")
+            alpha_key = key.replace(".lora_down.weight", ".alpha")
+            if up_key not in working_state_dict:
+                raise ValueError(
+                    f"LoRA '{lora_id}' is missing the matching up weight for '{key}'."
+                )
+            if alpha_key not in working_state_dict:
+                raise ValueError(
+                    f"LoRA '{lora_id}' is missing the matching alpha for '{key}'."
+                )
+
+            down_weight = working_state_dict.pop(key)
+            up_weight = working_state_dict.pop(up_key)
+            alpha_value = working_state_dict.pop(alpha_key)
+            scaled_down_weight, scaled_up_weight = cls._apply_zimage_alpha_scale(
+                down_weight,
+                up_weight,
+                alpha_value,
+            )
+            if ".attention.qkv." in key:
+                q_up_weight, k_up_weight, v_up_weight = cls._split_qkv_lora_up_weight(scaled_up_weight)
+                for projection_name, projection_up_weight in (
+                    ("to_q", q_up_weight),
+                    ("to_k", k_up_weight),
+                    ("to_v", v_up_weight),
+                ):
+                    projection_key = key.replace(".attention.qkv.", f".attention.{projection_name}.")
+                    converted_state_dict[
+                        cls._ensure_transformer_lora_key(projection_key.replace(".lora_down.weight", ".lora_A.weight"))
+                    ] = scaled_down_weight
+                    converted_state_dict[
+                        cls._ensure_transformer_lora_key(projection_key.replace(".lora_down.weight", ".lora_B.weight"))
+                    ] = projection_up_weight
+                continue
+
+            converted_state_dict[
+                cls._ensure_transformer_lora_key(key.replace(".lora_down.weight", ".lora_A.weight"))
+            ] = scaled_down_weight
+            converted_state_dict[
+                cls._ensure_transformer_lora_key(key.replace(".lora_down.weight", ".lora_B.weight"))
+            ] = scaled_up_weight
+
+        leftover_keys = list(working_state_dict.keys())
+        if leftover_keys:
+            sample_key = leftover_keys[0]
+            raise ValueError(
+                f"LoRA '{lora_id}' uses an unsupported Z-Image key layout near '{sample_key}'."
+            )
+        if not converted_state_dict:
+            raise ValueError(f"LoRA '{lora_id}' did not contain any convertible Z-Image LoRA weights.")
+        return converted_state_dict, format_label
+
+    def _load_lora_adapters(self, pipe: Any, loras: tuple[LoraSelection, ...]) -> None:
+        if not loras:
+            return
+        if not self._pipe_supports_lora(pipe):
+            raise ValueError("Active pipeline does not support LoRA adapters.")
+
+        adapter_names = [lora.id for lora in loras]
+        adapter_weights = [float(lora.weight) for lora in loras]
+        for lora in loras:
+            raw_state_dict = load_safetensors_file(str(lora.path), device="cpu")
+            prepared_state_dict, format_label = self._convert_zimage_legacy_lora_state_dict_to_diffusers(
+                lora.id,
+                raw_state_dict,
+            )
+            if format_label != "diffusers-native":
+                LOGGER.info(
+                    "Detected %s LoRA format for '%s'; converting locally to diffusers format.",
+                    format_label,
+                    lora.id,
+                    )
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message=r"Already found a `peft_config` attribute in the model\. This will lead to having multiple adapters in the model\. Make sure to know what you are doing!",
+                        category=UserWarning,
+                    )
+                    pipe.load_lora_weights(
+                        prepared_state_dict,
+                        adapter_name=lora.id,
+                        hotswap=False,
+                        use_safetensors=True,
+                        local_files_only=True,
+                    )
+            except ValueError as exc:
+                if "`state_dict` should be empty" in str(exc):
+                    sample_key = next(iter(prepared_state_dict.keys()), "<empty>")
+                    raise ValueError(
+                        f"LoRA '{lora.id}' could not be converted to a diffusers-compatible transformer state dict. "
+                        f"First converted key: '{sample_key}'."
+                    ) from exc
+                raise
+        pipe.set_adapters(adapter_names, adapter_weights=adapter_weights)
+        pipe.fuse_lora(
+            components=["transformer"],
+            adapter_names=adapter_names,
+            lora_scale=1.0,
+            safe_fusing=True,
+        )
+
+    def _clear_lora_adapters(self, pipe: Any, adapter_names: list[str] | None = None) -> None:
+        if not self._pipe_supports_lora(pipe):
+            return
+        try:
+            pipe.unfuse_lora(components=["transformer"])
+        except Exception:
+            pass
+        target_names = list(adapter_names or [])
+        if target_names:
+            try:
+                pipe.delete_adapters(target_names)
+            except Exception:
+                pass
+
+    def drop_lora_adapters(self, lora_ids: list[str] | None = None) -> None:
+        if self._loaded is None:
+            return
+        self._clear_lora_adapters(self._loaded.pipeline, adapter_names=lora_ids)
+
     def _resolve_refine_tiling(self, request: GenerationRequest, width: int, height: int) -> tuple[int, int]:
         overlap = max(8, int(request.refine_tile_overlap or 64))
         if request.refine_tile_size is not None:
@@ -2741,12 +3071,26 @@ class DiffusersZImageBackend:
                 torch_module=torch,
             )
 
-        prompt_original, prompt_effective, prompt_enhanced = self._resolve_effective_prompt(
+        prompt_original, prompt_effective_base, prompt_enhanced = self._resolve_effective_prompt(
             pipe=pipe,
             prompt=request.prompt,
             enhance_prompt=request.enhance_prompt,
             seed=request.seed,
             torch_module=torch,
+        )
+        prompt_effective, lora_trigger_words = self._append_lora_triggers(
+            prompt_effective_base,
+            request.loras,
+        )
+        active_lora_ids = [lora.id for lora in request.loras]
+        lora_payload = tuple(
+            {
+                "id": lora.id,
+                "name": lora.name or lora.id,
+                "weight": float(lora.weight),
+                "trigger_words": list(lora.trigger_words),
+            }
+            for lora in request.loras
         )
 
         self._preflight_fallback_triggered = False
@@ -2779,38 +3123,43 @@ class DiffusersZImageBackend:
         started = now_perf()
         try:
             with torch.inference_mode():
-                output = pipe(
-                    prompt=prompt_effective,
-                    width=request.width,
-                    height=request.height,
-                    num_inference_steps=steps,
-                    guidance_scale=guidance_scale,
-                    generator=generator,
-                    latents=procedural_latents,
-                )
-        except (RuntimeError, ValueError, FloatingPointError) as exc:
-            retry_mode = self._resolve_scheduler_retry_mode(scheduler_mode, exc)
-            if retry_mode is None:
-                raise
-            LOGGER.warning(
-                "Scheduler mode %s failed for pack %s (%s). Retrying once with %s.",
-                scheduler_mode,
-                getattr(self._model_pack, "name", "<unknown-pack>"),
-                exc,
-                retry_mode,
-            )
-            self._clear_cuda_cache(torch)
-            scheduler_mode = self._apply_scheduler_mode(pipe, retry_mode)
-            with torch.inference_mode():
-                output = pipe(
-                    prompt=prompt_effective,
-                    width=request.width,
-                    height=request.height,
-                    num_inference_steps=steps,
-                    guidance_scale=guidance_scale,
-                    generator=generator,
-                    latents=procedural_latents,
-                )
+                if request.loras:
+                    self._load_lora_adapters(pipe, request.loras)
+                try:
+                    output = pipe(
+                        prompt=prompt_effective,
+                        width=request.width,
+                        height=request.height,
+                        num_inference_steps=steps,
+                        guidance_scale=guidance_scale,
+                        generator=generator,
+                        latents=procedural_latents,
+                    )
+                except (RuntimeError, ValueError, FloatingPointError) as exc:
+                    retry_mode = self._resolve_scheduler_retry_mode(scheduler_mode, exc)
+                    if retry_mode is None:
+                        raise
+                    LOGGER.warning(
+                        "Scheduler mode %s failed for pack %s (%s). Retrying once with %s.",
+                        scheduler_mode,
+                        getattr(self._model_pack, "name", "<unknown-pack>"),
+                        exc,
+                        retry_mode,
+                    )
+                    self._clear_cuda_cache(torch)
+                    scheduler_mode = self._apply_scheduler_mode(pipe, retry_mode)
+                    output = pipe(
+                        prompt=prompt_effective,
+                        width=request.width,
+                        height=request.height,
+                        num_inference_steps=steps,
+                        guidance_scale=guidance_scale,
+                        generator=generator,
+                        latents=procedural_latents,
+                    )
+        finally:
+            if active_lora_ids:
+                self._clear_lora_adapters(pipe, adapter_names=active_lora_ids)
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         duration_ms = int((now_perf() - started) * 1000)
@@ -2833,6 +3182,7 @@ class DiffusersZImageBackend:
             prompt_original=prompt_original,
             prompt_effective=prompt_effective,
             prompt_enhanced=prompt_enhanced,
+            prompt_effective_base=prompt_effective_base,
             cuda_memory_before=pre_mem,
             cuda_memory_after=post_mem,
             process_memory_before=pre_proc_mem,
@@ -2873,6 +3223,9 @@ class DiffusersZImageBackend:
             fp8_storage_preserved_tensor_count=self._fp8_storage_preserved_tensor_count,
             fp8_promoted_tensor_count=self._fp8_promoted_tensor_count,
             fp8_normalized_tensor_names=self._fp8_normalized_tensor_names,
+            loras=lora_payload,
+            lora_count=len(lora_payload),
+            lora_trigger_words=lora_trigger_words,
         )
 
     def upscale_and_refine(self, input_image: object, request: GenerationRequest) -> GenerationResult:

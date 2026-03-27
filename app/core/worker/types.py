@@ -12,6 +12,15 @@ def resolve_procedural_creativity(*, procedural_creativity: int | None = 0) -> i
 
 
 @dataclass(frozen=True)
+class LoraSelection:
+    id: str
+    path: Path
+    weight: float = 1.0
+    name: str | None = None
+    trigger_words: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class GenerationRequest:
     prompt: str
     width: int
@@ -27,3 +36,4 @@ class GenerationRequest:
     refine_tile_size: int | None = None
     refine_tile_overlap: int = 64
     upscaler_checkpoint: Path | None = None
+    loras: tuple[LoraSelection, ...] = ()

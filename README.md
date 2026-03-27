@@ -13,13 +13,13 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 <img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
 <img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
-## New in v1.4.2
+## New in v1.5.0
 
-- the gallery now has persisted favorites with tile and fullscreen hearts, favorite-only filtering, and API/storage support for favorite mutation and listing
-- gallery interactions feel faster and cleaner, with optimistic favorite toggles, softer filter enter/exit motion, multiselect-safe overlays, and short delete/upscale action FX
-- browser notifications now fire when image generations finish, so long runs can complete in the background without babysitting the tab
-- real FP8 packs remain supported as normal user packs with BF16 compute plus FP8-at-rest preservation where safe; native FP8 inference is not implemented in this release
-- the `/API` surface and generated docs now cover favorites end to end, with focused tests for the new filter/mutation path and queue restore hardening for restored active jobs
+- the app now supports managed LoRA libraries end to end: staged `.safetensors` upload, metadata editing, trigger-word detection, session-scoped multi-LoRA application, stored previews, and LoRA metadata in outputs and fullscreen details
+- the LoRA drawer and editor were redesigned with a proper library grid, richer hover controls, weight presets, upload progress, stronger modal behavior, and a cleaner right-side panel layout
+- gallery and fullscreen actions were normalized around the same icon-button language, including multiselect tools, fullscreen preview actions, delete confirmations, and a tighter overall layout pass
+- multiple Z-Image LoRA compatibility issues were fixed, including offline `weight_name` loading, legacy/dotted key normalization, `lora_unet_*` local conversion, `qkv` splitting, diffusers-native `diffusion_model.*` handling, and multi-adapter warning suppression
+- launcher/runtime polish continues in this release with the model-pack chooser fix, corrected dtype argument handling in the Z-Image pipeline factory, refreshed generated API docs, and focused coverage for LoRA/library behavior; native FP8 inference is not implemented in this release
 
 ## Specs
 
@@ -206,6 +206,13 @@ Direct image fetches can use `?client_id=<client-id>` if you are linking them in
 - `GET /health`
 - `GET /config`
 - `GET /model-packs`
+- `GET /loras`
+- `POST /lora-drafts`
+- `POST /lora-drafts/{draft_id}/detect-triggers`
+- `POST /loras`
+- `PATCH /loras/{lora_id}`
+- `GET /loras/{lora_id}/preview`
+- `DELETE /loras/{lora_id}`
 - `POST /generate`
 - `POST /upscale`
 - `POST /images/download-zip`
@@ -230,7 +237,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -242,6 +249,7 @@ Sample response:
   "fp8_runtime_mode": null,
   "fp8_storage_preserved_tensor_count": 0,
   "fp8_promoted_tensor_count": 0,
+  "lora_capable": true,
   "gallery_color_cache_active": false,
   "gallery_color_cache_version": "dominant_v6",
   "gallery_color_cache_target_version": "dominant_v6",
@@ -259,7 +267,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.4.2",
+  "app_version": "1.5.0",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -298,6 +306,7 @@ Sample response:
     "fp8_normalized_tensor_count": 0,
     "fp8_storage_preserved_tensor_count": 0,
     "fp8_promoted_tensor_count": 0,
+    "lora_capable": true,
     "gallery_color_cache_active": false,
     "gallery_color_cache_version": "dominant_v6",
     "gallery_color_cache_target_version": "dominant_v6",
@@ -325,6 +334,208 @@ Sample response:
 }
 ```
 
+### `GET /loras`
+
+List installed LoRAs, preview URLs, saved trigger words, detected trigger suggestions, and runtime LoRA capabilities.
+
+Sample response:
+
+```json
+{
+  "count": 1,
+  "items": [
+    {
+      "id": "cinematic-style",
+      "display_name": "cinematic-style",
+      "source_filename": "cinematic-style.safetensors",
+      "preview_url": "/loras/cinematic-style/preview",
+      "trigger_words": [
+        "cinematic style"
+      ],
+      "detected_trigger_words": [
+        "cinematic style",
+        "moody light"
+      ],
+      "preview_is_custom": true,
+      "metadata_summary": {
+        "ss_output_name": "cinematic-style"
+      },
+      "file_size_bytes": 12345678
+    }
+  ],
+  "capabilities": {
+    "supported": true,
+    "active_pack": "Rayzist_bf16",
+    "max_active": 3,
+    "min_weight": 0.0,
+    "max_weight": 2.0,
+    "default_weight": 1.0
+  }
+}
+```
+
+### `POST /lora-drafts`
+
+Upload one `.safetensors` LoRA into draft storage for metadata inspection before saving it into the live library.
+
+Sample request body:
+
+```text
+multipart/form-data with one file field named `file`
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "draft": {
+    "draft_id": "cinematic-style",
+    "display_name": "cinematic-style",
+    "source_filename": "cinematic-style.safetensors",
+    "detected_trigger_words": [
+      "cinematic style",
+      "moody light"
+    ],
+    "metadata_summary": {
+      "ss_output_name": "cinematic-style"
+    },
+    "file_size_bytes": 12345678
+  }
+}
+```
+
+### `POST /lora-drafts/{draft_id}/detect-triggers`
+
+Re-scan a staged LoRA draft for trigger words and metadata suggestions.
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "draft": {
+    "draft_id": "cinematic-style",
+    "display_name": "cinematic-style",
+    "source_filename": "cinematic-style.safetensors",
+    "detected_trigger_words": [
+      "cinematic style",
+      "moody light"
+    ],
+    "metadata_summary": {
+      "ss_output_name": "cinematic-style"
+    },
+    "file_size_bytes": 12345678
+  }
+}
+```
+
+### `POST /loras`
+
+Finalize a staged LoRA draft into the live library with a chosen name, saved trigger words, and an optional thumbnail image.
+
+Sample request body:
+
+```text
+multipart/form-data with `draft_id`, `display_name`, `trigger_words` (JSON string), and optional `thumbnail` image
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "item": {
+    "id": "cinematic-style",
+    "display_name": "Cinematic Style",
+    "source_filename": "cinematic-style.safetensors",
+    "preview_url": "/loras/cinematic-style/preview",
+    "preview_is_custom": true,
+    "trigger_words": [
+      "cinematic style",
+      "moody light"
+    ],
+    "detected_trigger_words": [
+      "cinematic style",
+      "moody light"
+    ],
+    "metadata_summary": {
+      "ss_output_name": "cinematic-style"
+    },
+    "file_size_bytes": 12345678
+  },
+  "capabilities": {
+    "supported": true,
+    "active_pack": "Rayzist_bf16",
+    "max_active": 3,
+    "min_weight": 0.0,
+    "max_weight": 2.0,
+    "default_weight": 1.0
+  }
+}
+```
+
+### `PATCH /loras/{lora_id}`
+
+Update the display name, saved trigger words, and optional thumbnail image for one installed LoRA without replacing the weights file.
+
+Sample request body:
+
+```text
+multipart/form-data with `display_name`, `trigger_words` (JSON string), and optional `thumbnail` image
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "item": {
+    "id": "cinematic-style",
+    "display_name": "Cinematic Style",
+    "source_filename": "cinematic-style.safetensors",
+    "preview_url": "/loras/cinematic-style/preview",
+    "preview_is_custom": true,
+    "trigger_words": [
+      "cinematic style",
+      "moody light"
+    ],
+    "detected_trigger_words": [
+      "cinematic style",
+      "moody light"
+    ],
+    "metadata_summary": {
+      "ss_output_name": "cinematic-style"
+    },
+    "file_size_bytes": 12345678
+  }
+}
+```
+
+### `GET /loras/{lora_id}/preview`
+
+Download the current preview image for one installed LoRA.
+
+Sample response:
+
+```text
+PNG binary response
+```
+
+### `DELETE /loras/{lora_id}`
+
+Delete one installed LoRA plus its sidecar JSON and preview image.
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "id": "cinematic-style",
+  "deleted_files": 3
+}
+```
+
 ### `POST /generate`
 
 Generate one image from prompt and dimensions in the current client scope.
@@ -343,7 +554,13 @@ Sample request body:
   "seed": 123456,
   "scheduler_mode": "euler",
   "enhance_prompt": false,
-  "procedural_creativity": 0
+  "procedural_creativity": 0,
+  "loras": [
+    {
+      "id": "cinematic-style",
+      "weight": 1.0
+    }
+  ]
 }
 ```
 
@@ -359,8 +576,18 @@ Sample response:
   "duration_ms": 12345,
   "url": "/images/justrayzist_YYYYMMDD_hhmmss_000.png",
   "prompt_enhanced": false,
+  "prompt_effective_base": "A cinematic skyline at sunrise",
+  "prompt_effective": "A cinematic skyline at sunrise, cinematic style",
   "scheduler_mode": "euler",
-  "procedural_creativity": 0
+  "procedural_creativity": 0,
+  "lora_count": 1,
+  "loras": [
+    {
+      "id": "cinematic-style",
+      "name": "cinematic-style",
+      "weight": 1.0
+    }
+  ]
 }
 ```
 

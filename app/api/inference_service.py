@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import random
@@ -24,9 +25,25 @@ from app.core.model_registry import (
     load_model_pack_by_name,
 )
 from app.core.worker import GenerationRequest, GenerationSession
-from app.core.worker.types import resolve_procedural_creativity
+from app.core.worker.types import LoraSelection, resolve_procedural_creativity
 from app.core.upscale_blend import UPSCALE_ENGINE_NAME, upscale_with_x2_seed_blend
 from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
+from app.storage.lora_library import (
+    DEFAULT_MAX_ACTIVE_LORAS,
+    DEFAULT_LORA_WEIGHT,
+    MAX_LORA_WEIGHT,
+    MIN_LORA_WEIGHT,
+    create_lora_draft,
+    detect_lora_draft_triggers,
+    delete_lora as delete_library_lora,
+    get_lora as get_library_lora,
+    get_lora_draft as get_library_lora_draft,
+    list_loras as list_library_loras,
+    normalize_lora_id,
+    preview_path_for_lora,
+    finalize_lora_draft,
+    update_lora as update_library_lora,
+)
 from app.storage.gallery_index import (
     COLOR_CACHE_VERSION,
     delete_image,
@@ -48,6 +65,7 @@ LOGGER = logging.getLogger(__name__)
 _DONOR_PACK_NAME = "Rayzist_bf16"
 _DERIVED_FP8_STORAGE_NAME = "fp8_storage"
 _DERIVED_FP8_STORAGE_SUFFIX = "__auto_fp8_storage"
+_LORA_CAPABLE_BACKENDS = {"diffusers", "diffusers_zimage", "fp8_zimage"}
 
 
 def _assert_supported_backend(model_pack: ModelPack) -> None:
@@ -85,11 +103,139 @@ class InferenceService:
     def sanitize_owner_id(owner_id: str) -> str:
         return normalize_owner_id(owner_id)
 
+    @staticmethod
+    def sanitize_lora_id(lora_id: str) -> str:
+        return normalize_lora_id(lora_id)
+
     def owner_output_dir(self, owner_id: str) -> Path:
         safe_owner = self.sanitize_owner_id(owner_id)
         output_dir = (self._settings.paths.outputs_dir / safe_owner).resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir
+
+    @staticmethod
+    def _pack_supports_loras(model_pack: ModelPack) -> bool:
+        backends = [
+            str(name).strip().lower()
+            for name in getattr(model_pack, "backend_preference", [])
+            if str(name).strip()
+        ]
+        if not backends:
+            backends = ["diffusers"]
+        return any(name in _LORA_CAPABLE_BACKENDS for name in backends)
+
+    def lora_capabilities(self, pack_name: str | None = None) -> dict[str, Any]:
+        try:
+            _base_pack, effective_pack, _resource_tier = self._resolve_runtime_pack(pack_name)
+            supported = self._pack_supports_loras(effective_pack)
+            active_pack = effective_pack.base_name or effective_pack.name
+        except Exception:
+            supported = False
+            active_pack = None
+        return {
+            "supported": supported,
+            "active_pack": active_pack,
+            "max_active": DEFAULT_MAX_ACTIVE_LORAS,
+            "min_weight": MIN_LORA_WEIGHT,
+            "max_weight": MAX_LORA_WEIGHT,
+            "default_weight": DEFAULT_LORA_WEIGHT,
+        }
+
+    def list_loras(self) -> list[dict[str, Any]]:
+        return list_library_loras(self._settings)
+
+    def create_lora_draft(self, *, filename: str, content: bytes) -> dict[str, Any]:
+        return create_lora_draft(self._settings, filename=filename, content=content)
+
+    def get_lora_draft(self, draft_id: str) -> dict[str, Any] | None:
+        return get_library_lora_draft(self._settings, normalize_lora_id(draft_id))
+
+    def detect_lora_draft_triggers(self, draft_id: str) -> dict[str, Any]:
+        return detect_lora_draft_triggers(self._settings, normalize_lora_id(draft_id))
+
+    def finalize_lora_draft(
+        self,
+        *,
+        draft_id: str,
+        display_name: Any,
+        trigger_words: Any,
+        preview_content: bytes | None = None,
+    ) -> dict[str, Any]:
+        return finalize_lora_draft(
+            self._settings,
+            draft_id=normalize_lora_id(draft_id),
+            display_name=display_name,
+            trigger_words=trigger_words,
+            preview_content=preview_content,
+        )
+
+    def update_lora(
+        self,
+        *,
+        lora_id: str,
+        display_name: Any,
+        trigger_words: Any,
+        preview_content: bytes | None = None,
+    ) -> dict[str, Any]:
+        return update_library_lora(
+            self._settings,
+            lora_id=normalize_lora_id(lora_id),
+            display_name=display_name,
+            trigger_words=trigger_words,
+            preview_content=preview_content,
+        )
+
+    def preview_lora_path(self, lora_id: str) -> Path:
+        return preview_path_for_lora(self._settings, self.sanitize_lora_id(lora_id))
+
+    def delete_lora(self, lora_id: str) -> dict[str, Any]:
+        normalized = self.sanitize_lora_id(lora_id)
+        result = delete_library_lora(self._settings, normalized)
+        with self._state_lock:
+            if self._active_session is not None:
+                self._active_session.drop_lora_adapters([normalized])
+        return result
+
+    def _resolve_generation_loras(
+        self,
+        raw_loras: list[dict[str, Any]] | None,
+        *,
+        pack_name: str | None = None,
+    ) -> tuple[LoraSelection, ...]:
+        if not raw_loras:
+            return ()
+        if len(raw_loras) > DEFAULT_MAX_ACTIVE_LORAS:
+            raise ValueError(f"No more than {DEFAULT_MAX_ACTIVE_LORAS} LoRAs can be active at once.")
+        if not self.lora_capabilities(pack_name).get("supported", False):
+            raise ValueError("The active model pack does not support LoRA adapters.")
+
+        resolved: list[LoraSelection] = []
+        seen_ids: set[str] = set()
+        for raw_item in raw_loras:
+            if not isinstance(raw_item, dict):
+                raise ValueError("LoRA selection entries must be objects.")
+            lora_id = self.sanitize_lora_id(str(raw_item.get("id") or ""))
+            if lora_id in seen_ids:
+                raise ValueError(f"Duplicate LoRA selection: {lora_id}")
+            weight = float(raw_item.get("weight", DEFAULT_LORA_WEIGHT))
+            if weight < MIN_LORA_WEIGHT or weight > MAX_LORA_WEIGHT:
+                raise ValueError(
+                    f"LoRA weight for '{lora_id}' must be between {MIN_LORA_WEIGHT:.1f} and {MAX_LORA_WEIGHT:.1f}."
+                )
+            record = get_library_lora(self._settings, lora_id)
+            if record is None:
+                raise ValueError(f"LoRA not found: {lora_id}")
+            resolved.append(
+                LoraSelection(
+                    id=lora_id,
+                    path=Path(str(record["path"])),
+                    weight=weight,
+                    name=str(record.get("display_name") or lora_id),
+                    trigger_words=tuple(str(item) for item in record.get("trigger_words") or []),
+                )
+            )
+            seen_ids.add(lora_id)
+        return tuple(resolved)
 
     def list_model_packs(self) -> list[dict[str, str]]:
         packs: list[dict[str, str]] = []
@@ -143,6 +289,7 @@ class InferenceService:
                 "fp8_storage_preserved_tensor_count", 0
             ),
             "fp8_promoted_tensor_count": backend_status.get("fp8_promoted_tensor_count", 0),
+            "lora_capable": backend_status.get("lora_capable", self.lora_capabilities().get("supported", False)),
             "gallery_color_cache_active": color_cache_status.get("active", False),
             "gallery_color_cache_version": color_cache_status.get("version"),
             "gallery_color_cache_target_version": color_cache_status.get("target_version"),
@@ -540,11 +687,13 @@ class InferenceService:
         scheduler_mode: str | None = None,
         enhance_prompt: bool = False,
         procedural_creativity: int = 0,
+        loras: list[dict[str, Any]] | None = None,
         job_id: str | None = None,
     ) -> dict[str, Any]:
         effective_procedural_creativity = resolve_procedural_creativity(
             procedural_creativity=procedural_creativity
         )
+        resolved_loras = self._resolve_generation_loras(loras, pack_name=pack_name)
         safe_owner_id = self.sanitize_owner_id(owner_id)
         cancel_event = Event()
         with self._state_lock:
@@ -575,6 +724,7 @@ class InferenceService:
                     "seed": effective_seed,
                     "enhance_prompt": enhance_prompt,
                     "procedural_creativity": effective_procedural_creativity,
+                    "lora_count": len(resolved_loras),
                     "started_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
@@ -594,6 +744,7 @@ class InferenceService:
                         scheduler_mode=scheduler_mode,
                         enhance_prompt=enhance_prompt,
                         procedural_creativity=effective_procedural_creativity,
+                        loras=resolved_loras,
                     )
                 )
                 if cancel_event.is_set():
@@ -603,12 +754,13 @@ class InferenceService:
 
                 saved_path = save_png_with_metadata(
                     image=result.image,
-                    prompt=result.prompt_effective,
+                    prompt=result.prompt_effective_base or result.prompt_effective,
                     settings=self._settings,
                     output_path=output_path,
                     extra_metadata={
                         "owner_id": safe_owner_id,
                         "prompt_original": result.prompt_original,
+                        "prompt_effective_base": result.prompt_effective_base or result.prompt_effective,
                         "prompt_effective": result.prompt_effective,
                         "prompt_enhanced": result.prompt_enhanced,
                         "width": width,
@@ -635,6 +787,8 @@ class InferenceService:
                         "resource_tier": result.resource_tier,
                         "execution_mode": result.execution_mode,
                         "procedural_creativity": result.procedural_creativity,
+                        "loras_json": json.dumps(result.loras),
+                        "lora_count": result.lora_count,
                     },
                 )
                 if cancel_event.is_set():
@@ -649,6 +803,7 @@ class InferenceService:
                         "mode": "api_generate",
                         "prompt": result.prompt_effective,
                         "prompt_original": result.prompt_original,
+                        "prompt_effective_base": result.prompt_effective_base or result.prompt_effective,
                         "prompt_effective": result.prompt_effective,
                         "prompt_enhanced": result.prompt_enhanced,
                         "width": width,
@@ -661,6 +816,8 @@ class InferenceService:
                         "derived_strategy": effective_pack.derived_strategy,
                         "resource_tier": result.resource_tier,
                         "procedural_creativity": result.procedural_creativity,
+                        "loras": [dict(item) for item in result.loras],
+                        "lora_count": result.lora_count,
                         **result.telemetry_dict(),
                     },
                 )
@@ -674,6 +831,7 @@ class InferenceService:
                 image_row["seed"] = result.seed
                 image_row["scheduler_mode"] = result.scheduler_mode
                 image_row["prompt_original"] = result.prompt_original
+                image_row["prompt_effective_base"] = result.prompt_effective_base or result.prompt_effective
                 image_row["prompt_effective"] = result.prompt_effective
                 image_row["prompt_enhanced"] = result.prompt_enhanced
                 image_row["runtime_profile"] = result.runtime_profile
@@ -684,9 +842,11 @@ class InferenceService:
                 image_row["fp8_fallback_reason"] = result.fp8_fallback_reason
                 image_row["fp8_runtime_mode"] = result.fp8_runtime_mode
                 image_row["procedural_creativity"] = result.procedural_creativity
+                image_row["loras"] = [dict(item) for item in result.loras]
+                image_row["lora_count"] = result.lora_count
                 image_row["job_id"] = job_id
                 LOGGER.info(
-                    "Image created: owner=%s file=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s duration_ms=%s creative_mode=%s",
+                    "Image created: owner=%s file=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s duration_ms=%s creative_mode=%s loras=%s",
                     safe_owner_id,
                     image_row["filename"],
                     base_pack.name,
@@ -697,6 +857,7 @@ class InferenceService:
                     result.seed,
                     result.duration_ms,
                     result.procedural_creativity,
+                    result.lora_count,
                 )
                 return image_row
         finally:

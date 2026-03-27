@@ -2,6 +2,7 @@ const topbarEl = document.querySelector(".topbar");
 const promptInputEl = document.getElementById("prompt-input");
 const generateButtonEl = document.getElementById("generate-button");
 const generateButtonLabelEl = document.getElementById("generate-button-label");
+const loraDrawerToggleEl = document.getElementById("lora-drawer-toggle");
 const settingsButtonEl = document.getElementById("settings-button");
 const settingsPanelEl = document.getElementById("settings-panel");
 const settingsSummaryEl = document.getElementById("settings-summary");
@@ -28,6 +29,30 @@ const galleryCountEl = document.getElementById("gallery-count");
 const statusLineEl = document.getElementById("status-line");
 const galleryEl = document.getElementById("gallery");
 const emptyStateEl = document.getElementById("empty-state");
+const loraDrawerBackdropEl = document.getElementById("lora-drawer-backdrop");
+const loraDrawerEl = document.getElementById("lora-drawer");
+const loraDrawerCloseEl = document.getElementById("lora-drawer-close");
+const loraDrawerCapabilityEl = document.getElementById("lora-drawer-capability");
+const loraFilterInputEl = document.getElementById("lora-filter-input");
+const loraUploadInputEl = document.getElementById("lora-upload-input");
+const loraDrawerEmptyEl = document.getElementById("lora-drawer-empty");
+const loraListEl = document.getElementById("lora-list");
+const loraEditorModalEl = document.getElementById("lora-editor-modal");
+const loraEditorCloseEl = document.getElementById("lora-editor-close");
+const loraEditorTitleEl = document.getElementById("lora-editor-title");
+const loraEditorFileEl = document.getElementById("lora-editor-file");
+const loraEditorProgressEl = document.getElementById("lora-editor-progress");
+const loraEditorProgressSpinnerEl = document.getElementById("lora-editor-progress-spinner");
+const loraEditorBodyEl = loraEditorModalEl?.querySelector(".lora-editor-body");
+const loraEditorNameEl = document.getElementById("lora-editor-name");
+const loraEditorThumbnailPreviewEl = document.getElementById("lora-editor-thumbnail-preview");
+const loraEditorThumbnailButtonEl = document.getElementById("lora-editor-thumbnail-button");
+const loraEditorThumbnailInputEl = document.getElementById("lora-editor-thumbnail-input");
+const loraEditorTriggerChipsEl = document.getElementById("lora-editor-trigger-chips");
+const loraEditorTriggerInputEl = document.getElementById("lora-editor-trigger-input");
+const loraEditorFetchTriggersEl = document.getElementById("lora-editor-fetch-triggers");
+const loraEditorMetadataSummaryEl = document.getElementById("lora-editor-metadata-summary");
+const loraEditorSaveEl = document.getElementById("lora-editor-save");
 const viewerModalEl = document.getElementById("viewer-modal");
 const viewerMetaEl = document.getElementById("viewer-meta");
 const viewerImageEl = document.getElementById("viewer-image");
@@ -36,6 +61,7 @@ const viewerStageEl = document.getElementById("viewer-stage");
 const viewerStageFxEl = document.getElementById("viewer-stage-fx");
 const viewerStageFxLabelEl = document.getElementById("viewer-stage-fx-label");
 const viewerCloseButtonEl = document.getElementById("viewer-close-button");
+const viewerDeleteButtonEl = document.getElementById("viewer-delete-button");
 const viewerUsePromptButtonEl = document.getElementById("viewer-use-prompt-button");
 const viewerCopyPromptButtonEl = document.getElementById("viewer-copy-prompt-button");
 const viewerUpscaleButtonEl = document.getElementById("viewer-upscale-button");
@@ -56,6 +82,7 @@ const requiredUi = [
   ["prompt-input", promptInputEl],
   ["generate-button", generateButtonEl],
   ["generate-button-label", generateButtonLabelEl],
+  ["lora-drawer-toggle", loraDrawerToggleEl],
   ["settings-button", settingsButtonEl],
   ["settings-panel", settingsPanelEl],
   ["settings-summary", settingsSummaryEl],
@@ -82,6 +109,30 @@ const requiredUi = [
   ["status-line", statusLineEl],
   ["gallery", galleryEl],
   ["empty-state", emptyStateEl],
+  ["lora-drawer-backdrop", loraDrawerBackdropEl],
+  ["lora-drawer", loraDrawerEl],
+  ["lora-drawer-close", loraDrawerCloseEl],
+  ["lora-drawer-capability", loraDrawerCapabilityEl],
+  ["lora-filter-input", loraFilterInputEl],
+  ["lora-upload-input", loraUploadInputEl],
+  ["lora-drawer-empty", loraDrawerEmptyEl],
+  ["lora-list", loraListEl],
+  ["lora-editor-modal", loraEditorModalEl],
+  ["lora-editor-close", loraEditorCloseEl],
+  ["lora-editor-title", loraEditorTitleEl],
+  ["lora-editor-file", loraEditorFileEl],
+  ["lora-editor-progress", loraEditorProgressEl],
+  ["lora-editor-progress-spinner", loraEditorProgressSpinnerEl],
+  ["lora-editor-body", loraEditorBodyEl],
+  ["lora-editor-name", loraEditorNameEl],
+  ["lora-editor-thumbnail-preview", loraEditorThumbnailPreviewEl],
+  ["lora-editor-thumbnail-button", loraEditorThumbnailButtonEl],
+  ["lora-editor-thumbnail-input", loraEditorThumbnailInputEl],
+  ["lora-editor-trigger-chips", loraEditorTriggerChipsEl],
+  ["lora-editor-trigger-input", loraEditorTriggerInputEl],
+  ["lora-editor-fetch-triggers", loraEditorFetchTriggersEl],
+  ["lora-editor-metadata-summary", loraEditorMetadataSummaryEl],
+  ["lora-editor-save", loraEditorSaveEl],
   ["viewer-modal", viewerModalEl],
   ["viewer-meta", viewerMetaEl],
   ["viewer-image", viewerImageEl],
@@ -90,6 +141,7 @@ const requiredUi = [
   ["viewer-stage-fx", viewerStageFxEl],
   ["viewer-stage-fx-label", viewerStageFxLabelEl],
   ["viewer-close-button", viewerCloseButtonEl],
+  ["viewer-delete-button", viewerDeleteButtonEl],
   ["viewer-use-prompt-button", viewerUsePromptButtonEl],
   ["viewer-copy-prompt-button", viewerCopyPromptButtonEl],
   ["viewer-upscale-button", viewerUpscaleButtonEl],
@@ -114,6 +166,7 @@ if (missingUi.length) {
 const CLIENT_ID_STORAGE_KEY = "justrayzist.client_id";
 const GALLERY_COLUMNS_STORAGE_KEY = "justrayzist.gallery_columns";
 const CLIENT_QUEUE_STORAGE_KEY = "justrayzist.client_queue";
+const LORA_APPLIED_STORAGE_KEY = "justrayzist.lora_applied";
 const CLIENT_JOB_POLL_INTERVAL_MS = 1500;
 const CLIENT_QUEUE_STORAGE_VERSION = 2;
 const GALLERY_COLOR_FILTERS = ["black", "white", "red", "yellow", "blue", "green"];
@@ -123,6 +176,18 @@ const GALLERY_SOFT_REMOVAL_DURATION_MS = 240;
 const TILE_ACTION_FX_DURATION_MS = 190;
 const PENDING_UPSCALE_ENTRY_FX_DURATION_MS = 220;
 const VIEWER_STAGE_FX_DURATION_MS = 210;
+const DEFAULT_LORA_WEIGHT = 1.0;
+const MAX_ACTIVE_LORAS = 3;
+const MIN_LORA_WEIGHT = 0.0;
+const MAX_LORA_WEIGHT = 2.0;
+const LORA_STRENGTH_PRESETS = [
+  { label: "Weak", value: 0.25 },
+  { label: "Low", value: 0.5 },
+  { label: "Medium", value: 0.75 },
+  { label: "Normal", value: 1.0 },
+  { label: "Strong", value: 1.25 },
+  { label: "Very Strong", value: 1.5 },
+];
 
 function createClientId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -155,6 +220,42 @@ function getStoredGalleryColumns() {
     return Math.max(3, Math.min(8, raw || 4));
   } catch (_) {
     return 4;
+  }
+}
+
+function normalizeLoraWeight(rawValue) {
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) return DEFAULT_LORA_WEIGHT;
+  let best = LORA_STRENGTH_PRESETS[0];
+  for (const preset of LORA_STRENGTH_PRESETS) {
+    if (Math.abs(preset.value - value) < Math.abs(best.value - value)) {
+      best = preset;
+    }
+  }
+  return best.value;
+}
+
+function normalizeLoraSelections(rawSelections) {
+  if (!Array.isArray(rawSelections)) return [];
+  const normalized = [];
+  const seen = new Set();
+  for (const item of rawSelections) {
+    const id = String(item?.id || "").trim();
+    if (!id || seen.has(id)) continue;
+    normalized.push({ id, weight: normalizeLoraWeight(item?.weight) });
+    seen.add(id);
+    if (normalized.length >= MAX_ACTIVE_LORAS) break;
+  }
+  return normalized;
+}
+
+function loadAppliedLorasFromSession() {
+  try {
+    const raw = window.sessionStorage.getItem(LORA_APPLIED_STORAGE_KEY);
+    if (!raw) return [];
+    return normalizeLoraSelections(JSON.parse(raw));
+  } catch (_) {
+    return [];
   }
 }
 
@@ -208,6 +309,37 @@ const state = {
   viewerStageFxTimer: null,
   viewerStageFxResolve: null,
   notificationPermissionRequested: false,
+  loraDrawerOpen: false,
+  loraLibrary: [],
+  loraFilter: "",
+  loraCapabilities: {
+    supported: false,
+    max_active: MAX_ACTIVE_LORAS,
+    min_weight: MIN_LORA_WEIGHT,
+    max_weight: MAX_LORA_WEIGHT,
+    default_weight: DEFAULT_LORA_WEIGHT,
+  },
+  loraPendingSelections: [],
+  loraAppliedSelections: loadAppliedLorasFromSession(),
+  loraUploadBusy: false,
+  loraSaveBusy: false,
+  loraUploadRequest: null,
+  loraTouchFocusId: null,
+  loraEditorOpen: false,
+  loraEditorPhase: "editing",
+  loraEditorUploadProgress: 0,
+  loraEditorMode: "create",
+  loraEditorDraftId: null,
+  loraEditorLoraId: null,
+  loraEditorSourceFilename: "",
+  loraEditorDisplayName: "",
+  loraEditorTriggerWords: [],
+  loraEditorDetectedTriggerWords: [],
+  loraEditorMetadataSummary: {},
+  loraEditorPreviewUrl: "",
+  loraEditorPreviewObjectUrl: null,
+  loraEditorPreviewBlob: null,
+  loraEditorBusy: false,
 };
 
 function randomSeed() {
@@ -219,10 +351,12 @@ function updateTopbarOffset() {
   const topbarRect = topbarEl.getBoundingClientRect();
   const promptRect = promptInputEl.getBoundingClientRect();
   const promptTop = Math.max(0, Math.round(promptRect.top - topbarRect.top));
-  const buttonTop = Math.max(0, Math.round(generateButtonEl.offsetTop));
-  const generateShift = window.innerWidth <= 960 ? 0 : promptTop - buttonTop;
+  const promptRight = Math.max(0, Math.round(promptRect.right - topbarRect.left));
+  const generateLeft = window.innerWidth <= 960 ? 0 : promptRight + 8;
   document.documentElement.style.setProperty("--topbar-offset", `${offset}px`);
-  document.documentElement.style.setProperty("--generate-shift", `${generateShift}px`);
+  document.documentElement.style.setProperty("--generate-shift", "0px");
+  document.documentElement.style.setProperty("--generate-controls-top", `${promptTop}px`);
+  document.documentElement.style.setProperty("--generate-controls-left", `${generateLeft}px`);
   if (isSettingsOpen()) {
     positionSettingsPanel();
   }
@@ -478,6 +612,876 @@ async function apiFetch(path, options = {}) {
   return fetch(path, requestOptions);
 }
 
+function cloneLoraSelections(selections) {
+  return normalizeLoraSelections(selections).map((item) => ({ ...item }));
+}
+
+function loraStrengthPresetForWeight(weight) {
+  const normalized = normalizeLoraWeight(weight);
+  return LORA_STRENGTH_PRESETS.find((item) => item.value === normalized) || LORA_STRENGTH_PRESETS[3];
+}
+
+function loraStrengthPresetIndex(weight) {
+  const normalized = normalizeLoraWeight(weight);
+  const index = LORA_STRENGTH_PRESETS.findIndex((item) => item.value === normalized);
+  return index >= 0 ? index : 3;
+}
+
+function loraStrengthPresetAt(index) {
+  const resolved = Math.max(0, Math.min(LORA_STRENGTH_PRESETS.length - 1, Number(index) || 0));
+  return LORA_STRENGTH_PRESETS[resolved];
+}
+
+function isTouchLikeLoraUi() {
+  return Boolean(window.matchMedia && window.matchMedia("(hover: none), (pointer: coarse)").matches);
+}
+
+function formatInitialLoraDisplayName(filename) {
+  const stem = String(filename || "").replace(/\.[^.]+$/, "").trim();
+  if (!stem) return "";
+  return stem
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function loraEditorIsUploading() {
+  return state.loraEditorPhase === "uploading" || state.loraEditorPhase === "analyzing";
+}
+
+function loraEditorIsEditing() {
+  return state.loraEditorPhase === "editing";
+}
+
+function loraSelectionsEqual(left, right) {
+  const normalizedLeft = normalizeLoraSelections(left);
+  const normalizedRight = normalizeLoraSelections(right);
+  if (normalizedLeft.length !== normalizedRight.length) return false;
+  return normalizedLeft.every((item, index) => {
+    const other = normalizedRight[index];
+    return item.id === other.id && Math.abs(item.weight - other.weight) < 0.0001;
+  });
+}
+
+function persistAppliedLorasToSession() {
+  try {
+    window.sessionStorage.setItem(LORA_APPLIED_STORAGE_KEY, JSON.stringify(state.loraAppliedSelections));
+  } catch (_) {
+  }
+}
+
+function getLoraById(loraId) {
+  const target = String(loraId || "").trim();
+  if (!target) return null;
+  return state.loraLibrary.find((item) => item.id === target) || null;
+}
+
+function sanitizeLoraSelectionsAgainstLibrary(selections) {
+  const availableIds = new Set(state.loraLibrary.map((item) => item.id));
+  return normalizeLoraSelections(selections).filter((item) => availableIds.has(item.id));
+}
+
+function buildLoraPreviewUrl(lora) {
+  const updatedAt = String(lora?.updated_at || "").trim();
+  const query = new URLSearchParams();
+  if (updatedAt) {
+    query.set("t", updatedAt);
+  }
+  const suffix = query.toString();
+  return `/loras/${encodeURIComponent(lora.id)}/preview${suffix ? `?${suffix}` : ""}`;
+}
+
+function appliedLoraCount() {
+  return state.loraAppliedSelections.length;
+}
+
+function pendingLoraCount() {
+  return state.loraPendingSelections.length;
+}
+
+function loraSelectionsDirty() {
+  return !loraSelectionsEqual(state.loraPendingSelections, state.loraAppliedSelections);
+}
+
+function setLoraDrawerOpen(open) {
+  const next = Boolean(open);
+  const mobileOverlay = window.innerWidth <= 960;
+  state.loraDrawerOpen = next;
+  document.body.classList.toggle("lora-drawer-open", next && !mobileOverlay);
+  loraDrawerEl.classList.toggle("open", next);
+  loraDrawerEl.setAttribute("aria-hidden", String(!next));
+  loraDrawerBackdropEl.classList.toggle("hidden", !next || !mobileOverlay);
+  loraDrawerBackdropEl.setAttribute("aria-hidden", String(!next || !mobileOverlay));
+  loraDrawerToggleEl.setAttribute("aria-expanded", String(next));
+  if (!next) {
+    state.loraTouchFocusId = null;
+  }
+  updateTopbarOffset();
+  if (next) {
+    loraFilterInputEl.focus();
+  }
+}
+
+function formatLoraWeight(value) {
+  return normalizeLoraWeight(value).toFixed(2);
+}
+
+function formatLoraPresetLabel(value) {
+  const preset = loraStrengthPresetForWeight(value);
+  return `${preset.label} (${preset.value.toFixed(2)})`;
+}
+
+function parseImageLoras(item) {
+  if (Array.isArray(item?.loras)) {
+    return item.loras;
+  }
+  const raw = String(item?.loras_json || "").trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function updateLoraCapabilityUi() {
+  const supported = Boolean(state.loraCapabilities?.supported);
+  loraDrawerToggleEl.disabled = !supported;
+  loraDrawerCloseEl.disabled = state.loraSaveBusy;
+  loraDrawerCapabilityEl.classList.toggle("error", !supported);
+  if (supported) {
+    loraDrawerCapabilityEl.textContent = "";
+  } else {
+    loraDrawerCapabilityEl.textContent = "LoRAs are unavailable for the current runtime.";
+  }
+}
+
+function cleanupLoraEditorPreviewObjectUrl() {
+  if (state.loraEditorPreviewObjectUrl) {
+    URL.revokeObjectURL(state.loraEditorPreviewObjectUrl);
+    state.loraEditorPreviewObjectUrl = null;
+  }
+}
+
+function setLoraEditorPreview(previewUrl, previewBlob = null) {
+  cleanupLoraEditorPreviewObjectUrl();
+  state.loraEditorPreviewBlob = previewBlob || null;
+  state.loraEditorPreviewUrl = String(previewUrl || "").trim();
+  if (state.loraEditorPreviewUrl && previewBlob) {
+    state.loraEditorPreviewObjectUrl = state.loraEditorPreviewUrl;
+  }
+}
+
+function renderLoraEditorTriggerChips() {
+  loraEditorTriggerChipsEl.innerHTML = "";
+  state.loraEditorTriggerWords.forEach((triggerWord) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "lora-trigger-chip";
+    chip.textContent = triggerWord;
+    chip.title = `Remove ${triggerWord}`;
+    chip.addEventListener("click", () => {
+      state.loraEditorTriggerWords = state.loraEditorTriggerWords.filter((item) => item !== triggerWord);
+      renderLoraEditorTriggerChips();
+    });
+    loraEditorTriggerChipsEl.append(chip);
+  });
+}
+
+function renderLoraEditorMetadataSummary() {
+  loraEditorMetadataSummaryEl.innerHTML = "";
+  const entries = Object.entries(state.loraEditorMetadataSummary || {});
+  if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "lora-editor-metadata-empty";
+    empty.textContent = "No metadata available.";
+    loraEditorMetadataSummaryEl.append(empty);
+    return;
+  }
+  entries.forEach(([key, value]) => {
+    const row = document.createElement("div");
+    row.className = "lora-editor-metadata-row";
+    const keyEl = document.createElement("span");
+    keyEl.className = "lora-editor-metadata-key";
+    keyEl.textContent = key;
+    const valueEl = document.createElement("span");
+    valueEl.className = "lora-editor-metadata-value";
+    valueEl.textContent = String(value || "");
+    row.append(keyEl, valueEl);
+    loraEditorMetadataSummaryEl.append(row);
+  });
+}
+
+function renderLoraEditor() {
+  const phase = state.loraEditorPhase;
+  const uploading = phase === "uploading";
+  const analyzing = phase === "analyzing";
+  const saving = phase === "saving";
+  const editing = phase === "editing";
+  loraEditorTitleEl.textContent = state.loraEditorMode === "edit" ? "EDIT LORA" : "ADD LORA";
+  loraEditorFileEl.textContent = state.loraEditorSourceFilename
+    ? `Source file: ${state.loraEditorSourceFilename}`
+    : "";
+  loraEditorProgressEl.classList.toggle("hidden", editing);
+  loraEditorProgressEl.classList.toggle("uploading", uploading);
+  loraEditorProgressEl.classList.toggle("analyzing", analyzing);
+  loraEditorProgressEl.classList.toggle("saving", saving);
+  if (uploading) {
+    loraEditorProgressSpinnerEl.textContent = `Uploading... ${Math.round(state.loraEditorUploadProgress || 0)}%`;
+  } else if (analyzing) {
+    loraEditorProgressSpinnerEl.textContent = "Analyzing metadata...";
+  } else if (saving) {
+    loraEditorProgressSpinnerEl.textContent = "Saving LoRA...";
+  } else {
+    loraEditorProgressSpinnerEl.textContent = "";
+  }
+  loraEditorBodyEl.classList.toggle("hidden", uploading || analyzing);
+  loraEditorNameEl.value = state.loraEditorDisplayName || "";
+  if (state.loraEditorPreviewUrl) {
+    loraEditorThumbnailPreviewEl.src = state.loraEditorPreviewUrl;
+    loraEditorThumbnailPreviewEl.classList.remove("empty");
+  } else {
+    loraEditorThumbnailPreviewEl.removeAttribute("src");
+    loraEditorThumbnailPreviewEl.classList.add("empty");
+  }
+  renderLoraEditorTriggerChips();
+  renderLoraEditorMetadataSummary();
+  loraEditorNameEl.disabled = !editing;
+  loraEditorThumbnailButtonEl.disabled = !editing;
+  loraEditorThumbnailInputEl.disabled = !editing;
+  loraEditorTriggerInputEl.disabled = !editing;
+  loraEditorFetchTriggersEl.disabled = !editing || state.loraEditorBusy;
+  loraEditorCloseEl.disabled = saving;
+  loraEditorCloseEl.textContent = uploading || analyzing ? "Cancel Upload" : "Cancel";
+  loraEditorSaveEl.disabled = !editing || state.loraEditorBusy;
+  loraEditorSaveEl.textContent = saving ? "Saving..." : "Save LoRA";
+}
+
+function setLoraEditorOpen(open) {
+  const next = Boolean(open);
+  state.loraEditorOpen = next;
+  loraEditorModalEl.classList.toggle("hidden", !next);
+  loraEditorModalEl.setAttribute("aria-hidden", String(!next));
+  if (next) {
+    renderLoraEditor();
+    if (loraEditorIsEditing()) {
+      loraEditorNameEl.focus();
+    } else {
+      loraEditorCloseEl.focus();
+    }
+  }
+}
+
+function closeLoraEditor() {
+  cleanupLoraEditorPreviewObjectUrl();
+  state.loraUploadBusy = false;
+  state.loraUploadRequest = null;
+  state.loraEditorOpen = false;
+  state.loraEditorPhase = "editing";
+  state.loraEditorUploadProgress = 0;
+  state.loraEditorMode = "create";
+  state.loraEditorDraftId = null;
+  state.loraEditorLoraId = null;
+  state.loraEditorSourceFilename = "";
+  state.loraEditorDisplayName = "";
+  state.loraEditorTriggerWords = [];
+  state.loraEditorDetectedTriggerWords = [];
+  state.loraEditorMetadataSummary = {};
+  state.loraEditorPreviewUrl = "";
+  state.loraEditorPreviewBlob = null;
+  state.loraEditorBusy = false;
+  loraEditorModalEl.classList.add("hidden");
+  loraEditorModalEl.setAttribute("aria-hidden", "true");
+}
+
+function openLoraEditorFromDraft(draft) {
+  setLoraEditorPreview("");
+  state.loraUploadRequest = null;
+  state.loraEditorPhase = "editing";
+  state.loraEditorUploadProgress = 100;
+  state.loraEditorMode = "create";
+  state.loraEditorDraftId = String(draft?.draft_id || "").trim();
+  state.loraEditorLoraId = null;
+  state.loraEditorSourceFilename = String(draft?.source_filename || "").trim();
+  state.loraEditorDisplayName = String(draft?.display_name || "").trim();
+  state.loraEditorDetectedTriggerWords = Array.isArray(draft?.detected_trigger_words) ? [...draft.detected_trigger_words] : [];
+  state.loraEditorTriggerWords = [...state.loraEditorDetectedTriggerWords];
+  state.loraEditorMetadataSummary = draft?.metadata_summary || {};
+  state.loraEditorBusy = false;
+  setLoraEditorOpen(true);
+}
+
+function openLoraEditorForItem(item) {
+  setLoraEditorPreview(buildLoraPreviewUrl(item));
+  state.loraUploadRequest = null;
+  state.loraEditorPhase = "editing";
+  state.loraEditorUploadProgress = 0;
+  state.loraEditorMode = "edit";
+  state.loraEditorDraftId = null;
+  state.loraEditorLoraId = item.id;
+  state.loraEditorSourceFilename = String(item?.source_filename || item?.filename || "").trim();
+  state.loraEditorDisplayName = String(item?.display_name || item?.id || "").trim();
+  state.loraEditorDetectedTriggerWords = Array.isArray(item?.detected_trigger_words) ? [...item.detected_trigger_words] : [];
+  state.loraEditorTriggerWords = Array.isArray(item?.trigger_words) ? [...item.trigger_words] : [];
+  state.loraEditorMetadataSummary = item?.metadata_summary || {};
+  state.loraEditorBusy = false;
+  setLoraEditorOpen(true);
+}
+
+function addLoraEditorTriggerWord(rawValue) {
+  const value = String(rawValue || "").trim().replace(/\s+/g, " ");
+  if (!value) return false;
+  const lowered = value.toLowerCase();
+  if (state.loraEditorTriggerWords.some((item) => item.toLowerCase() === lowered)) {
+    return false;
+  }
+  state.loraEditorTriggerWords = [...state.loraEditorTriggerWords, value];
+  renderLoraEditorTriggerChips();
+  return true;
+}
+
+function mergeLoraEditorDetectedTriggerWords(values) {
+  let added = 0;
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    if (addLoraEditorTriggerWord(value)) {
+      added += 1;
+    }
+  });
+  return added;
+}
+
+function uploadLoraDraftWithProgress(file) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    state.loraUploadRequest = xhr;
+    const body = new FormData();
+    body.append("file", file, file.name);
+
+    xhr.open("POST", "/lora-drafts", true);
+    for (const [key, value] of buildClientHeaders()) {
+      xhr.setRequestHeader(key, value);
+    }
+
+    xhr.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable) return;
+      state.loraEditorPhase = "uploading";
+      state.loraEditorUploadProgress = Math.max(0, Math.min(100, (event.loaded / event.total) * 100));
+      renderLoraEditor();
+    });
+
+    xhr.upload.addEventListener("load", () => {
+      state.loraEditorPhase = "analyzing";
+      state.loraEditorUploadProgress = 100;
+      renderLoraEditor();
+    });
+
+    xhr.addEventListener("load", () => {
+      let payload = null;
+      try {
+        payload = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch (_) {
+        payload = null;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload);
+        return;
+      }
+      reject(new Error(formatApiError(payload, "Failed to stage LoRA.")));
+    });
+
+    xhr.addEventListener("error", () => {
+      reject(new Error("Failed to stage LoRA."));
+    });
+
+    xhr.addEventListener("abort", () => {
+      const error = new Error("LoRA upload cancelled.");
+      error.name = "AbortError";
+      reject(error);
+    });
+
+    xhr.send(body);
+  });
+}
+
+async function createCenteredSquareThumbnail(file) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("Failed to load thumbnail image."));
+      element.src = objectUrl;
+    });
+    const side = Math.min(image.naturalWidth || image.width, image.naturalHeight || image.height);
+    const sx = Math.max(0, Math.floor(((image.naturalWidth || image.width) - side) / 2));
+    const sy = Math.max(0, Math.floor(((image.naturalHeight || image.height) - side) / 2));
+    const canvas = document.createElement("canvas");
+    canvas.width = 1024;
+    canvas.height = 1024;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Canvas is unavailable in this browser.");
+    }
+    context.drawImage(image, sx, sy, side, side, 0, 0, 1024, 1024);
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob((result) => {
+        if (result) {
+          resolve(result);
+        } else {
+          reject(new Error("Failed to generate thumbnail."));
+        }
+      }, "image/png");
+    });
+    return { blob, url: URL.createObjectURL(blob) };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function createLoraAddTile() {
+  const tile = document.createElement("button");
+  tile.type = "button";
+  tile.className = "lora-card lora-add-tile";
+  tile.title = "Add a LoRA by browsing your local files and giving it a name and a thumbnail.";
+  const plus = document.createElement("span");
+  plus.className = "lora-add-plus";
+  plus.textContent = "+";
+  const body = document.createElement("div");
+  body.className = "lora-add-body";
+  const label = document.createElement("div");
+  label.className = "lora-add-label";
+  label.textContent = "ADD LORA";
+  const hint = document.createElement("div");
+  hint.className = "lora-add-hint";
+  hint.textContent = "Browse local files, then choose a name, triggers, and thumbnail.";
+  body.append(label, hint);
+  tile.append(plus, body);
+  tile.addEventListener("click", () => {
+    if (!Boolean(state.loraCapabilities?.supported) || state.loraUploadBusy) return;
+    loraUploadInputEl.click();
+  });
+  return tile;
+}
+
+function createLoraToggleButton(item, isActive) {
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "lora-toggle-button";
+  toggle.classList.toggle("active", Boolean(isActive));
+  toggle.setAttribute("aria-pressed", String(Boolean(isActive)));
+  toggle.title = isActive ? "Disable LoRA" : "Enable LoRA";
+
+  const track = document.createElement("span");
+  track.className = "lora-toggle-track";
+
+  const indicator = document.createElement("span");
+  indicator.className = "lora-toggle-indicator";
+  indicator.textContent = isActive ? "✓" : "✕";
+
+  const thumb = document.createElement("span");
+  thumb.className = "lora-toggle-thumb";
+
+  track.append(indicator, thumb);
+  toggle.append(track);
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    togglePendingLoraSelection(item.id);
+  });
+  return toggle;
+}
+
+function setPendingLoraWeight(loraId, rawValue, options = {}) {
+  const target = String(loraId || "").trim();
+  if (!target) return DEFAULT_LORA_WEIGHT;
+  const normalized = normalizeLoraWeight(rawValue);
+  state.loraPendingSelections = state.loraPendingSelections.map((item) =>
+    item.id === target ? { ...item, weight: normalized } : item
+  );
+  if (!options.skipRender) {
+    renderLoraLibrary();
+  }
+  return normalized;
+}
+
+function renderLoraLibrary() {
+  const filterValue = String(state.loraFilter || "").trim().toLowerCase();
+  const filteredItems = state.loraLibrary.filter((item) => {
+    if (!filterValue) return true;
+    const haystack = `${item.display_name || ""} ${item.source_filename || ""}`.toLowerCase();
+    return haystack.includes(filterValue);
+  });
+  loraListEl.innerHTML = "";
+  loraListEl.append(createLoraAddTile());
+  if (filteredItems.length === 0) {
+    loraDrawerEmptyEl.classList.remove("hidden");
+    loraDrawerEmptyEl.textContent =
+      state.loraLibrary.length === 0 ? "No LoRAs installed yet." : "No LoRAs match the current filter.";
+  } else {
+    loraDrawerEmptyEl.classList.add("hidden");
+  }
+
+  filteredItems.forEach((item) => {
+    const pendingSelection = state.loraPendingSelections.find((selection) => selection.id === item.id) || null;
+    const appliedSelection = state.loraAppliedSelections.find((selection) => selection.id === item.id) || null;
+    const isTouchFocus = state.loraTouchFocusId === item.id;
+    const card = document.createElement("article");
+    card.className = "lora-card";
+    card.classList.toggle("pending", Boolean(pendingSelection));
+    card.classList.toggle("applied", Boolean(appliedSelection));
+    card.classList.toggle("touch-focused", isTouchFocus);
+    card.dataset.loraId = item.id;
+
+    const preview = document.createElement("img");
+    preview.className = "lora-card-preview";
+    preview.src = buildLoraPreviewUrl(item);
+    preview.alt = `${item.display_name || item.id} preview`;
+
+    const overlay = document.createElement("div");
+    overlay.className = "lora-card-overlay";
+
+    const topRow = document.createElement("div");
+    topRow.className = "lora-card-top-row";
+    const name = document.createElement("div");
+    name.className = "lora-card-name";
+    name.textContent = item.display_name || item.id;
+    topRow.append(name);
+
+    let actions = null;
+    if (!pendingSelection) {
+      actions = document.createElement("div");
+      actions.className = "lora-card-actions";
+
+      const editButton = document.createElement("button");
+      editButton.type = "button";
+      editButton.className = "lora-card-icon-button";
+      editButton.title = "Edit LoRA";
+      editButton.setAttribute("aria-label", "Edit LoRA");
+      editButton.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10-10-4-4L4 16v4"></path><path d="M13 7l4 4"></path></svg>';
+      editButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openLoraEditorForItem(item);
+      });
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "lora-card-icon-button danger";
+      deleteButton.title = "Delete LoRA";
+      deleteButton.setAttribute("aria-label", "Delete LoRA");
+      deleteButton.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V5h6v2"></path><path d="M7 7l1 12h8l1-12"></path><path d="M10 10v6"></path><path d="M14 10v6"></path></svg>';
+      deleteButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        showConfirmModal(
+          `Delete LoRA \"${item.display_name || item.id}\"? This cannot be undone.`,
+          async () => {
+            await deleteLoraById(item.id);
+          },
+          "Delete",
+          "Cancel"
+        );
+      });
+
+      actions.append(editButton, deleteButton);
+    }
+
+    overlay.append(topRow);
+    const centerRow = document.createElement("div");
+    centerRow.className = "lora-card-center-row";
+    centerRow.append(createLoraToggleButton(item, Boolean(pendingSelection)));
+    overlay.append(centerRow);
+    if (pendingSelection) {
+      const sliderRow = document.createElement("div");
+      sliderRow.className = "lora-slider-row";
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = "0";
+      slider.max = String(LORA_STRENGTH_PRESETS.length - 1);
+      slider.step = "1";
+      slider.value = String(loraStrengthPresetIndex(pendingSelection.weight));
+      slider.addEventListener("click", (event) => event.stopPropagation());
+      slider.addEventListener("input", (event) => {
+        event.stopPropagation();
+        const weight = setPendingLoraWeight(item.id, loraStrengthPresetAt(slider.value).value, { skipRender: true });
+        value.textContent = formatLoraPresetLabel(weight);
+      });
+      slider.addEventListener("change", (event) => {
+        event.stopPropagation();
+        renderLoraLibrary();
+      });
+      const value = document.createElement("div");
+      value.className = "lora-slider-value";
+      value.textContent = formatLoraPresetLabel(pendingSelection.weight);
+      sliderRow.append(slider, value);
+      overlay.append(sliderRow);
+    } else if (actions) {
+      const bottomRow = document.createElement("div");
+      bottomRow.className = "lora-card-bottom-row";
+      bottomRow.append(actions);
+      overlay.append(bottomRow);
+    }
+
+    card.append(preview, overlay);
+    if (isTouchLikeLoraUi()) {
+      card.addEventListener("click", () => {
+        state.loraTouchFocusId = state.loraTouchFocusId === item.id ? null : item.id;
+        renderLoraLibrary();
+      });
+    }
+    loraListEl.append(card);
+  });
+}
+
+function syncAppliedLorasWithLibrary() {
+  if (!Boolean(state.loraCapabilities?.supported)) {
+    const hadApplied = state.loraAppliedSelections.length > 0;
+    state.loraAppliedSelections = [];
+    state.loraPendingSelections = [];
+    if (hadApplied) {
+      persistAppliedLorasToSession();
+    }
+    return;
+  }
+  if (state.loraTouchFocusId && !state.loraLibrary.some((item) => item.id === state.loraTouchFocusId)) {
+    state.loraTouchFocusId = null;
+  }
+  const sanitizedApplied = sanitizeLoraSelectionsAgainstLibrary(state.loraAppliedSelections);
+  const sanitizedPending = sanitizeLoraSelectionsAgainstLibrary(state.loraPendingSelections);
+  const appliedChanged = !loraSelectionsEqual(sanitizedApplied, state.loraAppliedSelections);
+  state.loraAppliedSelections = sanitizedApplied;
+  state.loraPendingSelections = sanitizedPending;
+  if (appliedChanged) {
+    persistAppliedLorasToSession();
+  }
+}
+
+async function loadLoraLibrary(options = {}) {
+  const response = await apiFetch("/loras", { cache: "no-store" });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_) {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(formatApiError(payload, "Failed to load LoRAs."));
+  }
+  state.loraLibrary = Array.isArray(payload?.items) ? payload.items : [];
+  state.loraCapabilities = payload?.capabilities || state.loraCapabilities;
+  syncAppliedLorasWithLibrary();
+  updateLoraCapabilityUi();
+  renderLoraLibrary();
+  if (options.refreshSummary !== false) {
+    updateSettingsSummary();
+  }
+}
+
+function togglePendingLoraSelection(loraId) {
+  const target = String(loraId || "").trim();
+  if (!target) return false;
+  const existingIndex = state.loraPendingSelections.findIndex((item) => item.id === target);
+  if (existingIndex >= 0) {
+    state.loraPendingSelections.splice(existingIndex, 1);
+    renderLoraLibrary();
+    return true;
+  }
+  if (pendingLoraCount() >= MAX_ACTIVE_LORAS) {
+    setStatus(`You can enable up to ${MAX_ACTIVE_LORAS} LoRAs at once.`, true);
+    return false;
+  }
+  state.loraPendingSelections.push({ id: target, weight: DEFAULT_LORA_WEIGHT });
+  renderLoraLibrary();
+  return true;
+}
+
+function applyPendingLoras(options = {}) {
+  state.loraAppliedSelections = cloneLoraSelections(state.loraPendingSelections);
+  persistAppliedLorasToSession();
+  updateSettingsSummary();
+  renderLoraLibrary();
+  const count = appliedLoraCount();
+  if (options.closeDrawer) {
+    setLoraDrawerOpen(false);
+  }
+  if (!options.silent) {
+    setStatus(count > 0 ? `Applied ${count} LoRA${count === 1 ? "" : "s"}.` : "Cleared applied LoRAs.");
+  }
+}
+
+async function deleteLoraById(loraId) {
+  const target = String(loraId || "").trim();
+  if (!target) return false;
+  const response = await apiFetch(`/loras/${encodeURIComponent(target)}`, { method: "DELETE" });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_) {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(formatApiError(payload, "Failed to delete LoRA."));
+  }
+  state.loraLibrary = state.loraLibrary.filter((item) => item.id !== target);
+  state.loraPendingSelections = state.loraPendingSelections.filter((item) => item.id !== target);
+  const previousAppliedCount = appliedLoraCount();
+  state.loraAppliedSelections = state.loraAppliedSelections.filter((item) => item.id !== target);
+  if (appliedLoraCount() !== previousAppliedCount) {
+    persistAppliedLorasToSession();
+    updateSettingsSummary();
+  }
+  renderLoraLibrary();
+  setStatus(`Deleted LoRA ${target}.`);
+  return true;
+}
+
+async function uploadSelectedLoraFile(file) {
+  if (!(file instanceof File)) return false;
+  state.loraUploadBusy = true;
+  state.loraEditorBusy = true;
+  state.loraEditorPhase = "uploading";
+  state.loraEditorUploadProgress = 0;
+  state.loraEditorMode = "create";
+  state.loraEditorDraftId = null;
+  state.loraEditorLoraId = null;
+  state.loraEditorSourceFilename = String(file.name || "").trim();
+  state.loraEditorDisplayName = formatInitialLoraDisplayName(file.name);
+  state.loraEditorTriggerWords = [];
+  state.loraEditorDetectedTriggerWords = [];
+  state.loraEditorMetadataSummary = {};
+  setLoraEditorPreview("");
+  setLoraEditorOpen(true);
+  updateLoraCapabilityUi();
+  try {
+    const payload = await uploadLoraDraftWithProgress(file);
+    openLoraEditorFromDraft(payload?.draft || {});
+    setLoraDrawerOpen(true);
+    setStatus(`Loaded ${file.name}. Complete the form to save it.`);
+    return true;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      return false;
+    }
+    closeLoraEditor();
+    throw error;
+  } finally {
+    state.loraUploadBusy = false;
+    state.loraUploadRequest = null;
+    state.loraEditorBusy = false;
+    updateLoraCapabilityUi();
+  }
+}
+
+async function fetchLoraEditorTriggers() {
+  if (state.loraEditorBusy) return;
+  if (state.loraEditorMode === "create" && state.loraEditorDraftId) {
+    state.loraEditorBusy = true;
+    renderLoraEditor();
+    try {
+      const response = await apiFetch(
+        `/lora-drafts/${encodeURIComponent(state.loraEditorDraftId)}/detect-triggers`,
+        { method: "POST" }
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(formatApiError(payload, "Failed to fetch trigger words."));
+      }
+      state.loraEditorDetectedTriggerWords = Array.isArray(payload?.draft?.detected_trigger_words)
+        ? [...payload.draft.detected_trigger_words]
+        : [];
+      state.loraEditorMetadataSummary = payload?.draft?.metadata_summary || state.loraEditorMetadataSummary;
+      const added = mergeLoraEditorDetectedTriggerWords(state.loraEditorDetectedTriggerWords);
+      renderLoraEditor();
+      setStatus(added > 0 ? `Added ${added} detected trigger${added === 1 ? "" : "s"}.` : "No new trigger words found.");
+    } finally {
+      state.loraEditorBusy = false;
+      renderLoraEditor();
+    }
+    return;
+  }
+  const added = mergeLoraEditorDetectedTriggerWords(state.loraEditorDetectedTriggerWords);
+  setStatus(added > 0 ? `Added ${added} detected trigger${added === 1 ? "" : "s"}.` : "No new trigger words found.");
+}
+
+async function saveLoraEditor() {
+  const displayName = String(loraEditorNameEl.value || "").trim();
+  if (!displayName) {
+    setStatus("LoRA name is required.", true);
+    return false;
+  }
+  state.loraEditorBusy = true;
+  state.loraSaveBusy = true;
+  state.loraEditorPhase = "saving";
+  updateLoraCapabilityUi();
+  renderLoraEditor();
+  const body = new FormData();
+  body.append("display_name", displayName);
+  body.append("trigger_words", JSON.stringify(state.loraEditorTriggerWords));
+  if (state.loraEditorPreviewBlob) {
+    body.append("thumbnail", state.loraEditorPreviewBlob, "thumbnail.png");
+  }
+  try {
+    const mode = state.loraEditorMode;
+    let response;
+    if (mode === "edit" && state.loraEditorLoraId) {
+      response = await apiFetch(`/loras/${encodeURIComponent(state.loraEditorLoraId)}`, {
+        method: "PATCH",
+        body,
+      });
+    } else {
+      body.append("draft_id", String(state.loraEditorDraftId || ""));
+      response = await apiFetch("/loras", {
+        method: "POST",
+        body,
+      });
+    }
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(formatApiError(payload, mode === "edit" ? "Failed to update LoRA." : "Failed to save LoRA."));
+    }
+    await loadLoraLibrary();
+    closeLoraEditor();
+    setLoraDrawerOpen(true);
+    setStatus(
+      mode === "edit"
+        ? `Updated ${payload?.item?.display_name || displayName}.`
+        : `Saved ${payload?.item?.display_name || displayName}.`
+    );
+    return true;
+  } catch (error) {
+    setStatus(String(error?.message || error), true);
+    return false;
+  } finally {
+    state.loraEditorBusy = false;
+    state.loraSaveBusy = false;
+    if (state.loraEditorOpen) {
+      state.loraEditorPhase = "editing";
+    }
+    updateLoraCapabilityUi();
+    if (state.loraEditorOpen) {
+      renderLoraEditor();
+    }
+  }
+}
+
+function cancelLoraEditor() {
+  if (state.loraEditorPhase === "saving") return;
+  const activeUpload = state.loraUploadRequest;
+  const wasUploading = loraEditorIsUploading() && activeUpload;
+  if (activeUpload) {
+    state.loraUploadRequest = null;
+    try {
+      activeUpload.abort();
+    } catch (_) {
+    }
+  }
+  closeLoraEditor();
+  updateLoraCapabilityUi();
+  if (wasUploading) {
+    setStatus("LoRA upload cancelled.");
+  }
+}
+
 function setSettingsVisible(visible) {
   settingsPanelEl.classList.toggle("open", visible);
   settingsPanelEl.setAttribute("aria-hidden", String(!visible));
@@ -704,6 +1708,7 @@ function normalizeStoredJob(rawJob, overrides = {}) {
     seed: rawJob.seed ?? null,
     enhance_prompt: Boolean(overrides.enhance_prompt ?? rawJob.enhance_prompt),
     procedural_creativity: Number(overrides.procedural_creativity ?? rawJob.procedural_creativity ?? 0),
+    loras: cloneLoraSelections(overrides.loras ?? rawJob.loras),
     status: sanitizeJobStatus(overrides.status || rawJob.status || "queued", kind),
     enqueuedAt: normalizeJobTimestamp(overrides.enqueuedAt ?? rawJob.enqueuedAt ?? rawJob.enqueued_at),
     queueIndex: Number(overrides.queueIndex ?? rawJob.queueIndex ?? 0),
@@ -724,6 +1729,7 @@ function serializeQueuedJob(job) {
     seed: job.seed ?? null,
     enhance_prompt: Boolean(job.enhance_prompt),
     procedural_creativity: Number(job.procedural_creativity || 0),
+    loras: cloneLoraSelections(job.loras),
     status: sanitizeJobStatus(job.status, sanitizeJobKind(job.kind)),
     enqueuedAt: normalizeJobTimestamp(job.enqueuedAt),
     remoteInFlight: Boolean(job.remoteInFlight),
@@ -1311,7 +2317,12 @@ function clearMultiSelection() {
 function updateMultiSelectControls() {
   const count = selectedImageCount();
   const active = state.multiSelectMode;
-  multiSelectToggleEl.textContent = active ? "Cancel" : "Multiselection";
+  multiSelectToggleEl.classList.toggle("active", active);
+  multiSelectToggleEl.setAttribute("aria-label", active ? "Disable multiselection" : "Enable multiselection");
+  multiSelectToggleEl.title = active ? "Disable multiselection" : "Enable multiselection";
+  multiSelectToggleEl.innerHTML = active
+    ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>'
+    : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h10v10H5z"></path><path d="M9 3h10v10"></path><path d="M8 12l2 2 4-4"></path></svg>';
   multiSelectToggleEl.setAttribute("aria-pressed", String(active));
   multiSelectActionsEl.classList.toggle("hidden", !active);
   multiSelectCountEl.textContent = count === 1 ? "1 selected" : `${count} selected`;
@@ -1381,6 +2392,9 @@ function updateSettingsSummary() {
       `Creative Mode <span class="summary-value">${describeProceduralCreativity(state.proceduralCreativity)}</span>`,
     );
   }
+  if (appliedLoraCount() > 0) {
+    pieces.push(`LoRAs <span class="summary-value">${appliedLoraCount()}</span>`);
+  }
 
   settingsSummaryEl.innerHTML = pieces
     .map((piece, index) => (index === 0 ? piece : `<span class="summary-sep">|</span> ${piece}`))
@@ -1390,11 +2404,19 @@ function updateSettingsSummary() {
 
 function updateReverseButton() {
   if (state.newestFirst) {
-    reverseOrderButtonEl.textContent = "Newest First";
     reverseOrderButtonEl.classList.remove("reversed");
+    reverseOrderButtonEl.setAttribute("aria-label", "Sort by newest first");
+    reverseOrderButtonEl.title = "Sort by newest first";
+    reverseOrderButtonEl.setAttribute("aria-pressed", "false");
+    reverseOrderButtonEl.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h10"></path><path d="M8 11h7"></path><path d="M8 16h4"></path><path d="M5 5v14"></path><path d="M2.5 16.5L5 19l2.5-2.5"></path></svg>';
   } else {
-    reverseOrderButtonEl.textContent = "Oldest First";
     reverseOrderButtonEl.classList.add("reversed");
+    reverseOrderButtonEl.setAttribute("aria-label", "Sort by oldest first");
+    reverseOrderButtonEl.title = "Sort by oldest first";
+    reverseOrderButtonEl.setAttribute("aria-pressed", "true");
+    reverseOrderButtonEl.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h4"></path><path d="M8 11h7"></path><path d="M8 16h10"></path><path d="M5 19V5"></path><path d="M2.5 7.5L5 5l2.5 2.5"></path></svg>';
   }
 }
 
@@ -1563,8 +2585,13 @@ function applyViewerItemMeta(item) {
     const promptText = String(item.prompt || "").trim() || "(empty prompt)";
     const promptDisplay = state.viewerPromptExpanded ? promptText : shortPrompt(promptText, 140);
     const promptTitle = state.viewerPromptExpanded ? "Click to collapse prompt" : "Click to expand prompt";
+    const loras = parseImageLoras(item);
+    const loraLabel =
+      loras.length > 0
+        ? loras.map((entry) => `${entry.name || entry.id} ${formatLoraWeight(entry.weight)}`).join(", ")
+        : "";
     viewerMetaEl.classList.toggle("expanded", state.viewerPromptExpanded);
-    viewerMetaEl.innerHTML = [
+    const parts = [
       `<span class="viewer-meta-timestamp">${escapeHtml(formatTimestamp(timestamp))}</span>`,
       '<span class="viewer-meta-sep">|</span>',
       `<button type="button" class="viewer-meta-prompt${state.viewerPromptExpanded ? " expanded" : ""}" title="${promptTitle}">${escapeHtml(promptDisplay)}</button>`,
@@ -1572,7 +2599,12 @@ function applyViewerItemMeta(item) {
       `<span>${escapeHtml(resolution)}</span>`,
       '<span class="viewer-meta-sep">|</span>',
       `<span>${escapeHtml(pack)}</span>`,
-    ].join(" ");
+    ];
+    if (loraLabel) {
+      parts.push('<span class="viewer-meta-sep">|</span>');
+      parts.push(`<span>${escapeHtml(loraLabel)}</span>`);
+    }
+    viewerMetaEl.innerHTML = parts.join(" ");
   }
   viewerDownloadEl.href = buildDownloadUrl(item.filename);
   viewerDownloadEl.setAttribute("download", item.filename);
@@ -1785,6 +2817,19 @@ function onViewerUpscale() {
   if (enqueueUpscaleFromItem(item)) {
     playViewerActionFx("upscale");
   }
+}
+
+function onViewerDelete() {
+  const item = getActiveViewerItem();
+  if (!item) return;
+  showConfirmModal(
+    `Delete "${item.filename}"?\nThis cannot be undone.`,
+    async () => {
+      await deleteImage(item.filename, { viewerFx: true });
+    },
+    "Delete",
+    "Cancel"
+  );
 }
 
 function onViewerFavoriteToggle() {
@@ -2025,14 +3070,20 @@ function createImageTile(item) {
 
   const download = document.createElement("a");
   download.className = "tile-download";
-  download.textContent = "Download";
+  download.title = "Download image";
+  download.setAttribute("aria-label", "Download image");
+  download.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10"></path><path d="M8 10l4 4 4-4"></path><path d="M5 18h14"></path></svg>';
   download.addEventListener("click", (event) => event.stopPropagation());
   primaryActions.append(download);
 
   const upscale = document.createElement("button");
   upscale.className = "tile-upscale";
   upscale.type = "button";
-  upscale.textContent = "Upscale";
+  upscale.title = "Upscale image";
+  upscale.setAttribute("aria-label", "Upscale image");
+  upscale.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 16L16 8"></path><path d="M10 8h6v6"></path><path d="M4 20h6v-2H6v-4H4z"></path><path d="M20 4h-6v2h4v4h2z"></path></svg>';
   upscale.addEventListener("click", (event) => {
     event.stopPropagation();
     const liveItem = getGalleryImageItem(tile.dataset.filename);
@@ -2045,7 +3096,10 @@ function createImageTile(item) {
   const usePrompt = document.createElement("button");
   usePrompt.className = "tile-use-prompt";
   usePrompt.type = "button";
-  usePrompt.textContent = "Use Prompt";
+  usePrompt.title = "Use prompt text";
+  usePrompt.setAttribute("aria-label", "Use prompt text");
+  usePrompt.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 6h10"></path><path d="M7 10h10"></path><path d="M7 14h6"></path><path d="M5 4h14v16H5z"></path></svg>';
   usePrompt.addEventListener("click", (event) => {
     event.stopPropagation();
     const liveItem = getGalleryImageItem(tile.dataset.filename);
@@ -2059,16 +3113,19 @@ function createImageTile(item) {
   del.className = "tile-delete tile-delete-text";
   del.type = "button";
   del.title = "Delete image";
-  del.textContent = "Delete";
+  del.setAttribute("aria-label", "Delete image");
+  del.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V5h6v2"></path><path d="M7 7l1 12h8l1-12"></path><path d="M10 10v6"></path><path d="M14 10v6"></path></svg>';
   del.addEventListener("click", (event) => {
     event.stopPropagation();
     const filename = tile.dataset.filename || "";
-    showConfirmModal(`Delete "${filename}"? This cannot be undone.`, async () => {
+    showConfirmModal(`Delete "${filename}"?\nThis cannot be undone.`, async () => {
       await deleteImage(filename);
     }, "Delete");
   });
 
-  actions.append(primaryActions, del);
+  primaryActions.append(del);
+  actions.append(primaryActions);
   overlay.append(meta, actions);
   tile.append(image, badges, cornerActions, overlay);
   tile.addEventListener("click", () => {
@@ -2537,6 +3594,9 @@ function enqueueGenerationFromPrompt() {
     seed,
     enhance_prompt: state.promptEnhance,
     procedural_creativity: state.proceduralCreativity,
+    loras: Boolean(state.loraCapabilities?.supported)
+      ? cloneLoraSelections(state.loraAppliedSelections)
+      : [],
     enqueuedAt: Date.now(),
     remoteInFlight: false,
   };
@@ -2650,6 +3710,9 @@ async function processGenerationQueue() {
               enhance_prompt: job.enhance_prompt,
               procedural_creativity: Number(job.procedural_creativity || 0),
             };
+        if (!isUpscaleJob && Array.isArray(job.loras) && job.loras.length > 0) {
+          payloadBody.loras = cloneLoraSelections(job.loras);
+        }
         const response = await apiFetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2837,6 +3900,7 @@ function endDrag(event) {
 async function bootstrap() {
   try {
     restoreClientQueueState();
+    state.loraPendingSelections = cloneLoraSelections(state.loraAppliedSelections);
     setGalleryColumns(state.galleryColumns);
     updateTopbarOffset();
     updateReverseButton();
@@ -2847,6 +3911,21 @@ async function bootstrap() {
     updateProceduralLatentControls();
     updatePromptEnhanceButton();
     updateMultiSelectControls();
+    try {
+      await loadLoraLibrary({ refreshSummary: false });
+    } catch (error) {
+      state.loraLibrary = [];
+      state.loraCapabilities = {
+        supported: false,
+        max_active: MAX_ACTIVE_LORAS,
+        min_weight: MIN_LORA_WEIGHT,
+        max_weight: MAX_LORA_WEIGHT,
+        default_weight: DEFAULT_LORA_WEIGHT,
+      };
+      updateLoraCapabilityUi();
+      renderLoraLibrary();
+      setStatus(String(error?.message || error), true);
+    }
     updateSettingsSummary();
     updateViewerNavState();
     updateGenerateButtonState();
@@ -2866,6 +3945,74 @@ async function bootstrap() {
 }
 
 settingsButtonEl.addEventListener("click", toggleSettingsVisible);
+loraDrawerToggleEl.addEventListener("click", () => {
+  if (loraDrawerToggleEl.disabled) return;
+  state.loraPendingSelections = cloneLoraSelections(
+    loraSelectionsDirty() ? state.loraPendingSelections : state.loraAppliedSelections
+  );
+  renderLoraLibrary();
+  setLoraDrawerOpen(!state.loraDrawerOpen);
+});
+loraDrawerCloseEl.addEventListener("click", () => {
+  applyPendingLoras({ closeDrawer: true });
+});
+loraDrawerBackdropEl.addEventListener("click", () => {
+  setLoraDrawerOpen(false);
+});
+loraFilterInputEl.addEventListener("input", () => {
+  state.loraFilter = String(loraFilterInputEl.value || "");
+  renderLoraLibrary();
+});
+loraUploadInputEl.addEventListener("change", () => {
+  const [file] = Array.from(loraUploadInputEl.files || []);
+  if (!file) return;
+  uploadSelectedLoraFile(file)
+    .catch((error) => setStatus(String(error?.message || error), true))
+    .finally(() => {
+      loraUploadInputEl.value = "";
+    });
+});
+loraEditorCloseEl.addEventListener("click", () => {
+  cancelLoraEditor();
+});
+loraEditorModalEl.addEventListener("click", (event) => {
+  if (event.target !== loraEditorModalEl) return;
+  event.preventDefault();
+});
+loraEditorThumbnailButtonEl.addEventListener("click", () => {
+  if (state.loraEditorBusy) return;
+  loraEditorThumbnailInputEl.click();
+});
+loraEditorThumbnailInputEl.addEventListener("change", () => {
+  const [file] = Array.from(loraEditorThumbnailInputEl.files || []);
+  if (!file) return;
+  createCenteredSquareThumbnail(file)
+    .then(({ blob, url }) => {
+      setLoraEditorPreview(url, blob);
+      renderLoraEditor();
+    })
+    .catch((error) => setStatus(String(error?.message || error), true))
+    .finally(() => {
+      loraEditorThumbnailInputEl.value = "";
+    });
+});
+loraEditorNameEl.addEventListener("input", () => {
+  state.loraEditorDisplayName = String(loraEditorNameEl.value || "");
+});
+loraEditorTriggerInputEl.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== ",") return;
+  event.preventDefault();
+  const value = String(loraEditorTriggerInputEl.value || "").trim();
+  if (addLoraEditorTriggerWord(value)) {
+    loraEditorTriggerInputEl.value = "";
+  }
+});
+loraEditorFetchTriggersEl.addEventListener("click", () => {
+  fetchLoraEditorTriggers().catch((error) => setStatus(String(error?.message || error), true));
+});
+loraEditorSaveEl.addEventListener("click", () => {
+  saveLoraEditor().catch((error) => setStatus(String(error?.message || error), true));
+});
 generateButtonEl.addEventListener("click", () => {
   enqueueGenerationFromPrompt();
 });
@@ -2906,6 +4053,9 @@ promptInputEl.addEventListener("input", updateTopbarOffset);
 promptInputEl.addEventListener("mouseup", updateTopbarOffset);
 promptInputEl.addEventListener("touchend", updateTopbarOffset);
 window.addEventListener("resize", () => {
+  if (state.loraDrawerOpen) {
+    setLoraDrawerOpen(true);
+  }
   updateTopbarOffset();
   scheduleGalleryRelayout({ animate: true });
 });
@@ -2974,6 +4124,7 @@ killServerButtonEl.addEventListener("click", () => {
 });
 
 viewerCloseButtonEl.addEventListener("click", hideViewer);
+viewerDeleteButtonEl.addEventListener("click", onViewerDelete);
 viewerUsePromptButtonEl.addEventListener("click", onViewerUsePrompt);
 viewerCopyPromptButtonEl.addEventListener("click", () => {
   onViewerCopyPrompt().catch((error) => setStatus(String(error?.message || error), true));
@@ -3085,6 +4236,10 @@ document.addEventListener("keydown", (event) => {
     cancelZipDownload();
     return;
   }
+  if (event.key === "Escape" && !loraEditorModalEl.classList.contains("hidden")) {
+    event.preventDefault();
+    return;
+  }
   const viewerOpen = !viewerModalEl.classList.contains("hidden");
   if (viewerOpen && event.key === "ArrowLeft") {
     event.preventDefault();
@@ -3101,12 +4256,12 @@ document.addEventListener("keydown", (event) => {
     const item = getActiveViewerItem();
     if (!item) return;
     showConfirmModal(
-      `Delete "${item.filename}"? This cannot be undone.`,
+      `Delete "${item.filename}"?\nThis cannot be undone.`,
       async () => {
         await deleteImage(item.filename, { viewerFx: true });
       },
-      "Yes",
-      "No"
+      "Delete",
+      "Cancel"
     );
     return;
   }
@@ -3114,6 +4269,7 @@ document.addEventListener("keydown", (event) => {
     hideConfirmModal();
     hideViewer();
     setSettingsVisible(false);
+    setLoraDrawerOpen(false);
     if (state.multiSelectMode) {
       toggleMultiSelectMode(false);
     }

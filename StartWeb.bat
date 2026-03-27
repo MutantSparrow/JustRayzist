@@ -113,8 +113,8 @@ if !PACK_COUNT! EQU 1 (
   )
   echo.
   choice /c !PACK_CHOICES! /n /m "Choose pack [!PACK_CHOICES!]: "
-  set "PACK_CHOICE_INDEX=%ERRORLEVEL%"
-  set "PACK=!PACK_%PACK_CHOICE_INDEX%!"
+  set "PACK_CHOICE_INDEX=!ERRORLEVEL!"
+  call set "PACK=%%PACK_!PACK_CHOICE_INDEX!%%"
 )
 set "JUSTRAYZIST_PACK=!PACK!"
 if /I "!PACK!"=="Rayzist_bf16" (

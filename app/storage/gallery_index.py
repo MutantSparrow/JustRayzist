@@ -217,6 +217,8 @@ def _create_images_table(conn: sqlite3.Connection) -> None:
             source_filename TEXT,
             source_width INTEGER,
             source_height INTEGER,
+            loras_json TEXT,
+            lora_count INTEGER,
             color_flags INTEGER,
             favorite INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
@@ -412,6 +414,8 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
         "source_filename": "TEXT",
         "source_width": "INTEGER",
         "source_height": "INTEGER",
+        "loras_json": "TEXT",
+        "lora_count": "INTEGER",
         "color_flags": "INTEGER",
         "favorite": "INTEGER NOT NULL DEFAULT 0",
     }
@@ -466,9 +470,10 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
             INSERT INTO images (
                 owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
                 width, height, model_pack, backend, device, steps, guidance_scale, duration_ms, mode,
-                source_image, source_filename, source_width, source_height, color_flags, favorite, created_at
+                source_image, source_filename, source_width, source_height, loras_json, lora_count,
+                color_flags, favorite, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(owner_id, filename) DO UPDATE SET
                 output_path=excluded.output_path,
                 prompt=excluded.prompt,
@@ -488,6 +493,8 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 source_filename=excluded.source_filename,
                 source_width=excluded.source_width,
                 source_height=excluded.source_height,
+                loras_json=excluded.loras_json,
+                lora_count=excluded.lora_count,
                 color_flags=excluded.color_flags,
                 favorite=CASE WHEN images.favorite != 0 THEN images.favorite ELSE excluded.favorite END
             ;
@@ -513,6 +520,8 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 record.get("source_filename"),
                 _to_int(record.get("source_width")),
                 _to_int(record.get("source_height")),
+                record.get("loras_json"),
+                _to_int(record.get("lora_count")),
                 _to_int(record.get("color_flags")),
                 1 if int(record.get("favorite") or 0) != 0 else 0,
                 str(record.get("created_at") or _utc_timestamp()),
@@ -577,9 +586,10 @@ def _upsert_image(
         INSERT INTO images (
             owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
             width, height, model_pack, backend, device, steps, guidance_scale, duration_ms,
-            mode, source_image, source_filename, source_width, source_height, color_flags, favorite, created_at
+            mode, source_image, source_filename, source_width, source_height, loras_json, lora_count,
+            color_flags, favorite, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(owner_id, filename) DO UPDATE SET
             output_path=excluded.output_path,
             prompt=excluded.prompt,
@@ -599,6 +609,8 @@ def _upsert_image(
             source_filename=excluded.source_filename,
             source_width=excluded.source_width,
             source_height=excluded.source_height,
+            loras_json=excluded.loras_json,
+            lora_count=excluded.lora_count,
             color_flags=excluded.color_flags,
             favorite=images.favorite
         ;
@@ -624,6 +636,8 @@ def _upsert_image(
             metadata.get("source_filename"),
             _to_int(metadata.get("source_width")),
             _to_int(metadata.get("source_height")),
+            metadata.get("loras_json"),
+            _to_int(metadata.get("lora_count")),
             color_flags,
             0,
             created_at,

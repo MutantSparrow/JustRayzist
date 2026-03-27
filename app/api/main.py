@@ -3,14 +3,15 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 import threading
 import time
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
@@ -21,6 +22,7 @@ from app.config import load_settings
 from app.core.cancellation import GenerationCancelledError
 from app.core.logging import configure_logging
 from app.core.model_registry import ModelPackValidationError
+from app.storage.lora_library import DEFAULT_LORA_WEIGHT, DEFAULT_MAX_ACTIVE_LORAS, MAX_LORA_WEIGHT, MIN_LORA_WEIGHT
 from app.storage.gallery_index import ensure_gallery_schema
 
 configure_logging()
@@ -48,6 +50,11 @@ def _shutdown_server_process(delay_seconds: float = 0.35) -> None:
     threading.Thread(target=_kill, daemon=True, name="justrayzist-shutdown").start()
 
 
+class LoraSelectionRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    weight: float = Field(default=DEFAULT_LORA_WEIGHT, ge=MIN_LORA_WEIGHT, le=MAX_LORA_WEIGHT)
+
+
 class GenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     width: int = Field(default=1024, ge=64, le=2048)
@@ -58,6 +65,7 @@ class GenerateRequest(BaseModel):
     scheduler_mode: Literal["euler", "dpm"] | None = Field(default=None)
     enhance_prompt: bool = Field(default=False)
     procedural_creativity: int = Field(default=0, ge=0, le=3)
+    loras: list[LoraSelectionRequest] = Field(default_factory=list, max_length=DEFAULT_MAX_ACTIVE_LORAS)
 
     @field_validator("width", "height")
     @classmethod
@@ -65,6 +73,15 @@ class GenerateRequest(BaseModel):
         if value % 16 != 0:
             raise ValueError("Dimension must be a multiple of 16.")
         return value
+
+    @field_validator("loras")
+    @classmethod
+    def _validate_unique_loras(cls, value: list[LoraSelectionRequest]) -> list[LoraSelectionRequest]:
+        ids = [str(item.id).strip().lower() for item in value]
+        if len(ids) != len(set(ids)):
+            raise ValueError("LoRA ids must be unique within a request.")
+        return value
+
 
 class UpscaleRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
@@ -122,6 +139,95 @@ def _resolve_owner_id(client_header: str | None, client_query: str | None = None
         raise HTTPException(status_code=400, detail=f"Invalid client id: {exc}") from exc
 
 
+def _extract_content_disposition_param(header_value: str, key: str) -> str | None:
+    pattern = rf'{re.escape(key)}="([^"]*)"'
+    match = re.search(pattern, header_value, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    for segment in header_value.split(";"):
+        name, _sep, value = segment.strip().partition("=")
+        if name.strip().lower() != key.lower():
+            continue
+        return value.strip().strip('"')
+    return None
+
+
+def _parse_multipart_file_upload(content_type: str, body: bytes) -> tuple[str, bytes]:
+    parts = _parse_multipart_parts(content_type, body)
+    for items in parts.values():
+        for part in items:
+            filename = str(part.get("filename") or "").strip()
+            if filename:
+                return filename, bytes(part.get("content") or b"")
+    raise ValueError("Upload did not include a file part.")
+
+
+def _parse_multipart_parts(content_type: str, body: bytes) -> dict[str, list[dict[str, Any]]]:
+    match = re.search(r'boundary="?([^";]+)"?', str(content_type or ""), flags=re.IGNORECASE)
+    if not match:
+        raise ValueError("Upload is missing a multipart boundary.")
+    boundary = match.group(1).encode("utf-8")
+    delimiter = b"--" + boundary
+    parts: dict[str, list[dict[str, Any]]] = {}
+
+    for raw_part in body.split(delimiter):
+        part = raw_part.strip()
+        if not part or part == b"--":
+            continue
+        if part.endswith(b"--"):
+            part = part[:-2]
+        header_blob, separator, payload = part.partition(b"\r\n\r\n")
+        if not separator:
+            continue
+        header_lines = header_blob.decode("utf-8", errors="replace").split("\r\n")
+        headers: dict[str, str] = {}
+        for line in header_lines:
+            name, _sep, value = line.partition(":")
+            if not _sep:
+                continue
+            headers[name.strip().lower()] = value.strip()
+        content_disposition = headers.get("content-disposition", "")
+        field_name = _extract_content_disposition_param(content_disposition, "name")
+        if not field_name:
+            continue
+        payload_bytes = payload[:-2] if payload.endswith(b"\r\n") else payload
+        parts.setdefault(field_name, []).append(
+            {
+                "name": field_name,
+                "filename": _extract_content_disposition_param(content_disposition, "filename"),
+                "content_type": headers.get("content-type", ""),
+                "content": payload_bytes,
+            }
+        )
+    return parts
+
+
+def _get_first_multipart_part(
+    parts: dict[str, list[dict[str, Any]]],
+    field_name: str,
+    *,
+    required: bool = False,
+) -> dict[str, Any] | None:
+    items = parts.get(field_name) or []
+    if items:
+        return items[0]
+    if required:
+        raise ValueError(f"Missing multipart field '{field_name}'.")
+    return None
+
+
+def _multipart_text_value(
+    parts: dict[str, list[dict[str, Any]]],
+    field_name: str,
+    *,
+    required: bool = False,
+) -> str | None:
+    part = _get_first_multipart_part(parts, field_name, required=required)
+    if part is None:
+        return None
+    return bytes(part.get("content") or b"").decode("utf-8", errors="replace")
+
+
 @app.get("/health")
 def health() -> dict:
     runtime = inference.runtime_status()
@@ -140,6 +246,11 @@ def health() -> dict:
         "fp8_runtime_mode": runtime.get("fp8_runtime_mode"),
         "fp8_storage_preserved_tensor_count": runtime.get("fp8_storage_preserved_tensor_count", 0),
         "fp8_promoted_tensor_count": runtime.get("fp8_promoted_tensor_count", 0),
+        "lora_capable": runtime.get("lora_capable", False),
+        "gallery_color_cache_active": runtime.get("gallery_color_cache_active", False),
+        "gallery_color_cache_version": runtime.get("gallery_color_cache_version"),
+        "gallery_color_cache_target_version": runtime.get("gallery_color_cache_target_version"),
+        "gallery_color_cache_error": runtime.get("gallery_color_cache_error"),
         "offline_mode": settings.offline_mode,
     }
 
@@ -155,6 +266,121 @@ def config() -> dict:
 def model_packs() -> dict:
     packs = inference.list_model_packs()
     return {"items": packs, "count": len(packs)}
+
+
+@app.get("/loras")
+def loras() -> dict:
+    items = inference.list_loras()
+    return {
+        "items": items,
+        "count": len(items),
+        "capabilities": inference.lora_capabilities(),
+    }
+
+
+@app.post("/lora-drafts")
+async def lora_drafts_create(request: Request) -> dict:
+    content_type = str(request.headers.get("content-type") or "").strip()
+    try:
+        filename, content = _parse_multipart_file_upload(content_type, await request.body())
+        draft = inference.create_lora_draft(filename=filename, content=content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"Missing dependency: {exc}") from exc
+    except Exception as exc:
+        LOGGER.exception("Unhandled LoRA draft upload error.")
+        raise HTTPException(status_code=500, detail="LoRA draft upload failed.") from exc
+    return {"status": "ok", "draft": draft}
+
+
+@app.post("/lora-drafts/{draft_id}/detect-triggers")
+def lora_draft_detect_triggers(draft_id: str) -> dict:
+    try:
+        draft = inference.detect_lora_draft_triggers(draft_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "draft": draft}
+
+
+@app.post("/loras")
+async def loras_create(request: Request) -> dict:
+    content_type = str(request.headers.get("content-type") or "").strip()
+    try:
+        parts = _parse_multipart_parts(content_type, await request.body())
+        item = inference.finalize_lora_draft(
+            draft_id=_multipart_text_value(parts, "draft_id", required=True),
+            display_name=_multipart_text_value(parts, "display_name", required=True),
+            trigger_words=_multipart_text_value(parts, "trigger_words"),
+            preview_content=(
+                bytes(_get_first_multipart_part(parts, "thumbnail").get("content") or b"")
+                if _get_first_multipart_part(parts, "thumbnail") is not None
+                else None
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"Missing dependency: {exc}") from exc
+    except Exception as exc:
+        LOGGER.exception("Unhandled LoRA create error.")
+        raise HTTPException(status_code=500, detail="LoRA save failed.") from exc
+    return {
+        "status": "ok",
+        "item": item,
+        "capabilities": inference.lora_capabilities(),
+    }
+
+
+@app.patch("/loras/{lora_id}")
+async def loras_update(lora_id: str, request: Request) -> dict:
+    content_type = str(request.headers.get("content-type") or "").strip()
+    try:
+        parts = _parse_multipart_parts(content_type, await request.body())
+        item = inference.update_lora(
+            lora_id=lora_id,
+            display_name=_multipart_text_value(parts, "display_name", required=True),
+            trigger_words=_multipart_text_value(parts, "trigger_words"),
+            preview_content=(
+                bytes(_get_first_multipart_part(parts, "thumbnail").get("content") or b"")
+                if _get_first_multipart_part(parts, "thumbnail") is not None
+                else None
+            ),
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"Missing dependency: {exc}") from exc
+    except Exception as exc:
+        LOGGER.exception("Unhandled LoRA update error.")
+        raise HTTPException(status_code=500, detail="LoRA update failed.") from exc
+    return {"status": "ok", "item": item}
+
+
+@app.get("/loras/{lora_id}/preview")
+def lora_preview(lora_id: str) -> FileResponse:
+    try:
+        preview_path = inference.preview_lora_path(lora_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(preview_path, media_type="image/png", filename=preview_path.name)
+
+
+@app.delete("/loras/{lora_id}")
+def lora_delete(lora_id: str) -> dict:
+    try:
+        result = inference.delete_lora(lora_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", **result}
 
 
 @app.get("/client-jobs")
@@ -186,17 +412,22 @@ def generate(
 ) -> dict:
     try:
         owner_id = _resolve_owner_id(x_justrayzist_client)
+        generate_kwargs = {
+            "owner_id": owner_id,
+            "prompt": payload.prompt,
+            "width": payload.width,
+            "height": payload.height,
+            "pack_name": payload.pack,
+            "job_id": payload.job_id,
+            "seed": payload.seed,
+            "scheduler_mode": payload.scheduler_mode,
+            "enhance_prompt": payload.enhance_prompt,
+            "procedural_creativity": payload.procedural_creativity,
+        }
+        if payload.loras:
+            generate_kwargs["loras"] = [item.model_dump() for item in payload.loras]
         result = inference.generate(
-            owner_id=owner_id,
-            prompt=payload.prompt,
-            width=payload.width,
-            height=payload.height,
-            pack_name=payload.pack,
-            job_id=payload.job_id,
-            seed=payload.seed,
-            scheduler_mode=payload.scheduler_mode,
-            enhance_prompt=payload.enhance_prompt,
-            procedural_creativity=payload.procedural_creativity,
+            **generate_kwargs,
         )
     except HTTPException:
         raise

@@ -13,7 +13,7 @@ class ApiExample:
     path: str
     description: str
     requires_client: bool
-    request: dict[str, Any] | None
+    request: Any
     response: Any
     include_in_readme: bool = True
     include_in_usage: bool = True
@@ -44,6 +44,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
             "fp8_runtime_mode": None,
             "fp8_storage_preserved_tensor_count": 0,
             "fp8_promoted_tensor_count": 0,
+            "lora_capable": True,
             "gallery_color_cache_active": False,
             "gallery_color_cache_version": "dominant_v6",
             "gallery_color_cache_target_version": "dominant_v6",
@@ -98,6 +99,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
                 "fp8_normalized_tensor_count": 0,
                 "fp8_storage_preserved_tensor_count": 0,
                 "fp8_promoted_tensor_count": 0,
+                "lora_capable": True,
                 "gallery_color_cache_active": False,
                 "gallery_color_cache_version": "dominant_v6",
                 "gallery_color_cache_target_version": "dominant_v6",
@@ -123,6 +125,139 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
         },
     ),
     ApiExample(
+        method="GET",
+        path="/loras",
+        description="List installed LoRAs, preview URLs, saved trigger words, detected trigger suggestions, and runtime LoRA capabilities.",
+        requires_client=False,
+        request=None,
+        response={
+            "count": 1,
+            "items": [
+                {
+                    "id": "cinematic-style",
+                    "display_name": "cinematic-style",
+                    "source_filename": "cinematic-style.safetensors",
+                    "preview_url": "/loras/cinematic-style/preview",
+                    "trigger_words": ["cinematic style"],
+                    "detected_trigger_words": ["cinematic style", "moody light"],
+                    "preview_is_custom": True,
+                    "metadata_summary": {"ss_output_name": "cinematic-style"},
+                    "file_size_bytes": 12345678,
+                },
+            ],
+            "capabilities": {
+                "supported": True,
+                "active_pack": "Rayzist_bf16",
+                "max_active": 3,
+                "min_weight": 0.0,
+                "max_weight": 2.0,
+                "default_weight": 1.0,
+            },
+        },
+    ),
+    ApiExample(
+        method="POST",
+        path="/lora-drafts",
+        description="Upload one `.safetensors` LoRA into draft storage for metadata inspection before saving it into the live library.",
+        requires_client=False,
+        request="multipart/form-data with one file field named `file`",
+        response={
+            "status": "ok",
+            "draft": {
+                "draft_id": "cinematic-style",
+                "display_name": "cinematic-style",
+                "source_filename": "cinematic-style.safetensors",
+                "detected_trigger_words": ["cinematic style", "moody light"],
+                "metadata_summary": {"ss_output_name": "cinematic-style"},
+                "file_size_bytes": 12345678,
+            },
+        },
+    ),
+    ApiExample(
+        method="POST",
+        path="/lora-drafts/{draft_id}/detect-triggers",
+        description="Re-scan a staged LoRA draft for trigger words and metadata suggestions.",
+        requires_client=False,
+        request=None,
+        response={
+            "status": "ok",
+            "draft": {
+                "draft_id": "cinematic-style",
+                "display_name": "cinematic-style",
+                "source_filename": "cinematic-style.safetensors",
+                "detected_trigger_words": ["cinematic style", "moody light"],
+                "metadata_summary": {"ss_output_name": "cinematic-style"},
+                "file_size_bytes": 12345678,
+            },
+        },
+    ),
+    ApiExample(
+        method="POST",
+        path="/loras",
+        description="Finalize a staged LoRA draft into the live library with a chosen name, saved trigger words, and an optional thumbnail image.",
+        requires_client=False,
+        request="multipart/form-data with `draft_id`, `display_name`, `trigger_words` (JSON string), and optional `thumbnail` image",
+        response={
+            "status": "ok",
+            "item": {
+                "id": "cinematic-style",
+                "display_name": "Cinematic Style",
+                "source_filename": "cinematic-style.safetensors",
+                "preview_url": "/loras/cinematic-style/preview",
+                "preview_is_custom": True,
+                "trigger_words": ["cinematic style", "moody light"],
+                "detected_trigger_words": ["cinematic style", "moody light"],
+                "metadata_summary": {"ss_output_name": "cinematic-style"},
+                "file_size_bytes": 12345678,
+            },
+            "capabilities": {
+                "supported": True,
+                "active_pack": "Rayzist_bf16",
+                "max_active": 3,
+                "min_weight": 0.0,
+                "max_weight": 2.0,
+                "default_weight": 1.0,
+            },
+        },
+    ),
+    ApiExample(
+        method="PATCH",
+        path="/loras/{lora_id}",
+        description="Update the display name, saved trigger words, and optional thumbnail image for one installed LoRA without replacing the weights file.",
+        requires_client=False,
+        request="multipart/form-data with `display_name`, `trigger_words` (JSON string), and optional `thumbnail` image",
+        response={
+            "status": "ok",
+            "item": {
+                "id": "cinematic-style",
+                "display_name": "Cinematic Style",
+                "source_filename": "cinematic-style.safetensors",
+                "preview_url": "/loras/cinematic-style/preview",
+                "preview_is_custom": True,
+                "trigger_words": ["cinematic style", "moody light"],
+                "detected_trigger_words": ["cinematic style", "moody light"],
+                "metadata_summary": {"ss_output_name": "cinematic-style"},
+                "file_size_bytes": 12345678,
+            },
+        },
+    ),
+    ApiExample(
+        method="GET",
+        path="/loras/{lora_id}/preview",
+        description="Download the current preview image for one installed LoRA.",
+        requires_client=False,
+        request=None,
+        response="PNG binary response",
+    ),
+    ApiExample(
+        method="DELETE",
+        path="/loras/{lora_id}",
+        description="Delete one installed LoRA plus its sidecar JSON and preview image.",
+        requires_client=False,
+        request=None,
+        response={"status": "ok", "id": "cinematic-style", "deleted_files": 3},
+    ),
+    ApiExample(
         method="POST",
         path="/generate",
         description="Generate one image from prompt and dimensions in the current client scope.",
@@ -137,6 +272,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
             "scheduler_mode": "euler",
             "enhance_prompt": False,
             "procedural_creativity": 0,
+            "loras": [{"id": "cinematic-style", "weight": 1.0}],
         },
         response={
             "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
@@ -147,8 +283,12 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
             "duration_ms": 12345,
             "url": "/images/justrayzist_YYYYMMDD_hhmmss_000.png",
             "prompt_enhanced": False,
+            "prompt_effective_base": "A cinematic skyline at sunrise",
+            "prompt_effective": "A cinematic skyline at sunrise, cinematic style",
             "scheduler_mode": "euler",
             "procedural_creativity": 0,
+            "lora_count": 1,
+            "loras": [{"id": "cinematic-style", "name": "cinematic-style", "weight": 1.0}],
         },
     ),
     ApiExample(
@@ -356,7 +496,10 @@ def render_examples_markdown(*, include_usage_only: bool) -> str:
         if entry.request is not None:
             lines.append("Sample request body:")
             lines.append("")
-            lines.append("```json")
+            if isinstance(entry.request, str):
+                lines.append("```text")
+            else:
+                lines.append("```json")
             lines.append(_format_example_block(entry.request))
             lines.append("```")
             lines.append("")

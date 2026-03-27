@@ -68,6 +68,13 @@ class GenerationSession:
         if callable(cancel):
             cancel()
 
+    def drop_lora_adapters(self, lora_ids: list[str] | None = None) -> None:
+        if self._backend is None:
+            return
+        drop = getattr(self._backend, "drop_lora_adapters", None)
+        if callable(drop):
+            drop(lora_ids)
+
     def recycle(self, reason: str) -> None:
         LOGGER.info("Recycling generation session backend. Reason: %s", reason)
         self._backend = None

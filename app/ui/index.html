@@ -6,7 +6,7 @@
   <title>JustRayzist</title>
   <link rel="icon" type="image/x-icon" href="/img/favicon.ico">
   <link rel="shortcut icon" href="/img/favicon.ico">
-  <link rel="stylesheet" href="/ui/styles.css?v=20260326_03">
+  <link rel="stylesheet" href="/ui/styles.css?v=20260326_06">
 </head>
 <body>
   <header class="topbar">
@@ -37,9 +37,22 @@
         ></textarea>
       </div>
     </div>
-    <button id="generate-button" class="generate-button btn btn-hfill" type="button" aria-label="GENERATE" title="GENERATE">
-      <span id="generate-button-label" class="generate-button-label">GENERATE</span>
-    </button>
+    <div class="generate-controls">
+      <button id="generate-button" class="generate-button btn btn-hfill" type="button" aria-label="GENERATE" title="GENERATE">
+        <span id="generate-button-label" class="generate-button-label">GENERATE</span>
+      </button>
+      <button
+        id="lora-drawer-toggle"
+        class="lora-drawer-toggle"
+        type="button"
+        aria-label="Open LoRA drawer"
+        aria-controls="lora-drawer"
+        aria-expanded="false"
+        title="LoRAs"
+      >
+        <span class="lora-drawer-toggle-arrow" aria-hidden="true">▶</span>
+      </button>
+    </div>
   </header>
 
   <aside id="settings-panel" class="settings-panel" aria-hidden="true">
@@ -100,12 +113,29 @@
     </div>
   </aside>
 
+  <div id="lora-drawer-backdrop" class="lora-drawer-backdrop hidden" aria-hidden="true"></div>
+  <aside id="lora-drawer" class="lora-drawer" aria-hidden="true">
+    <div class="lora-drawer-header">
+      <h2 class="lora-drawer-title">LORA LIBRARY</h2>
+    </div>
+    <div class="lora-drawer-tools">
+      <input id="lora-filter-input" type="text" placeholder="Filter LoRAs by name">
+    </div>
+    <button id="lora-drawer-close" class="btn btn-hfill lora-drawer-save" type="button">Save</button>
+    <div id="lora-drawer-capability" class="lora-drawer-capability" aria-live="polite"></div>
+    <input id="lora-upload-input" type="file" accept=".safetensors" hidden>
+    <p id="lora-drawer-empty" class="lora-drawer-empty hidden">No LoRAs installed.</p>
+    <section id="lora-list" class="lora-list"></section>
+  </aside>
+
   <main class="gallery-area">
     <p id="gallery-count" class="gallery-count">0 images</p>
     <section class="gallery-tools">
       <div class="gallery-tools-left">
         <input id="filter-input" type="text" placeholder="Filter by prompt keywords">
-        <button id="reverse-order-button" class="reverse-button" type="button">Newest First</button>
+        <button id="reverse-order-button" class="reverse-button" type="button" aria-pressed="false" aria-label="Sort by newest first" title="Sort by newest first">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h10"></path><path d="M8 11h7"></path><path d="M8 16h4"></path><path d="M5 5v14"></path><path d="M2.5 16.5L5 19l2.5-2.5"></path></svg>
+        </button>
         <div id="gallery-color-filters" class="gallery-color-filters" aria-label="Filter gallery by color">
           <button class="color-swatch swatch-black" type="button" data-color-filter="black" aria-label="Filter black images" aria-pressed="false" title="Black"></button>
           <button class="color-swatch swatch-white" type="button" data-color-filter="white" aria-label="Filter white images" aria-pressed="false" title="White"></button>
@@ -135,11 +165,17 @@
             </svg>
           </span>
         </div>
-        <button id="multi-select-toggle" class="reverse-button" type="button" aria-pressed="false">Multiselection</button>
+        <button id="multi-select-toggle" class="multi-select-toggle-button" type="button" aria-pressed="false" aria-label="Enable multiselection" title="Enable multiselection">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h10v10H5z"></path><path d="M9 3h10v10"></path><path d="M8 12l2 2 4-4"></path></svg>
+        </button>
         <div id="multi-select-actions" class="multi-select-actions hidden" aria-live="polite">
           <span id="multi-select-count" class="multi-select-count">0 selected</span>
-          <button id="bulk-upscale-button" class="tile-upscale" type="button" disabled>Queue Upscale</button>
-          <button id="bulk-download-button" class="tile-download" type="button" disabled>Download ZIP</button>
+          <button id="bulk-upscale-button" class="tile-upscale" type="button" disabled aria-label="Queue upscale for selected images" title="Queue upscale for selected images">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 16L16 8"></path><path d="M10 8h6v6"></path><path d="M4 20h6v-2H6v-4H4z"></path><path d="M20 4h-6v2h4v4h2z"></path></svg>
+          </button>
+          <button id="bulk-download-button" class="tile-download" type="button" disabled aria-label="Download selected images as ZIP" title="Download selected images as ZIP">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10"></path><path d="M8 10l4 4 4-4"></path><path d="M5 18h14"></path></svg>
+          </button>
           <button id="bulk-delete-button" class="tile-delete bulk-delete-button" type="button" disabled aria-label="Delete selected images" title="Delete selected images">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 7h2v8h-2v-8zm4 0h2v8h-2v-8zM7 10h2v8H7v-8z"/></svg>
           </button>
@@ -156,14 +192,27 @@
       <div id="viewer-meta" class="viewer-meta"></div>
       <div class="viewer-actions">
         <span id="zoom-label" class="zoom-label">1.00x</span>
-        <button id="viewer-use-prompt-button" class="close-button" type="button">Use Prompt</button>
-        <button id="viewer-copy-prompt-button" class="close-button" type="button">Copy Prompt</button>
-        <button id="viewer-upscale-button" class="upscale-link" type="button">Upscale</button>
-        <a id="viewer-download" class="download-link" href="#" download>Download</a>
+        <button id="viewer-use-prompt-button" class="viewer-action-button viewer-action-neutral" type="button" aria-label="Use prompt text" title="Use prompt text">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 6h10"></path><path d="M7 10h10"></path><path d="M7 14h6"></path><path d="M5 4h14v16H5z"></path></svg>
+        </button>
+        <button id="viewer-copy-prompt-button" class="viewer-action-button viewer-action-neutral" type="button" aria-label="Copy prompt text" title="Copy prompt text">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9h10v11H9z"></path><path d="M5 5h10v11"></path></svg>
+        </button>
+        <button id="viewer-upscale-button" class="viewer-action-button viewer-action-magenta" type="button" aria-label="Upscale image" title="Upscale image">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 16L16 8"></path><path d="M10 8h6v6"></path><path d="M4 20h6v-2H6v-4H4z"></path><path d="M20 4h-6v2h4v4h2z"></path></svg>
+        </button>
+        <a id="viewer-download" class="viewer-action-button viewer-action-lime" href="#" download aria-label="Download image" title="Download image">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10"></path><path d="M8 10l4 4 4-4"></path><path d="M5 18h14"></path></svg>
+        </a>
         <button id="viewer-favorite-button" class="viewer-favorite-button" type="button" aria-label="Favorite image" aria-pressed="false" title="Favorite">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35 10.55 20C5.4 15.24 2 12.09 2 8.25 2 5.3 4.3 3 7.25 3c1.67 0 3.27.77 4.3 1.98A5.71 5.71 0 0 1 15.85 3C18.8 3 21.1 5.3 21.1 8.25c0 3.84-3.4 6.99-8.55 11.76L12 21.35Z"/></svg>
         </button>
-        <button id="viewer-close-button" class="close-button" type="button">Close</button>
+        <button id="viewer-delete-button" class="viewer-action-button viewer-action-danger" type="button" aria-label="Delete image" title="Delete image">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V5h6v2"></path><path d="M7 7l1 12h8l1-12"></path><path d="M10 10v6"></path><path d="M14 10v6"></path></svg>
+        </button>
+        <button id="viewer-close-button" class="viewer-action-button viewer-action-danger" type="button" aria-label="Close preview" title="Close preview">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>
+        </button>
       </div>
     </div>
     <div class="viewer-hints">
@@ -176,6 +225,52 @@
         <span id="viewer-stage-fx-label" class="viewer-stage-fx-label"></span>
       </div>
       <button id="viewer-next-button" class="viewer-nav viewer-nav-next" type="button" aria-label="Next image">›</button>
+    </div>
+  </section>
+
+  <section id="lora-editor-modal" class="confirm-modal lora-editor-modal hidden" aria-hidden="true">
+    <div class="confirm-dialog lora-editor-dialog">
+      <div class="lora-editor-header">
+        <div class="lora-editor-header-copy">
+          <h3 id="lora-editor-title" class="lora-editor-title">ADD LORA</h3>
+          <div id="lora-editor-file" class="lora-editor-file"></div>
+        </div>
+      </div>
+      <div id="lora-editor-progress" class="lora-editor-progress hidden" aria-live="polite">
+        <div id="lora-editor-progress-spinner" class="tile-spinner lora-editor-progress-spinner">Uploading... 0%</div>
+      </div>
+      <div class="lora-editor-body">
+        <div class="setting-group">
+          <label for="lora-editor-name">LoRA Name</label>
+          <input id="lora-editor-name" type="text" maxlength="128" placeholder="LoRA name">
+        </div>
+        <div class="lora-editor-grid">
+          <div class="lora-editor-thumbnail-block">
+            <label>Thumbnail</label>
+            <div class="lora-editor-thumbnail-frame">
+              <img id="lora-editor-thumbnail-preview" class="lora-editor-thumbnail-preview" alt="LoRA thumbnail preview">
+            </div>
+            <div class="lora-editor-thumbnail-actions">
+              <button id="lora-editor-thumbnail-button" class="close-button" type="button">Choose Thumbnail</button>
+              <input id="lora-editor-thumbnail-input" type="file" accept="image/*" hidden>
+            </div>
+            <div class="lora-editor-trigger-header">
+              <label for="lora-editor-trigger-input">Trigger Words</label>
+              <button id="lora-editor-fetch-triggers" class="close-button" type="button">Fetch Triggers</button>
+            </div>
+            <div id="lora-editor-trigger-chips" class="lora-trigger-chips"></div>
+            <input id="lora-editor-trigger-input" type="text" placeholder="Add a trigger and press Enter">
+          </div>
+        </div>
+        <details class="lora-editor-metadata">
+          <summary>Metadata Summary</summary>
+          <div id="lora-editor-metadata-summary" class="lora-editor-metadata-summary"></div>
+        </details>
+      </div>
+      <div class="lora-editor-actions">
+        <button id="lora-editor-close" class="btn btn-hfill" type="button">Cancel</button>
+        <button id="lora-editor-save" class="btn btn-hfill btn-hfill-lime" type="button">Save LoRA</button>
+      </div>
     </div>
   </section>
 
@@ -206,6 +301,6 @@
     <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
   </section>
 
-  <script src="/ui/app.js?v=20260326_04"></script>
+  <script src="/ui/app.js?v=20260326_06"></script>
 </body>
 </html>

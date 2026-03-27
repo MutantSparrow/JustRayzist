@@ -391,25 +391,27 @@ def _stage_weight(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
-def _load_text_encoder_from_gguf(
+def _load_text_encoder_from_local_config(
     *,
     component_path: Path,
     config_dir: Path,
     dtype: Any,
     local_files_only: bool,
+    gguf_file: str | None = None,
 ) -> Any:
     from transformers import AutoModel, AutoModelForCausalLM
 
-    staged_name = component_path.name
+    staged_name = gguf_file or component_path.name
     staged_path = config_dir / staged_name
     _stage_weight(component_path, staged_path)
 
     common_kwargs = {
         "local_files_only": local_files_only,
         "dtype": dtype,
-        "gguf_file": staged_name,
         "output_loading_info": True,
     }
+    if gguf_file:
+        common_kwargs["gguf_file"] = staged_name
 
     loaders = (
         ("AutoModelForCausalLM", AutoModelForCausalLM.from_pretrained),
@@ -420,7 +422,7 @@ def _load_text_encoder_from_gguf(
         model = None
         try:
             LOGGER.debug(
-                "Loading text encoder GGUF with %s from %s (file=%s)",
+                "Loading text encoder with %s from %s (file=%s)",
                 loader_name,
                 config_dir,
                 staged_name,
@@ -437,7 +439,7 @@ def _load_text_encoder_from_gguf(
                         f"({len(missing)}/{total}, {missing_ratio:.1%})."
                     )
                 LOGGER.debug(
-                    "Accepted text encoder GGUF loader %s (missing=%d/%d).",
+                    "Accepted text encoder loader %s (missing=%d/%d).",
                     loader_name,
                     len(missing),
                     total,
@@ -450,7 +452,7 @@ def _load_text_encoder_from_gguf(
                 del model
 
     raise ValueError(
-        "Unable to load GGUF text encoder from local config path "
+        "Unable to load text encoder from local config path "
         f"'{config_dir}' and file '{staged_name}'. Last error: {last_error}"
     )
 
@@ -631,7 +633,7 @@ def _build_zimage_pipeline(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = _resolve_dtype(torch, device)
     kwargs: dict[str, Any] = {
-        "dtype": dtype,
+        "torch_dtype": dtype,
         "local_files_only": True,
     }
     pipeline_metadata: dict[str, Any] = {
@@ -666,7 +668,7 @@ def _build_zimage_pipeline(
             str(transformer_component.path),
             quantization_config=quantization_config,
             config=str(pack.pipeline_config_dir / "transformer"),
-            dtype=dtype,
+            torch_dtype=dtype,
             local_files_only=True,
         )
         kwargs["transformer"] = transformer
@@ -701,7 +703,7 @@ def _build_zimage_pipeline(
             transformer = ZImageTransformer2DModel.from_single_file(
                 str(transformer_component.path),
                 config=str(pack.pipeline_config_dir / "transformer"),
-                dtype=dtype,
+                torch_dtype=dtype,
                 local_files_only=True,
             )
         if (
@@ -735,7 +737,7 @@ def _build_zimage_pipeline(
                 str(vae_component.path),
                 quantization_config=quantization_config,
                 config=str(pack.pipeline_config_dir / "vae"),
-                dtype=dtype,
+                torch_dtype=dtype,
                 local_files_only=True,
             )
         except Exception as exc:
@@ -746,13 +748,21 @@ def _build_zimage_pipeline(
         vae = AutoencoderKL.from_single_file(
             str(vae_component.path),
             config=str(pack.pipeline_config_dir / "vae"),
-            dtype=dtype,
+            torch_dtype=dtype,
             local_files_only=True,
         )
         kwargs["vae"] = vae
 
     if text_encoder_component and text_encoder_component.file_format == "gguf":
-        kwargs["text_encoder"] = _load_text_encoder_from_gguf(
+        kwargs["text_encoder"] = _load_text_encoder_from_local_config(
+            component_path=text_encoder_component.path,
+            config_dir=pack.pipeline_config_dir / "text_encoder",
+            dtype=dtype,
+            local_files_only=True,
+            gguf_file=text_encoder_component.path.name,
+        )
+    elif text_encoder_component and text_encoder_component.file_format == "safetensors":
+        kwargs["text_encoder"] = _load_text_encoder_from_local_config(
             component_path=text_encoder_component.path,
             config_dir=pack.pipeline_config_dir / "text_encoder",
             dtype=dtype,
