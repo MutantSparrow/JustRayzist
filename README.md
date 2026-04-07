@@ -1,4 +1,4 @@
-# JustRayzist
+﻿# JustRayzist
 <img width="1900" alt="JustRayzist gallery overview" src="readme_images/gallery_view.png" />
 
 
@@ -8,16 +8,16 @@ Got 35GB of space on a drive somewhere and an RTX card? <br>
 ### Enter Just Rayzist!
 A lightweight, easy to install and easier to run app that just runs.<br>
 Built around my Z-Image-Turbo finetune, it gives you a fast image generation platform, available through a local web page, command line or via local API so your favorite AI agents can use it.<br>
-It generates images up to 1536x1536 and can upscale up to double that in less than a minute. <br>
+The main UI ships presets up to 1536x1536, the raw API accepts up to 2048x2048, and the default upscale path is SeedVR2 direct x2. <br>
 It even has a built in prompt enhancement feature, a proper image browser, importable client galleries, and a Creative Mode slider when you want it to get a little weird.<br><br>
 <img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
 <img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
-## New in v1.5.2
+## New in v1.5.4
 
-- fixes a LoRA runtime regression where adapters could be loaded and recorded into metadata while remaining globally disabled on the pipeline, making different LoRA weights produce identical images
-- restores visible LoRA strength changes again across enabled, stacked, and no-LoRA generations by re-enabling adapters after runtime selection and keeping the stale-adapter cleanup path intact
-- expands the LoRA strength range to `-2.0` through `+2.0` in `0.25` steps, while keeping the managed multi-LoRA drawer flow, gallery/fullscreen refresh, and packaged self-updater fixes from `v1.5.0` and `v1.5.1`; native FP8 inference is not implemented in this release
+- restores the LoRA drawer masonry layout without bringing back the CSS multi-column overflow bug that caused clipped off-screen columns
+- keeps the cross-browser LoRA library sync fixes in place so add, rename, and delete changes still propagate between open browser sessions
+- keeps the tooltip/title fallback and hover/focus affordances on LoRA cards while rebalancing the drawer on image load and resize
 
 <p align="center">
   <img width="900" alt="LoRA library preview" src="readme_images/lora_preview.png" />
@@ -30,7 +30,7 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 - Z-Image Turbo, and more specifically my very own finetune: [Rayzist](https://huggingface.co/MutantSparrow/Ray)
 - local model packs (`.safetensors` / `.gguf`)
 - Automatic resource-tier detection adapts memory strategy to available VRAM
-- custom mixed-model fast upscale flow. It's not the best in the world, but it's the best at that speed!
+- SeedVR2 direct x2 upscale flow for the default app path
 - Creative Mode slider (`0-3`) for Light, Medium, and Extreme generation variants
 - RunMeFirst bootstrap installation and auto-repair
 - Run it locally or open it to LAN access
@@ -39,7 +39,7 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 - Managed multi-LoRA library support with up to 3 active LoRAs per generation
 - PNG metadata writing and SQLite gallery indexing
 - Web gallery with masonry layout, favorites, color swatch filtering, queued job recovery/cancel, fullscreen compare-hold, and `/API` testing page
-- CLI workflows for generation, mixed-model upscaling, soak runs, soak reporting, SeedVR2 benchmarks, and procedural latent previews
+- CLI workflows for generation, engineering-only mixed-model upscale probes, soak runs, soak reporting, SeedVR2 benchmarks, and procedural latent previews
 - Lane-aware bootstrap packaging (`cu126`, `cu128`) with GPU driver preflight
 
 The app is designed to run 100% without runtime internet dependencies once installed locally.
@@ -118,6 +118,7 @@ That resource tier can downgrade or re-upgrade between requests as available VRA
 
 Only public enabled packs appear in the launcher and `GET /model-packs`.
 If setup detects less than 13 GiB of NVIDIA VRAM, it enables `Rayzist_fp8_full` as the seamless default install instead of `Rayzist_bf16`.
+Real FP8 packs currently run as BF16 compute with FP8-at-rest preservation where safe; native FP8 inference is not implemented in the current release.
 Hidden, disabled, or experimental packs remain loadable only when explicitly named for engineering work.
 
 ## Update Packaged Install
@@ -159,12 +160,6 @@ Generate:
 python -m app.cli.main generate --pack Rayzist_bf16 --prompt "cinematic skyline at sunrise"
 ```
 
-Upscale + refine:
-
-```powershell
-python -m app.cli.main upscale-refine --pack Rayzist_bf16 --input-image outputs\sample.png --prompt "portrait photo"
-```
-
 Soak test:
 
 ```powershell
@@ -181,12 +176,10 @@ python -m app.cli.main soak-report --session-id <session_id>
 Normal CLI commands use auto resource-tier detection. Forced profile/tier flags are kept only on engineering benchmark and probe commands:
 
 ```powershell
-python -m app.cli.main upscale-test --input-image outputs\_Upscale_test.png --checkpoint models\upscaler\2x_RealESRGAN_x2plus.pth --profiles high,balanced,constrained
 python -m app.cli.main pack-compare --prompt "cinematic skyline at sunrise"
 python -m app.cli.main pack-compare-suite --iterations 3
 python -m app.cli.main prompt-grid-benchmark --pack Rayzist_bf16 --prompt "PROMPT 1" --prompt "PROMPT 2" --prompt "PROMPT 3"
-python -m app.cli.main seedvr2-benchmark --profiles high,balanced,constrained
-python -m app.cli.main seedvr2-blend-benchmark --profile high --alphas 25,50,75
+python -m app.cli.main seedvr2-still-benchmark --inputs outputs\sample.png --presets seed_faithful,seed_sharp
 ```
 
 Procedural latent preview:
@@ -199,7 +192,7 @@ python -m app.cli.main procedural-latent-preview --count 16 --seed-start 1 --cre
 
 Base URL: `http://127.0.0.1:37717`
 
-Supported generation cap: `1536x1536`.
+Supported generation cap: UI presets up to `1536x1536`; raw API requests up to `2048x2048`.
 Client-scoped routes require `X-JustRayzist-Client`.
 Use `procedural_creativity` (`0-3`) to control Creative Mode.
 In the main UI, scheduler behavior is derived automatically from Creative Mode. `scheduler_mode` remains optional for raw API and CLI calls.
@@ -240,7 +233,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.5.2",
+  "version": "1.5.4",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -270,7 +263,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.5.2",
+  "app_version": "1.5.4",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -379,7 +372,7 @@ Sample response:
 
 ### `POST /lora-drafts`
 
-Upload one `.safetensors` LoRA into draft storage for metadata inspection before saving it into the live library.
+Upload one `.safetensors` LoRA into draft storage for metadata inspection before saving it into the live library. LoRA uploads are capped at 10 GiB.
 
 Sample request body:
 
@@ -435,7 +428,7 @@ Sample response:
 
 ### `POST /loras`
 
-Finalize a staged LoRA draft into the live library with a chosen name, saved trigger words, and an optional thumbnail image.
+Finalize a staged LoRA draft into the live library with a chosen name, saved trigger words, and an optional thumbnail image. Thumbnail uploads are capped at 10 MiB.
 
 Sample request body:
 
@@ -480,7 +473,7 @@ Sample response:
 
 ### `PATCH /loras/{lora_id}`
 
-Update the display name, saved trigger words, and optional thumbnail image for one installed LoRA without replacing the weights file.
+Update the display name, saved trigger words, and optional thumbnail image for one installed LoRA without replacing the weights file. Thumbnail uploads are capped at 10 MiB.
 
 Sample request body:
 
@@ -596,7 +589,7 @@ Sample response:
 
 ### `POST /upscale`
 
-Upscale one gallery image with the app's mixed-model fast upscale flow.
+Upscale one gallery image with the fixed SeedVR2 direct x2 faithful path.
 
 Requires `X-JustRayzist-Client`.
 
@@ -620,7 +613,8 @@ Sample response:
   "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
   "mode": "api_upscale",
   "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-  "upscale_engine": "x2_seedvr2_blend",
+  "upscale_engine": "seedvr2_direct_x2_faithful",
+  "execution_mode": "seedvr2_direct_x2_faithful",
   "duration_ms": 23456,
   "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png"
 }

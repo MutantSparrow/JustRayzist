@@ -313,7 +313,7 @@ function Test-EnvironmentHealth {
     }
   }
 
-  $importProbe = Try-RunPython -PythonExe $venvPython -Code "import typer,fastapi,uvicorn,PIL,torch,diffusers,transformers,accelerate,safetensors; from diffusers import ZImagePipeline, ZImageTransformer2DModel, ZImageImg2ImgPipeline"
+  $importProbe = Try-RunPython -PythonExe $venvPython -Code "import typer,fastapi,uvicorn,multipart,PIL,torch,diffusers,transformers,accelerate,safetensors; from diffusers import ZImagePipeline, ZImageTransformer2DModel, ZImageImg2ImgPipeline"
   if (-not $importProbe.Success) {
     $issues.Add("Core runtime imports failed in .venv (including required ZImage diffusers symbols).")
   }
@@ -505,3 +505,4 @@ try {
   Write-Host ("Elapsed: {0:n1}s" -f $timer.Elapsed.TotalSeconds) -ForegroundColor DarkGray
   exit 1
 }
+

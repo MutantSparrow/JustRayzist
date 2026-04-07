@@ -1,17 +1,5 @@
-# Upscaler Checkpoints
+This directory is intentionally tracked so release packaging can include the
+expected `models/upscaler/` tree.
 
-This folder stores local upscaler checkpoints used by `upscale-test` and `upscale-refine`.
-
-Default expected file:
-
-- `2x_RealESRGAN_x2plus.pth`
-
-How to fetch defaults:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1
-```
-
-`StartWeb.bat` also attempts to auto-download missing default assets (including this upscaler checkpoint).
-Downloaded defaults are validated with SHA256 checks.
-Download backend uses Hugging Face CLI (`hf download`) with XET acceleration when environment setup is complete.
+The actual upscaler checkpoint file is local runtime data and is fetched by the
+setup and asset scripts. Do not commit the `.pth` model binary.

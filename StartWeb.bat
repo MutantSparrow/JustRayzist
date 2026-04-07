@@ -316,7 +316,6 @@ set "NEEDED_ENCODER=%PACK_ROOT%\config\text_encoder\model.safetensors"
 if /I "!MODEL_VARIANT!"=="fp8_full" (
   set "NEEDED_ENCODER=%CD%\models\packs\Rayzist_bf16\config\text_encoder\model.safetensors"
 )
-set "NEEDED_UPSCALER=%CD%\models\upscaler\2x_RealESRGAN_x2plus.pth"
 set "NEEDED_SEEDVR2_DIT=%CD%\models\seedvr2\seedvr2_ema_3b_fp8_e4m3fn.safetensors"
 set "NEEDED_SEEDVR2_VAE=%CD%\models\seedvr2\ema_vae_fp16.safetensors"
 set "NEEDED_SEEDVR2_RUNTIME=%CD%\models\seedvr2\runtime\ComfyUI-SeedVR2_VideoUpscaler\inference_cli.py"
@@ -327,7 +326,6 @@ set "MISSING_ASSETS=0"
 if not exist "!NEEDED_TRANSFORMER!" set "MISSING_ASSETS=1"
 if not exist "!NEEDED_VAE!" set "MISSING_ASSETS=1"
 if not exist "!NEEDED_ENCODER!" set "MISSING_ASSETS=1"
-if not exist "!NEEDED_UPSCALER!" set "MISSING_ASSETS=1"
 if not exist "!NEEDED_SEEDVR2_DIT!" set "MISSING_ASSETS=1"
 if not exist "!NEEDED_SEEDVR2_VAE!" set "MISSING_ASSETS=1"
 
@@ -376,10 +374,6 @@ if not exist "!NEEDED_VAE!" (
 )
 if not exist "!NEEDED_ENCODER!" (
   echo Missing file after download: !NEEDED_ENCODER!
-  exit /b 1
-)
-if not exist "!NEEDED_UPSCALER!" (
-  echo Missing file after download: !NEEDED_UPSCALER!
   exit /b 1
 )
 if not exist "!NEEDED_SEEDVR2_DIT!" (

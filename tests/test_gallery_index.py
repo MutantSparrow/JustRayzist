@@ -23,6 +23,7 @@ from app.storage.gallery_index import (
     gallery_color_cache_version,
     get_image,
     list_images,
+    rebuild_gallery,
     rebuild_gallery_color_cache,
     sync_outputs_to_gallery,
 )
@@ -82,6 +83,23 @@ def test_gallery_sync_orders_and_filters_images(monkeypatch, workspace_tmp_path:
     assert row is not None
     assert row["width"] == 64
     assert row["height"] == 64
+
+
+def test_gallery_sync_ignores_non_png_files(monkeypatch, workspace_tmp_path: Path) -> None:
+    root = workspace_tmp_path / "gallery-sync-png-only"
+    monkeypatch.setenv("JUSTRAYZIST_ROOT", str(root))
+    settings = load_settings()
+
+    png_path = settings.paths.outputs_dir / "sample.png"
+    jpg_path = settings.paths.outputs_dir / "sample.jpg"
+    _save_test_png(png_path, "PNG prompt")
+    jpg_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), color=(140, 120, 90)).save(jpg_path, format="JPEG")
+
+    indexed = sync_outputs_to_gallery(settings)
+
+    assert indexed == 1
+    assert [row["filename"] for row in list_images(settings, limit=20)] == ["sample.png"]
 
 
 def test_gallery_color_classification_flags_primary_buckets(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -303,6 +321,73 @@ def test_delete_gallery_removes_unindexed_owner_files(monkeypatch, workspace_tmp
     assert deletion["remaining_rows"] == 0
     assert list_images(settings, owner_id="example-client", limit=10) == []
     assert not owner_dir.exists()
+
+
+def test_gallery_rebuild_indexes_manual_owner_pngs(monkeypatch, workspace_tmp_path: Path) -> None:
+    root = workspace_tmp_path / "gallery-rebuild-index"
+    monkeypatch.setenv("JUSTRAYZIST_ROOT", str(root))
+    settings = load_settings()
+
+    owner_dir = settings.paths.outputs_dir / "example-client"
+    image_path = owner_dir / "manual.png"
+    _save_test_png(image_path, "Manual copy")
+
+    result = rebuild_gallery(settings, "example-client")
+
+    assert result == {
+        "owner_id": "example-client",
+        "scanned_files": 1,
+        "indexed": 1,
+        "updated": 0,
+        "removed_missing": 0,
+        "total_items": 1,
+    }
+    row = get_image(settings, "manual.png", owner_id="example-client")
+    assert row is not None
+    assert row["prompt"] == "Manual copy"
+
+
+def test_gallery_rebuild_removes_deleted_owner_pngs(monkeypatch, workspace_tmp_path: Path) -> None:
+    root = workspace_tmp_path / "gallery-rebuild-remove"
+    monkeypatch.setenv("JUSTRAYZIST_ROOT", str(root))
+    settings = load_settings()
+
+    owner_dir = settings.paths.outputs_dir / "example-client"
+    image_path = owner_dir / "removed.png"
+    _save_test_png(image_path, "To be deleted")
+    sync_outputs_to_gallery(settings)
+    image_path.unlink()
+
+    result = rebuild_gallery(settings, "example-client")
+
+    assert result["removed_missing"] == 1
+    assert result["scanned_files"] == 0
+    assert result["indexed"] == 0
+    assert result["updated"] == 0
+    assert result["total_items"] == 0
+    assert get_image(settings, "removed.png", owner_id="example-client") is None
+
+
+def test_gallery_rebuild_refreshes_existing_owner_png_metadata(monkeypatch, workspace_tmp_path: Path) -> None:
+    root = workspace_tmp_path / "gallery-rebuild-refresh"
+    monkeypatch.setenv("JUSTRAYZIST_ROOT", str(root))
+    settings = load_settings()
+
+    owner_dir = settings.paths.outputs_dir / "example-client"
+    image_path = owner_dir / "refresh.png"
+    _save_test_png(image_path, "Original prompt", timestamp="2026-02-22T00:00:00+00:00")
+    sync_outputs_to_gallery(settings)
+    _save_test_png(image_path, "Updated prompt", timestamp="2026-02-22T03:00:00+00:00", color=(20, 180, 60))
+
+    result = rebuild_gallery(settings, "example-client")
+
+    assert result["scanned_files"] == 1
+    assert result["indexed"] == 0
+    assert result["updated"] == 1
+    row = get_image(settings, "refresh.png", owner_id="example-client")
+    assert row is not None
+    assert row["prompt"] == "Updated prompt"
+    assert row["timestamp"] == "2026-02-22T03:00:00+00:00"
 
 
 

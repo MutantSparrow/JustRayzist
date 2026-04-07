@@ -172,6 +172,38 @@ def _draft_weights_path(settings: AppSettings, draft_id: str) -> Path:
     return ensure_lora_drafts(settings) / f"{normalize_lora_id(draft_id)}{_LORA_SUFFIX}"
 
 
+def _write_uploaded_lora(target_path: Path, *, content: bytes | None = None, content_file: Any | None = None) -> int:
+    if content is not None and content_file is not None:
+        raise ValueError("LoRA upload must provide either bytes or a file stream, not both.")
+    if content is None and content_file is None:
+        raise ValueError("Uploaded LoRA file is empty.")
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    with target_path.open("wb") as handle:
+        if content is not None:
+            payload = bytes(content)
+            handle.write(payload)
+            return len(payload)
+
+        source = content_file
+        seek = getattr(source, "seek", None)
+        if callable(seek):
+            seek(0)
+        while True:
+            chunk = source.read(1024 * 1024)
+            if not chunk:
+                break
+            if isinstance(chunk, memoryview):
+                chunk = chunk.tobytes()
+            if not isinstance(chunk, (bytes, bytearray)):
+                raise ValueError("Uploaded LoRA stream must yield bytes.")
+            payload = bytes(chunk)
+            handle.write(payload)
+            written += len(payload)
+    return written
+
+
 def _resolve_existing_weights_path(
     settings: AppSettings,
     lora_id: str,
@@ -498,6 +530,9 @@ def _full_record_payload(
     preview_is_custom: bool,
     created_at: str,
     updated_at: str,
+    deleted: bool = False,
+    delete_pending: bool = False,
+    deleted_at: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": normalize_lora_id(lora_id),
@@ -515,6 +550,9 @@ def _full_record_payload(
         "created_at": created_at,
         "updated_at": updated_at,
         "file_size_bytes": int(weights_path.stat().st_size),
+        "deleted": bool(deleted),
+        "delete_pending": bool(delete_pending),
+        "deleted_at": str(deleted_at or "").strip() or None,
     }
 
 
@@ -546,6 +584,12 @@ def _draft_record_payload(
 
 
 def _public_record(record: dict[str, Any]) -> dict[str, Any]:
+    preview_cache_key = ""
+    try:
+        preview_stats = Path(str(record.get("preview_path") or "")).stat()
+        preview_cache_key = f"{preview_stats.st_mtime_ns}-{preview_stats.st_size}"
+    except OSError:
+        preview_cache_key = str(record.get("updated_at") or "")
     return {
         "id": record["id"],
         "display_name": record["display_name"],
@@ -553,6 +597,7 @@ def _public_record(record: dict[str, Any]) -> dict[str, Any]:
         "filename": record["filename"],
         "preview_filename": record["preview_filename"],
         "preview_url": f"/loras/{record['id']}/preview",
+        "preview_cache_key": preview_cache_key,
         "preview_is_custom": bool(record.get("preview_is_custom")),
         "trigger_words": list(record.get("trigger_words") or []),
         "detected_trigger_words": list(record.get("detected_trigger_words") or []),
@@ -576,10 +621,12 @@ def _public_draft_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _hydrate_record(settings: AppSettings, *, lora_id: str) -> dict[str, Any]:
+def _hydrate_record(settings: AppSettings, *, lora_id: str, include_deleted: bool = False) -> dict[str, Any]:
     normalized = normalize_lora_id(lora_id)
     sidecar_path = _sidecar_path(settings, normalized)
     existing = _read_json(sidecar_path) if sidecar_path.exists() else {}
+    if bool(existing.get("deleted")) and not include_deleted:
+        raise FileNotFoundError(f"LoRA not found: {normalized}")
     weights_path = _resolve_existing_weights_path(settings, normalized, existing_sidecar=existing)
     if not weights_path.exists():
         raise FileNotFoundError(f"LoRA not found: {normalized}")
@@ -615,6 +662,9 @@ def _hydrate_record(settings: AppSettings, *, lora_id: str) -> dict[str, Any]:
 
     created_at = str(existing.get("created_at") or _created_at_for_path(weights_path))
     updated_at = str(existing.get("updated_at") or created_at)
+    deleted = bool(existing.get("deleted", False))
+    delete_pending = bool(existing.get("delete_pending", False))
+    deleted_at = str(existing.get("deleted_at") or "").strip() or None
     payload = _full_record_payload(
         lora_id=normalized,
         weights_path=weights_path,
@@ -628,6 +678,9 @@ def _hydrate_record(settings: AppSettings, *, lora_id: str) -> dict[str, Any]:
         preview_is_custom=preview_is_custom,
         created_at=created_at,
         updated_at=updated_at,
+        deleted=deleted,
+        delete_pending=delete_pending,
+        deleted_at=deleted_at,
     )
     if changed:
         _write_json(sidecar_path, payload)
@@ -675,9 +728,9 @@ def _hydrate_draft(settings: AppSettings, *, draft_id: str) -> dict[str, Any]:
     return payload
 
 
-def get_lora(settings: AppSettings, lora_id: str) -> dict[str, Any] | None:
+def get_lora(settings: AppSettings, lora_id: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
     try:
-        return _hydrate_record(settings, lora_id=lora_id)
+        return _hydrate_record(settings, lora_id=lora_id, include_deleted=include_deleted)
     except FileNotFoundError:
         return None
 
@@ -693,20 +746,29 @@ def list_loras(settings: AppSettings) -> list[dict[str, Any]]:
     root = ensure_lora_library(settings)
     records: list[dict[str, Any]] = []
     for weights_path in sorted(root.glob(f"*{_LORA_SUFFIX}")):
-        record = _hydrate_record(settings, lora_id=weights_path.stem)
+        try:
+            record = _hydrate_record(settings, lora_id=weights_path.stem)
+        except FileNotFoundError:
+            continue
         records.append(_public_record(record))
     records.sort(key=lambda item: (str(item.get("display_name") or "").lower(), str(item.get("id") or "")))
     return records
 
 
-def create_lora_draft(settings: AppSettings, *, filename: str, content: bytes) -> dict[str, Any]:
+def create_lora_draft(
+    settings: AppSettings,
+    *,
+    filename: str,
+    content: bytes | None = None,
+    content_file: Any | None = None,
+) -> dict[str, Any]:
     safe_filename = sanitize_upload_filename(filename)
-    if not content:
-        raise ValueError("Uploaded LoRA file is empty.")
     draft_id = _unique_lora_id(settings, Path(safe_filename).stem, include_drafts=True)
     target_path = _draft_weights_path(settings, draft_id)
-    target_path.write_bytes(content)
     try:
+        written = _write_uploaded_lora(target_path, content=content, content_file=content_file)
+        if written <= 0:
+            raise ValueError("Uploaded LoRA file is empty.")
         metadata, metadata_summary, detected_trigger_words = _detection_payload(target_path)
     except Exception as exc:
         target_path.unlink(missing_ok=True)
@@ -799,6 +861,9 @@ def finalize_lora_draft(
         preview_is_custom=preview_is_custom,
         created_at=str(draft.get("created_at") or _created_at_for_path(target_path)),
         updated_at=_utc_timestamp(),
+        deleted=False,
+        delete_pending=False,
+        deleted_at=None,
     )
     _write_json(_sidecar_path(settings, target_id), payload)
     _draft_sidecar_path(settings, draft["id"]).unlink(missing_ok=True)
@@ -846,16 +911,54 @@ def update_lora(
         preview_is_custom=preview_is_custom,
         created_at=str(record.get("created_at") or _created_at_for_path(weights_path)),
         updated_at=_utc_timestamp(),
+        deleted=False,
+        delete_pending=False,
+        deleted_at=None,
     )
     _write_json(_sidecar_path(settings, record["id"]), payload)
     return _public_record(payload)
 
 
-def delete_lora(settings: AppSettings, lora_id: str) -> dict[str, Any]:
+def mark_lora_deleted(settings: AppSettings, lora_id: str, *, pending_cleanup: bool) -> dict[str, Any]:
     normalized = normalize_lora_id(lora_id)
-    record = get_lora(settings, normalized)
+    record = get_lora(settings, normalized, include_deleted=True)
     weights_path = Path(str(record["path"])) if record is not None else _weights_path(settings, normalized)
     if not weights_path.exists():
+        raise FileNotFoundError(f"LoRA not found: {normalized}")
+
+    preview_path = Path(str(record["preview_path"])) if record is not None else _preview_path(settings, normalized)
+    source_filename = str(record.get("source_filename") or weights_path.name) if record is not None else weights_path.name
+    display_name = sanitize_display_name(
+        record.get("display_name") if record is not None else None,
+        fallback=Path(source_filename).stem,
+    )
+    deleted_at = _utc_timestamp()
+    payload = _full_record_payload(
+        lora_id=normalized,
+        weights_path=weights_path,
+        preview_path=preview_path,
+        display_name=display_name,
+        source_filename=source_filename,
+        trigger_words=normalize_trigger_words(record.get("trigger_words") if record else []),
+        detected_trigger_words=normalize_trigger_words(record.get("detected_trigger_words") if record else []),
+        metadata=dict(record.get("metadata") if record else {}),
+        metadata_summary=dict(record.get("metadata_summary") if record else {}),
+        preview_is_custom=bool(record.get("preview_is_custom") if record else preview_path.exists()),
+        created_at=str(record.get("created_at") if record else _created_at_for_path(weights_path)),
+        updated_at=_utc_timestamp(),
+        deleted=True,
+        delete_pending=bool(pending_cleanup),
+        deleted_at=deleted_at,
+    )
+    _write_json(_sidecar_path(settings, normalized), payload)
+    return payload
+
+
+def finalize_deleted_lora(settings: AppSettings, lora_id: str) -> dict[str, Any]:
+    normalized = normalize_lora_id(lora_id)
+    record = get_lora(settings, normalized, include_deleted=True)
+    weights_path = Path(str(record["path"])) if record is not None else _weights_path(settings, normalized)
+    if not weights_path.exists() and not _sidecar_path(settings, normalized).exists() and not _preview_path(settings, normalized).exists():
         raise FileNotFoundError(f"LoRA not found: {normalized}")
 
     deleted_files = 0
@@ -865,6 +968,11 @@ def delete_lora(settings: AppSettings, lora_id: str) -> dict[str, Any]:
             deleted_files += 1
 
     return {"id": normalized, "deleted_files": deleted_files}
+
+
+def delete_lora(settings: AppSettings, lora_id: str) -> dict[str, Any]:
+    mark_lora_deleted(settings, lora_id, pending_cleanup=False)
+    return finalize_deleted_lora(settings, lora_id)
 
 
 def preview_path_for_lora(settings: AppSettings, lora_id: str) -> Path:

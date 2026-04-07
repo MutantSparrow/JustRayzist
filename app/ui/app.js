@@ -12,6 +12,9 @@ const freezeSeedButtonEl = document.getElementById("freeze-seed-button");
 const proceduralLatentSliderEl = document.getElementById("procedural-latent-slider");
 const proceduralLatentValueEl = document.getElementById("procedural-latent-value");
 const promptEnhanceButtonEl = document.getElementById("prompt-enhance-button");
+const upscaleModeToggleEl = document.getElementById("upscale-mode-toggle");
+const upscaleScaleToggleEl = document.getElementById("upscale-scale-toggle");
+const upscaleSettingsHintEl = document.getElementById("upscale-settings-hint");
 const deleteGalleryButtonEl = document.getElementById("delete-gallery-button");
 const killServerButtonEl = document.getElementById("kill-server-button");
 const filterInputEl = document.getElementById("filter-input");
@@ -50,8 +53,6 @@ const loraEditorThumbnailButtonEl = document.getElementById("lora-editor-thumbna
 const loraEditorThumbnailInputEl = document.getElementById("lora-editor-thumbnail-input");
 const loraEditorTriggerChipsEl = document.getElementById("lora-editor-trigger-chips");
 const loraEditorTriggerInputEl = document.getElementById("lora-editor-trigger-input");
-const loraEditorFetchTriggersEl = document.getElementById("lora-editor-fetch-triggers");
-const loraEditorMetadataSummaryEl = document.getElementById("lora-editor-metadata-summary");
 const loraEditorSaveEl = document.getElementById("lora-editor-save");
 const viewerModalEl = document.getElementById("viewer-modal");
 const viewerMetaEl = document.getElementById("viewer-meta");
@@ -92,6 +93,7 @@ const requiredUi = [
   ["procedural-latent-slider", proceduralLatentSliderEl],
   ["procedural-latent-value", proceduralLatentValueEl],
   ["prompt-enhance-button", promptEnhanceButtonEl],
+  ["upscale-settings-hint", upscaleSettingsHintEl],
   ["delete-gallery-button", deleteGalleryButtonEl],
   ["kill-server-button", killServerButtonEl],
   ["filter-input", filterInputEl],
@@ -130,8 +132,6 @@ const requiredUi = [
   ["lora-editor-thumbnail-input", loraEditorThumbnailInputEl],
   ["lora-editor-trigger-chips", loraEditorTriggerChipsEl],
   ["lora-editor-trigger-input", loraEditorTriggerInputEl],
-  ["lora-editor-fetch-triggers", loraEditorFetchTriggersEl],
-  ["lora-editor-metadata-summary", loraEditorMetadataSummaryEl],
   ["lora-editor-save", loraEditorSaveEl],
   ["viewer-modal", viewerModalEl],
   ["viewer-meta", viewerMetaEl],
@@ -172,6 +172,8 @@ const CLIENT_QUEUE_STORAGE_VERSION = 2;
 const GALLERY_COLOR_FILTERS = ["black", "white", "red", "yellow", "blue", "green"];
 const GALLERY_COLOR_CACHE_STATUS_MESSAGE = "Updating gallery color cache...";
 const GALLERY_COLOR_CACHE_POLL_INTERVAL_MS = 2500;
+const LORA_LIBRARY_POLL_INTERVAL_MS = 2500;
+const LORA_MASONRY_SINGLE_COLUMN_BREAKPOINT_PX = 600;
 const GALLERY_SOFT_REMOVAL_DURATION_MS = 240;
 const TILE_ACTION_FX_DURATION_MS = 190;
 const PENDING_UPSCALE_ENTRY_FX_DURATION_MS = 220;
@@ -267,6 +269,8 @@ const state = {
   freezeSeed: false,
   proceduralCreativity: 0,
   promptEnhance: true,
+  upscaleMode: "fast",
+  upscaleScale: 2,
   galleryColumns: getStoredGalleryColumns(),
   currentSeed: null,
   newestFirst: true,
@@ -282,6 +286,8 @@ const state = {
   selectedFilenames: new Set(),
   pendingJobs: [],
   galleryLoadRequestSeq: 0,
+  loraLibraryLoadRequestSeq: 0,
+  loraLibrarySignature: "",
   zoom: 1.0,
   panX: 0,
   panY: 0,
@@ -314,6 +320,10 @@ const state = {
   loraDrawerOpen: false,
   loraLibrary: [],
   loraFilter: "",
+  loraLibraryMasonryFrame: null,
+  loraLibraryPollTimer: null,
+  loraLibraryEventSource: null,
+  loraLibraryEventReconnectTimer: null,
   loraCapabilities: {
     supported: false,
     max_active: MAX_ACTIVE_LORAS,
@@ -690,10 +700,10 @@ function sanitizeLoraSelectionsAgainstLibrary(selections) {
 }
 
 function buildLoraPreviewUrl(lora) {
-  const updatedAt = String(lora?.updated_at || "").trim();
+  const previewCacheKey = String(lora?.preview_cache_key || lora?.updated_at || "").trim();
   const query = new URLSearchParams();
-  if (updatedAt) {
-    query.set("t", updatedAt);
+  if (previewCacheKey) {
+    query.set("t", previewCacheKey);
   }
   const suffix = query.toString();
   return `/loras/${encodeURIComponent(lora.id)}/preview${suffix ? `?${suffix}` : ""}`;
@@ -713,6 +723,7 @@ function loraSelectionsDirty() {
 
 function setLoraDrawerOpen(open) {
   const next = Boolean(open);
+  const wasOpen = state.loraDrawerOpen;
   const mobileOverlay = window.innerWidth <= 960;
   state.loraDrawerOpen = next;
   document.body.classList.toggle("lora-drawer-open", next && !mobileOverlay);
@@ -723,10 +734,21 @@ function setLoraDrawerOpen(open) {
   loraDrawerToggleEl.setAttribute("aria-expanded", String(next));
   if (!next) {
     state.loraTouchFocusId = null;
+    stopLoraLibraryPolling();
+    if (state.loraLibraryMasonryFrame !== null) {
+      window.cancelAnimationFrame(state.loraLibraryMasonryFrame);
+      state.loraLibraryMasonryFrame = null;
+    }
   }
   updateTopbarOffset();
   if (next) {
     loraFilterInputEl.focus();
+    if (!wasOpen) {
+      loadLoraLibrary({ refreshSummary: false, silent: true }).catch(() => {
+      });
+    }
+    scheduleLoraLibraryPoll();
+    scheduleLoraLibraryMasonryRelayout();
   }
 }
 
@@ -797,30 +819,6 @@ function renderLoraEditorTriggerChips() {
   });
 }
 
-function renderLoraEditorMetadataSummary() {
-  loraEditorMetadataSummaryEl.innerHTML = "";
-  const entries = Object.entries(state.loraEditorMetadataSummary || {});
-  if (entries.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "lora-editor-metadata-empty";
-    empty.textContent = "No metadata available.";
-    loraEditorMetadataSummaryEl.append(empty);
-    return;
-  }
-  entries.forEach(([key, value]) => {
-    const row = document.createElement("div");
-    row.className = "lora-editor-metadata-row";
-    const keyEl = document.createElement("span");
-    keyEl.className = "lora-editor-metadata-key";
-    keyEl.textContent = key;
-    const valueEl = document.createElement("span");
-    valueEl.className = "lora-editor-metadata-value";
-    valueEl.textContent = String(value || "");
-    row.append(keyEl, valueEl);
-    loraEditorMetadataSummaryEl.append(row);
-  });
-}
-
 function renderLoraEditor() {
   const phase = state.loraEditorPhase;
   const uploading = phase === "uploading";
@@ -828,9 +826,7 @@ function renderLoraEditor() {
   const saving = phase === "saving";
   const editing = phase === "editing";
   loraEditorTitleEl.textContent = state.loraEditorMode === "edit" ? "EDIT LORA" : "ADD LORA";
-  loraEditorFileEl.textContent = state.loraEditorSourceFilename
-    ? `Source file: ${state.loraEditorSourceFilename}`
-    : "";
+  loraEditorFileEl.textContent = state.loraEditorSourceFilename || "";
   loraEditorProgressEl.classList.toggle("hidden", editing);
   loraEditorProgressEl.classList.toggle("uploading", uploading);
   loraEditorProgressEl.classList.toggle("analyzing", analyzing);
@@ -854,12 +850,10 @@ function renderLoraEditor() {
     loraEditorThumbnailPreviewEl.classList.add("empty");
   }
   renderLoraEditorTriggerChips();
-  renderLoraEditorMetadataSummary();
   loraEditorNameEl.disabled = !editing;
   loraEditorThumbnailButtonEl.disabled = !editing;
   loraEditorThumbnailInputEl.disabled = !editing;
   loraEditorTriggerInputEl.disabled = !editing;
-  loraEditorFetchTriggersEl.disabled = !editing || state.loraEditorBusy;
   loraEditorCloseEl.disabled = saving;
   loraEditorCloseEl.textContent = uploading || analyzing ? "Cancel Upload" : "Cancel";
   loraEditorSaveEl.disabled = !editing || state.loraEditorBusy;
@@ -1072,6 +1066,209 @@ function createLoraAddTile() {
   return tile;
 }
 
+function getLoraMasonryColumnCount() {
+  return window.innerWidth <= LORA_MASONRY_SINGLE_COLUMN_BREAKPOINT_PX ? 1 : 2;
+}
+
+function getLoraMasonryOrder(element) {
+  return Number.parseInt(String(element?.dataset?.masonryOrder || "0"), 10) || 0;
+}
+
+function applyLoraPreviewAspectRatio(preview) {
+  if (!(preview instanceof HTMLImageElement)) return;
+  const naturalWidth = Number(preview.naturalWidth || 0);
+  const naturalHeight = Number(preview.naturalHeight || 0);
+  preview.style.aspectRatio = naturalWidth > 0 && naturalHeight > 0
+    ? `${naturalWidth} / ${naturalHeight}`
+    : "1 / 1";
+}
+
+function createLoraMasonryColumns(columnCount) {
+  loraListEl.innerHTML = "";
+  loraListEl.style.setProperty("--lora-masonry-columns", String(columnCount));
+  const columns = [];
+  for (let index = 0; index < columnCount; index += 1) {
+    const column = document.createElement("div");
+    column.className = "lora-list-column";
+    column.dataset.columnIndex = String(index);
+    columns.push(column);
+  }
+  loraListEl.append(...columns);
+  return columns;
+}
+
+function appendToShortestLoraMasonryColumn(item, columns, heights) {
+  if (columns.length === 0) return;
+  let targetIndex = 0;
+  for (let index = 1; index < heights.length; index += 1) {
+    if (heights[index] < heights[targetIndex]) {
+      targetIndex = index;
+    }
+  }
+  columns[targetIndex].append(item);
+  heights[targetIndex] = columns[targetIndex].scrollHeight;
+}
+
+function placeLoraMasonryItems(items) {
+  const columnCount = getLoraMasonryColumnCount();
+  const columns = createLoraMasonryColumns(columnCount);
+  const heights = new Array(columnCount).fill(0);
+  items.forEach((item) => appendToShortestLoraMasonryColumn(item, columns, heights));
+}
+
+function relayoutLoraLibraryMasonry() {
+  const items = Array.from(loraListEl.querySelectorAll(".lora-card"))
+    .sort((left, right) => getLoraMasonryOrder(left) - getLoraMasonryOrder(right));
+  if (items.length === 0) {
+    loraListEl.innerHTML = "";
+    loraListEl.style.setProperty("--lora-masonry-columns", String(getLoraMasonryColumnCount()));
+    return;
+  }
+  placeLoraMasonryItems(items);
+}
+
+function scheduleLoraLibraryMasonryRelayout() {
+  if (state.loraLibraryMasonryFrame !== null) {
+    window.cancelAnimationFrame(state.loraLibraryMasonryFrame);
+  }
+  state.loraLibraryMasonryFrame = window.requestAnimationFrame(() => {
+    state.loraLibraryMasonryFrame = null;
+    relayoutLoraLibraryMasonry();
+  });
+}
+
+function createLoraLibraryCard(item, order) {
+  const displayName = String(item?.display_name || item?.id || "").trim() || "Unnamed LoRA";
+  const sourceFilename = String(item?.source_filename || item?.filename || "").trim();
+  const cardTitle = sourceFilename && sourceFilename !== displayName
+    ? `${displayName}\n${sourceFilename}`
+    : displayName;
+  const pendingSelection = state.loraPendingSelections.find((selection) => selection.id === item.id) || null;
+  const appliedSelection = state.loraAppliedSelections.find((selection) => selection.id === item.id) || null;
+  const isTouchFocus = state.loraTouchFocusId === item.id;
+  const card = document.createElement("article");
+  card.className = "lora-card";
+  card.classList.toggle("pending", Boolean(pendingSelection));
+  card.classList.toggle("applied", Boolean(appliedSelection));
+  card.classList.toggle("touch-focused", isTouchFocus);
+  card.dataset.loraId = item.id;
+  card.dataset.masonryOrder = String(order);
+  card.title = cardTitle;
+
+  const preview = document.createElement("img");
+  preview.className = "lora-card-preview";
+  preview.alt = `${displayName} preview`;
+  preview.title = cardTitle;
+  preview.loading = "lazy";
+  preview.decoding = "async";
+  preview.style.aspectRatio = "1 / 1";
+  const onPreviewSettled = () => {
+    applyLoraPreviewAspectRatio(preview);
+    scheduleLoraLibraryMasonryRelayout();
+  };
+  preview.addEventListener("load", onPreviewSettled, { once: true });
+  preview.addEventListener("error", onPreviewSettled, { once: true });
+  preview.src = buildLoraPreviewUrl(item);
+  if (preview.complete) {
+    onPreviewSettled();
+  }
+
+  const overlay = document.createElement("div");
+  overlay.className = "lora-card-overlay";
+
+  const topRow = document.createElement("div");
+  topRow.className = "lora-card-top-row";
+  const name = document.createElement("div");
+  name.className = "lora-card-name";
+  name.textContent = displayName;
+  name.title = cardTitle;
+  topRow.append(name);
+
+  let actions = null;
+  if (!pendingSelection) {
+    actions = document.createElement("div");
+    actions.className = "lora-card-actions";
+
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "lora-card-icon-button";
+    editButton.title = "Edit LoRA";
+    editButton.setAttribute("aria-label", "Edit LoRA");
+    editButton.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10-10-4-4L4 16v4"></path><path d="M13 7l4 4"></path></svg>';
+    editButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openLoraEditorForItem(item);
+    });
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "lora-card-icon-button danger";
+    deleteButton.title = "Delete LoRA";
+    deleteButton.setAttribute("aria-label", "Delete LoRA");
+    deleteButton.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V5h6v2"></path><path d="M7 7l1 12h8l1-12"></path><path d="M10 10v6"></path><path d="M14 10v6"></path></svg>';
+    deleteButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      showConfirmModal(
+        `Delete LoRA \"${item.display_name || item.id}\"? This cannot be undone.`,
+        async () => {
+          await deleteLoraById(item.id);
+        },
+        "Delete",
+        "Cancel"
+      );
+    });
+
+    actions.append(editButton, deleteButton);
+  }
+
+  overlay.append(topRow);
+  const centerRow = document.createElement("div");
+  centerRow.className = "lora-card-center-row";
+  centerRow.append(createLoraToggleButton(item, Boolean(pendingSelection)));
+  overlay.append(centerRow);
+  if (pendingSelection) {
+    const sliderRow = document.createElement("div");
+    sliderRow.className = "lora-slider-row";
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = "0";
+    slider.max = String(LORA_STRENGTH_PRESETS.length - 1);
+    slider.step = "1";
+    slider.value = String(loraStrengthPresetIndex(pendingSelection.weight));
+    slider.addEventListener("click", (event) => event.stopPropagation());
+    slider.addEventListener("input", (event) => {
+      event.stopPropagation();
+      const weight = setPendingLoraWeight(item.id, loraStrengthPresetAt(slider.value).value, { skipRender: true });
+      value.textContent = formatLoraPresetLabel(weight);
+    });
+    slider.addEventListener("change", (event) => {
+      event.stopPropagation();
+      renderLoraLibrary();
+    });
+    const value = document.createElement("div");
+    value.className = "lora-slider-value";
+    value.textContent = formatLoraPresetLabel(pendingSelection.weight);
+    sliderRow.append(slider, value);
+    overlay.append(sliderRow);
+  } else if (actions) {
+    const bottomRow = document.createElement("div");
+    bottomRow.className = "lora-card-bottom-row";
+    bottomRow.append(actions);
+    overlay.append(bottomRow);
+  }
+
+  card.append(preview, overlay);
+  if (isTouchLikeLoraUi()) {
+    card.addEventListener("click", () => {
+      state.loraTouchFocusId = state.loraTouchFocusId === item.id ? null : item.id;
+      renderLoraLibrary();
+    });
+  }
+  return card;
+}
+
 function createLoraToggleButton(item, isActive) {
   const toggle = document.createElement("button");
   toggle.type = "button";
@@ -1119,8 +1316,10 @@ function renderLoraLibrary() {
     const haystack = `${item.display_name || ""} ${item.source_filename || ""}`.toLowerCase();
     return haystack.includes(filterValue);
   });
-  loraListEl.innerHTML = "";
-  loraListEl.append(createLoraAddTile());
+  const items = [];
+  const addTile = createLoraAddTile();
+  addTile.dataset.masonryOrder = "0";
+  items.push(addTile);
   if (filteredItems.length === 0) {
     loraDrawerEmptyEl.classList.remove("hidden");
     loraDrawerEmptyEl.textContent =
@@ -1128,117 +1327,11 @@ function renderLoraLibrary() {
   } else {
     loraDrawerEmptyEl.classList.add("hidden");
   }
-
-  filteredItems.forEach((item) => {
-    const pendingSelection = state.loraPendingSelections.find((selection) => selection.id === item.id) || null;
-    const appliedSelection = state.loraAppliedSelections.find((selection) => selection.id === item.id) || null;
-    const isTouchFocus = state.loraTouchFocusId === item.id;
-    const card = document.createElement("article");
-    card.className = "lora-card";
-    card.classList.toggle("pending", Boolean(pendingSelection));
-    card.classList.toggle("applied", Boolean(appliedSelection));
-    card.classList.toggle("touch-focused", isTouchFocus);
-    card.dataset.loraId = item.id;
-
-    const preview = document.createElement("img");
-    preview.className = "lora-card-preview";
-    preview.src = buildLoraPreviewUrl(item);
-    preview.alt = `${item.display_name || item.id} preview`;
-
-    const overlay = document.createElement("div");
-    overlay.className = "lora-card-overlay";
-
-    const topRow = document.createElement("div");
-    topRow.className = "lora-card-top-row";
-    const name = document.createElement("div");
-    name.className = "lora-card-name";
-    name.textContent = item.display_name || item.id;
-    topRow.append(name);
-
-    let actions = null;
-    if (!pendingSelection) {
-      actions = document.createElement("div");
-      actions.className = "lora-card-actions";
-
-      const editButton = document.createElement("button");
-      editButton.type = "button";
-      editButton.className = "lora-card-icon-button";
-      editButton.title = "Edit LoRA";
-      editButton.setAttribute("aria-label", "Edit LoRA");
-      editButton.innerHTML =
-        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10-10-4-4L4 16v4"></path><path d="M13 7l4 4"></path></svg>';
-      editButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        openLoraEditorForItem(item);
-      });
-
-      const deleteButton = document.createElement("button");
-      deleteButton.type = "button";
-      deleteButton.className = "lora-card-icon-button danger";
-      deleteButton.title = "Delete LoRA";
-      deleteButton.setAttribute("aria-label", "Delete LoRA");
-      deleteButton.innerHTML =
-        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V5h6v2"></path><path d="M7 7l1 12h8l1-12"></path><path d="M10 10v6"></path><path d="M14 10v6"></path></svg>';
-      deleteButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        showConfirmModal(
-          `Delete LoRA \"${item.display_name || item.id}\"? This cannot be undone.`,
-          async () => {
-            await deleteLoraById(item.id);
-          },
-          "Delete",
-          "Cancel"
-        );
-      });
-
-      actions.append(editButton, deleteButton);
-    }
-
-    overlay.append(topRow);
-    const centerRow = document.createElement("div");
-    centerRow.className = "lora-card-center-row";
-    centerRow.append(createLoraToggleButton(item, Boolean(pendingSelection)));
-    overlay.append(centerRow);
-    if (pendingSelection) {
-      const sliderRow = document.createElement("div");
-      sliderRow.className = "lora-slider-row";
-      const slider = document.createElement("input");
-      slider.type = "range";
-      slider.min = "0";
-      slider.max = String(LORA_STRENGTH_PRESETS.length - 1);
-      slider.step = "1";
-      slider.value = String(loraStrengthPresetIndex(pendingSelection.weight));
-      slider.addEventListener("click", (event) => event.stopPropagation());
-      slider.addEventListener("input", (event) => {
-        event.stopPropagation();
-        const weight = setPendingLoraWeight(item.id, loraStrengthPresetAt(slider.value).value, { skipRender: true });
-        value.textContent = formatLoraPresetLabel(weight);
-      });
-      slider.addEventListener("change", (event) => {
-        event.stopPropagation();
-        renderLoraLibrary();
-      });
-      const value = document.createElement("div");
-      value.className = "lora-slider-value";
-      value.textContent = formatLoraPresetLabel(pendingSelection.weight);
-      sliderRow.append(slider, value);
-      overlay.append(sliderRow);
-    } else if (actions) {
-      const bottomRow = document.createElement("div");
-      bottomRow.className = "lora-card-bottom-row";
-      bottomRow.append(actions);
-      overlay.append(bottomRow);
-    }
-
-    card.append(preview, overlay);
-    if (isTouchLikeLoraUi()) {
-      card.addEventListener("click", () => {
-        state.loraTouchFocusId = state.loraTouchFocusId === item.id ? null : item.id;
-        renderLoraLibrary();
-      });
-    }
-    loraListEl.append(card);
+  filteredItems.forEach((item, index) => {
+    items.push(createLoraLibraryCard(item, index + 1));
   });
+  placeLoraMasonryItems(items);
+  scheduleLoraLibraryMasonryRelayout();
 }
 
 function syncAppliedLorasWithLibrary() {
@@ -1264,8 +1357,41 @@ function syncAppliedLorasWithLibrary() {
   }
 }
 
+function buildLoraLibrarySignature(items, capabilities) {
+  const normalizedItems = (Array.isArray(items) ? items : []).map((item) => ({
+    id: String(item?.id || ""),
+    display_name: String(item?.display_name || ""),
+    source_filename: String(item?.source_filename || ""),
+    preview_filename: String(item?.preview_filename || ""),
+    preview_cache_key: String(item?.preview_cache_key || ""),
+    preview_is_custom: Boolean(item?.preview_is_custom),
+    trigger_words: Array.isArray(item?.trigger_words) ? item.trigger_words.map((value) => String(value || "")) : [],
+    detected_trigger_words: Array.isArray(item?.detected_trigger_words)
+      ? item.detected_trigger_words.map((value) => String(value || ""))
+      : [],
+    created_at: String(item?.created_at || ""),
+    updated_at: String(item?.updated_at || ""),
+    file_size_bytes: Number(item?.file_size_bytes || 0),
+  }));
+  const normalizedCapabilities = {
+    supported: Boolean(capabilities?.supported),
+    active_pack: String(capabilities?.active_pack || ""),
+    max_active: Number(capabilities?.max_active || 0),
+    min_weight: Number(capabilities?.min_weight || 0),
+    max_weight: Number(capabilities?.max_weight || 0),
+    default_weight: Number(capabilities?.default_weight || 0),
+  };
+  return JSON.stringify({
+    items: normalizedItems,
+    capabilities: normalizedCapabilities,
+  });
+}
+
 async function loadLoraLibrary(options = {}) {
-  const response = await apiFetch("/loras", { cache: "no-store" });
+  const requestId = state.loraLibraryLoadRequestSeq + 1;
+  state.loraLibraryLoadRequestSeq = requestId;
+  const query = new URLSearchParams({ _: String(Date.now()) });
+  const response = await apiFetch(`/loras?${query.toString()}`, { cache: "no-store" });
   let payload = null;
   try {
     payload = await response.json();
@@ -1275,8 +1401,18 @@ async function loadLoraLibrary(options = {}) {
   if (!response.ok) {
     throw new Error(formatApiError(payload, "Failed to load LoRAs."));
   }
-  state.loraLibrary = Array.isArray(payload?.items) ? payload.items : [];
-  state.loraCapabilities = payload?.capabilities || state.loraCapabilities;
+  if (requestId !== state.loraLibraryLoadRequestSeq) {
+    return;
+  }
+  const nextLibrary = Array.isArray(payload?.items) ? payload.items : [];
+  const nextCapabilities = payload?.capabilities || state.loraCapabilities;
+  const nextSignature = buildLoraLibrarySignature(nextLibrary, nextCapabilities);
+  if (nextSignature === state.loraLibrarySignature) {
+    return;
+  }
+  state.loraLibrary = nextLibrary;
+  state.loraCapabilities = nextCapabilities;
+  state.loraLibrarySignature = nextSignature;
   syncAppliedLorasWithLibrary();
   updateLoraCapabilityUi();
   renderLoraLibrary();
@@ -1285,18 +1421,111 @@ async function loadLoraLibrary(options = {}) {
   }
 }
 
+function stopLoraLibraryPolling() {
+  if (state.loraLibraryPollTimer === null) return;
+  window.clearTimeout(state.loraLibraryPollTimer);
+  state.loraLibraryPollTimer = null;
+}
+
+function scheduleLoraLibraryPoll() {
+  if (!state.loraDrawerOpen || document.hidden) {
+    stopLoraLibraryPolling();
+    return;
+  }
+  if (state.loraLibraryPollTimer !== null) {
+    return;
+  }
+  state.loraLibraryPollTimer = window.setTimeout(async () => {
+    state.loraLibraryPollTimer = null;
+    try {
+      await loadLoraLibrary({ refreshSummary: false, silent: true });
+    } catch (_) {
+    } finally {
+      if (state.loraDrawerOpen && !document.hidden) {
+        scheduleLoraLibraryPoll();
+      }
+    }
+  }, LORA_LIBRARY_POLL_INTERVAL_MS);
+}
+
+function stopLoraLibraryEventStream() {
+  if (state.loraLibraryEventReconnectTimer !== null) {
+    window.clearTimeout(state.loraLibraryEventReconnectTimer);
+    state.loraLibraryEventReconnectTimer = null;
+  }
+  if (state.loraLibraryEventSource === null) {
+    return;
+  }
+  const source = state.loraLibraryEventSource;
+  state.loraLibraryEventSource = null;
+  source.onmessage = null;
+  source.onerror = null;
+  try {
+    source.close();
+  } catch (_) {
+  }
+}
+
+function scheduleLoraLibraryEventReconnect() {
+  if (state.loraLibraryEventSource !== null || state.loraLibraryEventReconnectTimer !== null) {
+    return;
+  }
+  state.loraLibraryEventReconnectTimer = window.setTimeout(() => {
+    state.loraLibraryEventReconnectTimer = null;
+    startLoraLibraryEventStream();
+  }, 3000);
+}
+
+function startLoraLibraryEventStream() {
+  if (typeof window.EventSource !== "function") {
+    return;
+  }
+  if (state.loraLibraryEventReconnectTimer !== null) {
+    window.clearTimeout(state.loraLibraryEventReconnectTimer);
+    state.loraLibraryEventReconnectTimer = null;
+  }
+  if (state.loraLibraryEventSource !== null) {
+    return;
+  }
+  const source = new window.EventSource("/loras/events");
+  state.loraLibraryEventSource = source;
+  source.onmessage = () => {
+    loadLoraLibrary({ refreshSummary: false, silent: true }).catch(() => {
+    });
+  };
+  source.onerror = () => {
+    if (state.loraLibraryEventSource !== source) {
+      return;
+    }
+    state.loraLibraryEventSource = null;
+    source.onmessage = null;
+    source.onerror = null;
+    try {
+      source.close();
+    } catch (_) {
+    }
+    scheduleLoraLibraryEventReconnect();
+  };
+}
+
 function togglePendingLoraSelection(loraId) {
   const target = String(loraId || "").trim();
   if (!target) return false;
   const existingIndex = state.loraPendingSelections.findIndex((item) => item.id === target);
   if (existingIndex >= 0) {
     state.loraPendingSelections.splice(existingIndex, 1);
+    if (state.loraTouchFocusId === target) {
+      state.loraTouchFocusId = null;
+    }
     renderLoraLibrary();
     return true;
   }
   if (pendingLoraCount() >= MAX_ACTIVE_LORAS) {
     setStatus(`You can enable up to ${MAX_ACTIVE_LORAS} LoRAs at once.`, true);
     return false;
+  }
+  if (state.loraTouchFocusId === target) {
+    state.loraTouchFocusId = null;
   }
   state.loraPendingSelections.push({ id: target, weight: DEFAULT_LORA_WEIGHT });
   renderLoraLibrary();
@@ -1334,12 +1563,38 @@ async function deleteLoraById(loraId) {
   state.loraPendingSelections = state.loraPendingSelections.filter((item) => item.id !== target);
   const previousAppliedCount = appliedLoraCount();
   state.loraAppliedSelections = state.loraAppliedSelections.filter((item) => item.id !== target);
+  let queueChanged = false;
+  state.queue = state.queue.map((job) => {
+    const nextLoras = cloneLoraSelections(job.loras).filter((item) => item.id !== target);
+    if (nextLoras.length !== cloneLoraSelections(job.loras).length) {
+      queueChanged = true;
+      return { ...job, loras: nextLoras };
+    }
+    return job;
+  });
+  if (state.activeJob && !state.activeJob.remoteInFlight) {
+    const nextLoras = cloneLoraSelections(state.activeJob.loras).filter((item) => item.id !== target);
+    if (nextLoras.length !== cloneLoraSelections(state.activeJob.loras).length) {
+      state.activeJob = { ...state.activeJob, loras: nextLoras };
+      queueChanged = true;
+    }
+  }
+  if (queueChanged) {
+    persistClientQueueState();
+  }
+  if (state.loraTouchFocusId === target) {
+    state.loraTouchFocusId = null;
+  }
   if (appliedLoraCount() !== previousAppliedCount) {
     persistAppliedLorasToSession();
     updateSettingsSummary();
   }
   renderLoraLibrary();
-  setStatus(`Deleted LoRA ${target}.`);
+  setStatus(
+    payload?.deletion_state === "deferred"
+      ? `Deleted LoRA ${target}. Cleanup will finish after the active generation.`
+      : `Deleted LoRA ${target}.`
+  );
   return true;
 }
 
@@ -1378,37 +1633,6 @@ async function uploadSelectedLoraFile(file) {
     state.loraEditorBusy = false;
     updateLoraCapabilityUi();
   }
-}
-
-async function fetchLoraEditorTriggers() {
-  if (state.loraEditorBusy) return;
-  if (state.loraEditorMode === "create" && state.loraEditorDraftId) {
-    state.loraEditorBusy = true;
-    renderLoraEditor();
-    try {
-      const response = await apiFetch(
-        `/lora-drafts/${encodeURIComponent(state.loraEditorDraftId)}/detect-triggers`,
-        { method: "POST" }
-      );
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(formatApiError(payload, "Failed to fetch trigger words."));
-      }
-      state.loraEditorDetectedTriggerWords = Array.isArray(payload?.draft?.detected_trigger_words)
-        ? [...payload.draft.detected_trigger_words]
-        : [];
-      state.loraEditorMetadataSummary = payload?.draft?.metadata_summary || state.loraEditorMetadataSummary;
-      const added = mergeLoraEditorDetectedTriggerWords(state.loraEditorDetectedTriggerWords);
-      renderLoraEditor();
-      setStatus(added > 0 ? `Added ${added} detected trigger${added === 1 ? "" : "s"}.` : "No new trigger words found.");
-    } finally {
-      state.loraEditorBusy = false;
-      renderLoraEditor();
-    }
-    return;
-  }
-  const added = mergeLoraEditorDetectedTriggerWords(state.loraEditorDetectedTriggerWords);
-  setStatus(added > 0 ? `Added ${added} detected trigger${added === 1 ? "" : "s"}.` : "No new trigger words found.");
 }
 
 async function saveLoraEditor() {
@@ -2385,11 +2609,36 @@ function canUpscaleItem(item) {
   return !isUpscaledItem(item);
 }
 
+function getEffectiveUpscaleScale() {
+  return 2;
+}
+
+function updateUpscaleControls() {
+  state.upscaleMode = "fast";
+  state.upscaleScale = 2;
+  upscaleSettingsHintEl.textContent = "Upscale uses SeedVR2 direct x2 faithful mode.";
+}
+
+function setUpscaleMode(mode) {
+  state.upscaleMode = "fast";
+  state.upscaleScale = 2;
+  updateUpscaleControls();
+  updateSettingsSummary();
+}
+
+function setUpscaleScale(scale) {
+  state.upscaleMode = "fast";
+  state.upscaleScale = 2;
+  updateUpscaleControls();
+  updateSettingsSummary();
+}
+
 function updateSettingsSummary() {
   const dimensions = parseResolution(resolutionSelectEl.value);
   const pieces = [
     `Resolution <span class="summary-value">${dimensions.width}x${dimensions.height}</span>`,
     `Enhancer <span class="summary-value">${state.promptEnhance ? "ON" : "OFF"}</span>`,
+    `Upscale <span class="summary-value">SEED X2</span>`,
   ];
 
   if (state.freezeSeed && state.currentSeed !== null) {
@@ -2574,6 +2823,7 @@ function applyViewerItemMeta(item) {
   viewerFavoriteButtonEl.setAttribute("aria-pressed", String(favorite));
   viewerFavoriteButtonEl.setAttribute("aria-label", favorite ? "Unfavorite image" : "Favorite image");
   viewerFavoriteButtonEl.title = favorite ? "Unfavorite" : "Favorite";
+  applyFavoriteButtonTone(viewerFavoriteButtonEl, viewerImageEl, item.filename);
   if (upscaled) {
     const sourceFilename = resolveSourceFilename(item);
     const compareAvailable = Boolean(sourceFilename);
@@ -3665,7 +3915,7 @@ function enqueueUpscaleFromItem(item) {
   playTileActionFx(sourceFilename, "upscale-source");
   updateGenerateButtonState();
   const outstanding = totalOutstandingJobs();
-  setStatus(`Queued upscale for ${sourceFilename} -> ${targetWidth}x${targetHeight}. Queue ${outstanding}/${state.maxQueuedGenerations}.`);
+    setStatus(`Queued SEED x2 upscale for ${sourceFilename} -> ${targetWidth}x${targetHeight}. Queue ${outstanding}/${state.maxQueuedGenerations}.`);
   processGenerationQueue().catch((error) => setStatus(String(error?.message || error), true));
   return true;
 }
@@ -3696,7 +3946,10 @@ async function processGenerationQueue() {
       try {
         const isUpscaleJob = job.kind === "upscale";
         if (isUpscaleJob) {
-          setStatus(`Upscaling ${job.filename} -> ${job.width}x${job.height} (seed ${job.seed})...`);
+          setStatus(
+            `Upscaling ${job.filename} -> ${job.width}x${job.height} `
+            + `(SEED X2, seed ${job.seed})...`
+          );
         } else {
           setStatus(`Generating ${job.width}x${job.height} (seed ${job.seed})...`);
         }
@@ -3739,7 +3992,11 @@ async function processGenerationQueue() {
         }
         if (isUpscaleJob) {
           const source = String(payload.source_filename || job.filename || "source image");
-          setStatus(`Upscaled ${source} -> ${payload.filename} in ${payload.duration_ms} ms (seed ${payload.seed}).`);
+          setStatus(
+            `Upscaled ${source} -> ${payload.filename} `
+            + `(SEED X2) in ${payload.duration_ms} ms `
+            + `(seed ${payload.seed}).`
+          );
         } else if (payload.prompt_enhanced) {
           setStatus(`Prompt enhanced, saved ${payload.filename} in ${payload.duration_ms} ms (seed ${payload.seed}).`);
         } else {
@@ -3918,6 +4175,7 @@ async function bootstrap() {
     updateFreezeSeedButton();
     updateProceduralLatentControls();
     updatePromptEnhanceButton();
+    updateUpscaleControls();
     updateMultiSelectControls();
     try {
       await loadLoraLibrary({ refreshSummary: false });
@@ -3937,6 +4195,7 @@ async function bootstrap() {
     updateSettingsSummary();
     updateViewerNavState();
     updateGenerateButtonState();
+    startLoraLibraryEventStream();
     await loadImages();
     await refreshClientJobState();
     if (state.queue.length > 0 || state.activeJob) {
@@ -4015,9 +4274,6 @@ loraEditorTriggerInputEl.addEventListener("keydown", (event) => {
     loraEditorTriggerInputEl.value = "";
   }
 });
-loraEditorFetchTriggersEl.addEventListener("click", () => {
-  fetchLoraEditorTriggers().catch((error) => setStatus(String(error?.message || error), true));
-});
 loraEditorSaveEl.addEventListener("click", () => {
   saveLoraEditor().catch((error) => setStatus(String(error?.message || error), true));
 });
@@ -4063,9 +4319,35 @@ promptInputEl.addEventListener("touchend", updateTopbarOffset);
 window.addEventListener("resize", () => {
   if (state.loraDrawerOpen) {
     setLoraDrawerOpen(true);
+    scheduleLoraLibraryMasonryRelayout();
   }
   updateTopbarOffset();
   scheduleGalleryRelayout({ animate: true });
+});
+window.addEventListener("focus", () => {
+  loadLoraLibrary({ refreshSummary: false, silent: true }).catch(() => {
+  });
+  startLoraLibraryEventStream();
+  scheduleLoraLibraryPoll();
+});
+window.addEventListener("pageshow", () => {
+  loadLoraLibrary({ refreshSummary: false, silent: true }).catch(() => {
+  });
+  startLoraLibraryEventStream();
+  scheduleLoraLibraryPoll();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopLoraLibraryPolling();
+    return;
+  }
+  loadLoraLibrary({ refreshSummary: false, silent: true }).catch(() => {
+  });
+  startLoraLibraryEventStream();
+  scheduleLoraLibraryPoll();
+});
+window.addEventListener("beforeunload", () => {
+  stopLoraLibraryEventStream();
 });
 window.addEventListener(
   "scroll",
@@ -4222,6 +4504,12 @@ window.addEventListener("blur", () => endDrag());
 document.addEventListener("pointerup", () => endViewerCompareHold());
 viewerStageEl.addEventListener("dragstart", (event) => event.preventDefault());
 viewerImageEl.setAttribute("draggable", "false");
+viewerImageEl.addEventListener("load", () => {
+  if (viewerModalEl.classList.contains("hidden")) return;
+  const toneFilename =
+    (state.viewerCompareHolding && state.viewerCompareSourceFilename) || state.viewerFilename || "";
+  applyFavoriteButtonTone(viewerFavoriteButtonEl, viewerImageEl, toneFilename);
+});
 viewerStageEl.addEventListener(
   "wheel",
   (event) => {

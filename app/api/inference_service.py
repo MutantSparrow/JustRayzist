@@ -26,7 +26,8 @@ from app.core.model_registry import (
 )
 from app.core.worker import GenerationRequest, GenerationSession
 from app.core.worker.types import LoraSelection, resolve_procedural_creativity
-from app.core.upscale_blend import UPSCALE_ENGINE_NAME, upscale_with_x2_seed_blend
+from app.core.seedvr2 import SeedVR2StillImageConfig, upscale_with_seedvr2_direct_x2
+from app.core.upscale_hq import FAST_UPSCALE_ENGINE_NAME
 from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
 from app.storage.lora_library import (
     DEFAULT_MAX_ACTIVE_LORAS,
@@ -35,13 +36,14 @@ from app.storage.lora_library import (
     MIN_LORA_WEIGHT,
     create_lora_draft,
     detect_lora_draft_triggers,
-    delete_lora as delete_library_lora,
+    finalize_deleted_lora,
+    finalize_lora_draft,
     get_lora as get_library_lora,
     get_lora_draft as get_library_lora_draft,
     list_loras as list_library_loras,
+    mark_lora_deleted,
     normalize_lora_id,
     preview_path_for_lora,
-    finalize_lora_draft,
     update_lora as update_library_lora,
 )
 from app.storage.gallery_index import (
@@ -56,6 +58,7 @@ from app.storage.gallery_index import (
     list_import_sources,
     list_images,
     normalize_owner_id,
+    rebuild_gallery,
     rebuild_gallery_color_cache,
     set_image_favorite,
     sync_outputs_to_gallery,
@@ -95,6 +98,8 @@ class InferenceService:
         self._donor_pack_cache: ModelPack | None = None
         self._client_active_jobs: dict[str, dict[str, Any]] = {}
         self._client_cancel_events: dict[str, Event] = {}
+        self._lora_usage_counts: dict[str, int] = {}
+        self._pending_lora_deletions: set[str] = set()
         self._gallery_color_cache_rebuild_active = False
         self._gallery_color_cache_rebuild_last_error: str | None = None
         self._gallery_color_cache_rebuild_thread: Thread | None = None
@@ -106,6 +111,21 @@ class InferenceService:
     @staticmethod
     def sanitize_lora_id(lora_id: str) -> str:
         return normalize_lora_id(lora_id)
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            text = str(value).strip()
+        except Exception:
+            return None
+        if not text:
+            return None
+        try:
+            return int(text)
+        except (TypeError, ValueError):
+            return None
 
     def owner_output_dir(self, owner_id: str) -> Path:
         safe_owner = self.sanitize_owner_id(owner_id)
@@ -144,8 +164,14 @@ class InferenceService:
     def list_loras(self) -> list[dict[str, Any]]:
         return list_library_loras(self._settings)
 
-    def create_lora_draft(self, *, filename: str, content: bytes) -> dict[str, Any]:
-        return create_lora_draft(self._settings, filename=filename, content=content)
+    def create_lora_draft(
+        self,
+        *,
+        filename: str,
+        content: bytes | None = None,
+        content_file: Any | None = None,
+    ) -> dict[str, Any]:
+        return create_lora_draft(self._settings, filename=filename, content=content, content_file=content_file)
 
     def get_lora_draft(self, draft_id: str) -> dict[str, Any] | None:
         return get_library_lora_draft(self._settings, normalize_lora_id(draft_id))
@@ -190,11 +216,64 @@ class InferenceService:
 
     def delete_lora(self, lora_id: str) -> dict[str, Any]:
         normalized = self.sanitize_lora_id(lora_id)
-        result = delete_library_lora(self._settings, normalized)
+        adapter_cleanup_ids: list[str] = []
         with self._state_lock:
-            if self._active_session is not None:
-                self._active_session.drop_lora_adapters([normalized])
+            record = get_library_lora(self._settings, normalized, include_deleted=True)
+            if record is None:
+                raise FileNotFoundError(f"LoRA not found: {normalized}")
+            active_uses = int(self._lora_usage_counts.get(normalized, 0))
+            pending_cleanup = active_uses > 0
+            mark_lora_deleted(self._settings, normalized, pending_cleanup=pending_cleanup)
+            if pending_cleanup:
+                self._pending_lora_deletions.add(normalized)
+                result = {"id": normalized, "deleted_files": 0, "deletion_state": "deferred"}
+            else:
+                result = finalize_deleted_lora(self._settings, normalized)
+                result["deletion_state"] = "immediate"
+                if self._active_session is not None:
+                    adapter_cleanup_ids.append(normalized)
+        if adapter_cleanup_ids:
+            self._drop_session_lora_adapters(adapter_cleanup_ids)
         return result
+
+    def _retain_generation_loras_locked(self, loras: tuple[LoraSelection, ...]) -> tuple[str, ...]:
+        retained_ids: list[str] = []
+        for lora in loras:
+            lora_id = self.sanitize_lora_id(lora.id)
+            self._lora_usage_counts[lora_id] = int(self._lora_usage_counts.get(lora_id, 0)) + 1
+            retained_ids.append(lora_id)
+        return tuple(retained_ids)
+
+    def _release_generation_loras_locked(self, retained_ids: tuple[str, ...]) -> list[str]:
+        ready_for_cleanup: list[str] = []
+        for lora_id in retained_ids:
+            current = int(self._lora_usage_counts.get(lora_id, 0))
+            if current <= 1:
+                self._lora_usage_counts.pop(lora_id, None)
+                if lora_id in self._pending_lora_deletions:
+                    self._pending_lora_deletions.discard(lora_id)
+                    ready_for_cleanup.append(lora_id)
+                continue
+            self._lora_usage_counts[lora_id] = current - 1
+        return ready_for_cleanup
+
+    def _drop_session_lora_adapters(self, lora_ids: list[str]) -> None:
+        if not lora_ids:
+            return
+        with self._generation_lock:
+            with self._state_lock:
+                if self._active_session is not None:
+                    self._active_session.drop_lora_adapters(lora_ids)
+
+    def _finalize_deferred_lora_cleanup(self, lora_ids: list[str]) -> None:
+        if not lora_ids:
+            return
+        for lora_id in lora_ids:
+            try:
+                finalize_deleted_lora(self._settings, lora_id)
+            except FileNotFoundError:
+                continue
+        self._drop_session_lora_adapters(lora_ids)
 
     def _resolve_generation_loras(
         self,
@@ -401,6 +480,9 @@ class InferenceService:
 
     def sync_gallery(self) -> int:
         return sync_outputs_to_gallery(self._settings)
+
+    def rebuild_gallery(self, owner_id: str) -> dict[str, int | str]:
+        return rebuild_gallery(self._settings, self.sanitize_owner_id(owner_id))
 
     def list_images(
         self,
@@ -646,6 +728,15 @@ class InferenceService:
             raise ValueError("Image path is outside managed outputs directory.") from exc
         return resolved
 
+    @staticmethod
+    def _prefix_payload_keys(prefix: str, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized_prefix = str(prefix).strip()
+        return {
+            f"{normalized_prefix}{key}": value
+            for key, value in payload.items()
+            if str(key).strip()
+        }
+
     def _session_for_pack(
         self,
         model_pack: ModelPack,
@@ -693,13 +784,16 @@ class InferenceService:
         effective_procedural_creativity = resolve_procedural_creativity(
             procedural_creativity=procedural_creativity
         )
-        resolved_loras = self._resolve_generation_loras(loras, pack_name=pack_name)
+        resolved_loras: tuple[LoraSelection, ...] = ()
+        retained_lora_ids: tuple[str, ...] = ()
         safe_owner_id = self.sanitize_owner_id(owner_id)
         cancel_event = Event()
         with self._state_lock:
+            resolved_loras = self._resolve_generation_loras(loras, pack_name=pack_name)
             base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name)
             session = self._session_for_pack(effective_pack, resource_tier)
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
+            retained_lora_ids = self._retain_generation_loras_locked(resolved_loras)
             LOGGER.info(
                 "Generate request: owner=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s creative_mode=%s",
                 safe_owner_id,
@@ -861,8 +955,11 @@ class InferenceService:
                 )
                 return image_row
         finally:
+            deferred_cleanup_ids: list[str] = []
             with self._state_lock:
                 self._clear_active_client_job_locked(safe_owner_id, job_id=job_id)
+                deferred_cleanup_ids = self._release_generation_loras_locked(retained_lora_ids)
+            self._finalize_deferred_lora_cleanup(deferred_cleanup_ids)
 
     def upscale(
         self,
@@ -890,15 +987,16 @@ class InferenceService:
                 raise ValueError("Image file not found on disk.")
 
             source_prompt = str(source_row.get("prompt") or "").strip() or "(missing prompt metadata)"
+            source_generation_seed = self._optional_int(source_row.get("seed"))
             preferred_pack = str(source_row.get("model_pack") or "").strip() or None
-            resolved_pack_name = pack_name or preferred_pack
-            model_pack_name = (resolved_pack_name or "unknown").strip() or "unknown"
+            model_pack_name = str(pack_name or preferred_pack or "unknown").strip() or "unknown"
             resource_tier = self.current_resource_tier(refresh=True)
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
             LOGGER.info(
-                "Upscale request: owner=%s source=%s pack=%s tier=%s seed=%s",
+                "Upscale request: owner=%s source=%s engine=%s scale=2 pack=%s tier=%s seed=%s",
                 safe_owner_id,
                 safe_filename,
+                FAST_UPSCALE_ENGINE_NAME,
                 model_pack_name,
                 resource_tier.name,
                 effective_seed,
@@ -928,57 +1026,91 @@ class InferenceService:
                 with Image.open(source_path) as source_file:
                     source_image = source_file.convert("RGB")
                 source_width, source_height = source_image.size
+                target_width = max(64, int(source_width) * 2)
+                target_height = max(64, int(source_height) * 2)
                 with self._state_lock:
                     active_job = self._client_active_jobs.get(safe_owner_id)
                     if active_job is not None:
-                        active_job["width"] = source_width * 2
-                        active_job["height"] = source_height * 2
+                        active_job["width"] = target_width
+                        active_job["height"] = target_height
                 if cancel_event.is_set():
                     raise GenerationCancelledError("Upscale cancelled.")
-
-                result = upscale_with_x2_seed_blend(
+                result = upscale_with_seedvr2_direct_x2(
                     image=source_image,
                     settings=self._settings,
                     runtime_profile=self._settings.runtime_profile.name,
                     seed=effective_seed,
                     is_cancel_requested=cancel_event.is_set,
+                    still_image_config=SeedVR2StillImageConfig(
+                        input_noise_scale=0.0,
+                        latent_noise_scale=0.0,
+                        color_correction="lab",
+                    ),
                 )
+                final_image = result.image
+                final_width, final_height = int(result.output_width), int(result.output_height)
+                effective_engine = FAST_UPSCALE_ENGINE_NAME
+                prompt_effective = source_prompt
+                prompt_enhanced = False
+                duration_ms = int(result.duration_ms)
+                telemetry = result.telemetry_dict()
+                metadata_payload = {
+                    "owner_id": safe_owner_id,
+                    "mode": "api_upscale",
+                    "prompt_original": source_prompt,
+                    "prompt_effective": source_prompt,
+                    "prompt_enhanced": False,
+                    "source_image": str(source_path),
+                    "source_filename": safe_filename,
+                    "source_width": source_width,
+                    "source_height": source_height,
+                    "source_generation_seed": source_generation_seed,
+                    "width": final_width,
+                    "height": final_height,
+                    "steps": 0,
+                    "guidance_scale": 0.0,
+                    "backend": effective_engine,
+                    "device": telemetry.get("device"),
+                    "model_pack": model_pack_name,
+                    "duration_ms": duration_ms,
+                    "seed": effective_seed,
+                    "scheduler_mode": scheduler_mode or "euler",
+                    "runtime_profile": self._settings.runtime_profile.name,
+                    "resource_tier": resource_tier.name,
+                    "execution_mode": effective_engine,
+                    "request_enhance_prompt": bool(enhance_prompt),
+                    **telemetry,
+                }
+                metrics_payload = {
+                    "mode": "api_upscale",
+                    "prompt": source_prompt,
+                    "prompt_original": source_prompt,
+                    "prompt_effective": source_prompt,
+                    "prompt_enhanced": False,
+                    "source_filename": safe_filename,
+                    "source_width": source_width,
+                    "source_height": source_height,
+                    "source_generation_seed": source_generation_seed,
+                    "width": final_width,
+                    "height": final_height,
+                    "model_pack": model_pack_name,
+                    "backend": effective_engine,
+                    "seed": effective_seed,
+                    "scheduler_mode": scheduler_mode or "euler",
+                    "resource_tier": resource_tier.name,
+                    "request_enhance_prompt": bool(enhance_prompt),
+                    **telemetry,
+                }
                 if cancel_event.is_set():
                     raise GenerationCancelledError("Upscale cancelled.")
 
-                final_width, final_height = result.output_width, result.output_height
                 output_path = build_output_path(self.owner_output_dir(safe_owner_id))
                 saved_path = save_png_with_metadata(
-                    image=result.image,
-                    prompt=source_prompt,
+                    image=final_image,
+                    prompt=prompt_effective,
                     settings=self._settings,
                     output_path=output_path,
-                    extra_metadata={
-                        "owner_id": safe_owner_id,
-                        "mode": "api_upscale",
-                        "prompt_original": source_prompt,
-                        "prompt_effective": source_prompt,
-                        "prompt_enhanced": False,
-                        "source_image": str(source_path),
-                        "source_filename": safe_filename,
-                        "source_width": source_width,
-                        "source_height": source_height,
-                        "width": final_width,
-                        "height": final_height,
-                        "steps": 0,
-                        "guidance_scale": 0.0,
-                        "backend": UPSCALE_ENGINE_NAME,
-                        "device": result.device,
-                        "model_pack": model_pack_name,
-                        "duration_ms": result.duration_ms,
-                        "seed": effective_seed,
-                        "scheduler_mode": scheduler_mode or "euler",
-                        "runtime_profile": self._settings.runtime_profile.name,
-                        "resource_tier": resource_tier.name,
-                        "execution_mode": UPSCALE_ENGINE_NAME,
-                        "request_enhance_prompt": bool(enhance_prompt),
-                        **result.telemetry_dict(),
-                    },
+                    extra_metadata=metadata_payload,
                 )
                 if cancel_event.is_set():
                     try:
@@ -990,53 +1122,37 @@ class InferenceService:
                 append_generation_metric(
                     settings=self._settings,
                     payload={
-                        "mode": "api_upscale",
-                        "prompt": source_prompt,
-                        "prompt_original": source_prompt,
-                        "prompt_effective": source_prompt,
-                        "prompt_enhanced": False,
-                        "source_filename": safe_filename,
-                        "source_width": source_width,
-                        "source_height": source_height,
-                        "width": final_width,
-                        "height": final_height,
+                        **metrics_payload,
                         "output_path": str(saved_path),
-                        "owner_id": safe_owner_id,
-                        "model_pack": model_pack_name,
-                        "backend": UPSCALE_ENGINE_NAME,
-                        "seed": effective_seed,
-                        "scheduler_mode": scheduler_mode or "euler",
-                        "resource_tier": resource_tier.name,
-                        "request_enhance_prompt": bool(enhance_prompt),
-                        **result.telemetry_dict(),
                     },
                 )
                 image_row = index_image(self._settings, saved_path, owner_id=safe_owner_id)
                 image_row["url"] = f"/images/{image_row['filename']}"
                 image_row["pack"] = model_pack_name
-                image_row["duration_ms"] = result.duration_ms
+                image_row["duration_ms"] = duration_ms
                 image_row["seed"] = effective_seed
                 image_row["scheduler_mode"] = scheduler_mode or "euler"
                 image_row["prompt_original"] = source_prompt
-                image_row["prompt_effective"] = source_prompt
-                image_row["prompt_enhanced"] = False
+                image_row["prompt_effective"] = prompt_effective
+                image_row["prompt_enhanced"] = prompt_enhanced
                 image_row["runtime_profile"] = self._settings.runtime_profile.name
                 image_row["resource_tier"] = resource_tier.name
-                image_row["execution_mode"] = UPSCALE_ENGINE_NAME
-                image_row["upscale_engine"] = UPSCALE_ENGINE_NAME
+                image_row["execution_mode"] = effective_engine
+                image_row["upscale_engine"] = effective_engine
                 image_row["job_id"] = job_id
                 LOGGER.info(
-                    "Image upscaled: owner=%s source=%s file=%s size=%dx%d seed=%s duration_ms=%s",
+                    "Image upscaled: owner=%s source=%s engine=%s scale=2 file=%s size=%dx%d seed=%s duration_ms=%s",
                     safe_owner_id,
                     safe_filename,
+                    effective_engine,
                     image_row["filename"],
                     final_width,
                     final_height,
                     effective_seed,
-                    result.duration_ms,
+                    duration_ms,
                 )
                 with self._state_lock:
-                    self._active_backend_name = UPSCALE_ENGINE_NAME
+                    self._active_backend_name = effective_engine
                 return image_row
         finally:
             with self._state_lock:

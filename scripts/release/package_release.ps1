@@ -2,15 +2,7 @@ param(
   [ValidateSet("cu126", "cu128")]
   [string]$Lane = "cu128",
   [string]$Version = "v0.0.0",
-  [ValidateSet("bootstrap", "bundled")]
-  [string]$Mode = "bootstrap",
-  [string]$PythonExe = "python",
   [string]$OutputRoot = "dist",
-  [string]$BuildRoot = "dist\\pyinstaller",
-  [switch]$UseActivePython,
-  [switch]$SkipDependencyInstall,
-  [switch]$SkipBuild,
-  [switch]$IncludeCliBinary,
   [switch]$NoZip,
   [switch]$Clean
 )
@@ -32,28 +24,6 @@ function Invoke-RobocopySafe {
   & robocopy @args | Out-Null
   if ($LASTEXITCODE -ge 8) {
     throw "Robocopy failed for '$Source' -> '$Destination' (exit code $LASTEXITCODE)."
-  }
-}
-
-function Invoke-BuildOnedir {
-  param(
-    [Parameter(Mandatory = $true)][string]$BuildScriptPath
-  )
-
-  $buildArgs = @("-Lane", $Lane, "-PythonExe", $PythonExe)
-  if ($UseActivePython) {
-    $buildArgs += "-UseActivePython"
-  }
-  if ($SkipDependencyInstall) {
-    $buildArgs += "-SkipDependencyInstall"
-  }
-  if ($Clean) {
-    $buildArgs += "-Clean"
-  }
-
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $BuildScriptPath @buildArgs
-  if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller build failed with exit code $LASTEXITCODE."
   }
 }
 
@@ -103,7 +73,6 @@ function Copy-CommonReleaseContent {
   Copy-TrackedTreeSubset -RootDir $RootDir -RelativeRoot "models/packs" -DestinationRoot $ReleaseDir
   Copy-TrackedTreeSubset -RootDir $RootDir -RelativeRoot "models/upscaler" -DestinationRoot $ReleaseDir
 
-
   Copy-Item (Join-Path $RootDir "StartWeb.bat") -Destination (Join-Path $ReleaseDir "StartWeb.bat") -Force
   Copy-Item (Join-Path $RootDir "RunMeFirst.bat") -Destination (Join-Path $ReleaseDir "RunMeFirst.bat") -Force
   Copy-Item (Join-Path $RootDir "UpdateApp.bat") -Destination (Join-Path $ReleaseDir "UpdateApp.bat") -Force
@@ -114,38 +83,14 @@ function Copy-CommonReleaseContent {
 
 $rootDir = (Resolve-Path (Join-Path $PSScriptRoot "..\\..")).Path
 $outputRootAbs = [System.IO.Path]::GetFullPath((Join-Path $rootDir $OutputRoot))
-$buildRootAbs = [System.IO.Path]::GetFullPath((Join-Path $rootDir $BuildRoot))
-$buildLaneDir = Join-Path $buildRootAbs $Lane
-$buildScript = Join-Path $rootDir "scripts\\pyinstaller\\build_onedir.ps1"
-
-$releaseName = "JustRayzist_win64_${Lane}_${Version}_${Mode}"
+$mode = "bootstrap"
+$releaseName = "JustRayzist_win64_${Lane}_${Version}_${mode}"
 $releaseDir = Join-Path $outputRootAbs $releaseName
 
 if ($Clean -and (Test-Path $releaseDir)) {
   Remove-Item $releaseDir -Recurse -Force
 }
 New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
-
-if ($Mode -eq "bundled") {
-  if (-not $SkipBuild) {
-    Invoke-BuildOnedir -BuildScriptPath $buildScript
-  }
-
-  $webSource = Join-Path $buildLaneDir "justrayzist-web"
-  if (-not (Test-Path (Join-Path $webSource "justrayzist-web.exe"))) {
-    throw "Missing web executable at $webSource"
-  }
-
-  Invoke-RobocopySafe -Source $webSource -Destination (Join-Path $releaseDir "bin\\web")
-
-  if ($IncludeCliBinary) {
-    $cliSource = Join-Path $buildLaneDir "justrayzist-cli"
-    if (-not (Test-Path (Join-Path $cliSource "justrayzist-cli.exe"))) {
-      throw "Missing CLI executable at $cliSource"
-    }
-    Invoke-RobocopySafe -Source $cliSource -Destination (Join-Path $releaseDir "bin\\cli")
-  }
-}
 
 Copy-CommonReleaseContent -RootDir $rootDir -ReleaseDir $releaseDir
 
@@ -154,13 +99,13 @@ Set-Content -Path (Join-Path $releaseDir "release_lane.txt") -Value $Lane -Encod
   app_name = "JustRayzist"
   version = $Version
   lane = $Lane
-  mode = $Mode
+  mode = $mode
   generated_at = (Get-Date).ToString("s")
 } | ConvertTo-Json) | Set-Content -Path (Join-Path $releaseDir "release_manifest.json") -Encoding ascii
 Set-Content -Path (Join-Path $releaseDir "cuda_baseline.json") -Value @"
 {
   "generated_at": "$(Get-Date -Format s)",
-  "mode": "$Mode",
+  "mode": "$mode",
   "lane": "$Lane",
   "driver_floors": {
     "cu126": "561.17",
@@ -202,11 +147,7 @@ if (-not $NoZip) {
 
 Write-Host ""
 Write-Host "Release package created:"
-Write-Host "  Mode: $Mode"
 Write-Host "  Lane: $Lane"
-if ($Mode -eq "bundled") {
-  Write-Host ("  Bundled CLI: {0}" -f $IncludeCliBinary)
-}
 Write-Host "  $releaseDir"
 if (-not $NoZip) {
   Write-Host "  $outputRootAbs\\$releaseName.zip"

@@ -1,4 +1,5 @@
-﻿name: Rayzist_fp8_full
+﻿name: Rayzist_fp8_full
+enabled: false
 user_visible: true
 enabled: false
 architecture: z_image_turbo
@@ -23,5 +24,6 @@ required_configs:
   - ../Rayzist_bf16/config/transformer/config.json
   - ../Rayzist_bf16/config/vae/config.json
   - ../Rayzist_bf16/config/text_encoder/config.json
+
 
 

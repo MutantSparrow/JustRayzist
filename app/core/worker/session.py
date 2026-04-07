@@ -61,6 +61,15 @@ class GenerationSession:
         self.stats.generation_count += 1
         return result
 
+    def refine_image(self, input_image: object, request: GenerationRequest) -> GenerationResult:
+        backend = self._ensure_backend()
+        refine = getattr(backend, "refine_image", None)
+        if not callable(refine):
+            raise AttributeError("Active backend does not support refine_image().")
+        result = refine(input_image=input_image, request=request)
+        self.stats.generation_count += 1
+        return result
+
     def cancel_active(self) -> None:
         if self._backend is None:
             return

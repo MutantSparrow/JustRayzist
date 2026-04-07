@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
@@ -156,9 +156,19 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
         },
     ),
     ApiExample(
+        method="GET",
+        path="/loras/events",
+        description="Server-sent event stream that pushes LoRA library revision changes to connected browser clients.",
+        requires_client=False,
+        request=None,
+        response="text/event-stream with revision numbers and periodic keep-alives",
+        include_in_readme=False,
+        include_in_usage=False,
+    ),
+    ApiExample(
         method="POST",
         path="/lora-drafts",
-        description="Upload one `.safetensors` LoRA into draft storage for metadata inspection before saving it into the live library.",
+        description="Upload one `.safetensors` LoRA into draft storage for metadata inspection before saving it into the live library. LoRA uploads are capped at 10 GiB.",
         requires_client=False,
         request="multipart/form-data with one file field named `file`",
         response={
@@ -194,7 +204,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ApiExample(
         method="POST",
         path="/loras",
-        description="Finalize a staged LoRA draft into the live library with a chosen name, saved trigger words, and an optional thumbnail image.",
+        description="Finalize a staged LoRA draft into the live library with a chosen name, saved trigger words, and an optional thumbnail image. Thumbnail uploads are capped at 10 MiB.",
         requires_client=False,
         request="multipart/form-data with `draft_id`, `display_name`, `trigger_words` (JSON string), and optional `thumbnail` image",
         response={
@@ -223,7 +233,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ApiExample(
         method="PATCH",
         path="/loras/{lora_id}",
-        description="Update the display name, saved trigger words, and optional thumbnail image for one installed LoRA without replacing the weights file.",
+        description="Update the display name, saved trigger words, and optional thumbnail image for one installed LoRA without replacing the weights file. Thumbnail uploads are capped at 10 MiB.",
         requires_client=False,
         request="multipart/form-data with `display_name`, `trigger_words` (JSON string), and optional `thumbnail` image",
         response={
@@ -294,7 +304,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ApiExample(
         method="POST",
         path="/upscale",
-        description="Upscale one gallery image with the app's mixed-model fast upscale flow.",
+        description="Upscale one gallery image with the fixed SeedVR2 direct x2 faithful path.",
         requires_client=True,
         request={
             "job_id": "pending_upscale_1712345678901_abcd1234",
@@ -308,7 +318,8 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
             "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
             "mode": "api_upscale",
             "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-            "upscale_engine": "x2_seedvr2_blend",
+            "upscale_engine": "seedvr2_direct_x2_faithful",
+            "execution_mode": "seedvr2_direct_x2_faithful",
             "duration_ms": 23456,
             "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png",
         },
@@ -421,6 +432,23 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
         include_in_readme=False,
     ),
     ApiExample(
+        method="POST",
+        path="/gallery/rebuild",
+        description="Rebuild the current client-scoped gallery index after manual PNG copies, replacements, or deletions in the gallery folder.",
+        requires_client=True,
+        request=None,
+        response={
+            "status": "ok",
+            "owner_id": "example-client",
+            "scanned_files": 12,
+            "indexed": 2,
+            "updated": 10,
+            "removed_missing": 1,
+            "total_items": 12,
+        },
+        include_in_readme=False,
+    ),
+    ApiExample(
         method="GET",
         path="/gallery/import-sources",
         description="List gallery import candidates from the legacy root or other userspaces.",
@@ -515,3 +543,4 @@ def render_examples_markdown(*, include_usage_only: bool) -> str:
             lines.append("```")
         lines.append("")
     return "\n".join(lines).rstrip()
+

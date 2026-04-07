@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -6,6 +6,7 @@ import yaml
 
 from app.api import main as api_main
 from app.api.api_manifest import API_EXAMPLES
+from app.version import APP_VERSION
 from scripts.render_api_docs import render_readme, render_usage
 
 
@@ -53,7 +54,7 @@ def test_user_docs_describe_auto_resource_tiering() -> None:
         assert "--profile balanced" not in text
         assert "--profile constrained" not in text
 
-    assert "New in v1.5.2" in readme
+    assert f"New in v{APP_VERSION}" in readme
     assert "resource_tier" in readme
     assert "resource_tier" in usage
     assert "auto resource-tiering" in troubleshooting.lower()

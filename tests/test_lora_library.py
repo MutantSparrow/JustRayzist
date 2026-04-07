@@ -231,6 +231,41 @@ def test_update_lora_updates_name_triggers_and_preview_without_renaming_id(
     assert full_record["source_filename"] == "cinematic-style.safetensors"
 
 
+def test_list_loras_exposes_preview_cache_key_that_changes_with_preview_file(
+    temp_app_paths,
+    make_app_settings,
+) -> None:
+    settings = make_app_settings(paths=temp_app_paths)
+    payload_path = temp_app_paths.data_dir / "preview-refresh.safetensors"
+    content = _build_lora_bytes(payload_path, metadata={"trained_words": "preview refresh"})
+    draft = create_lora_draft(settings, filename="preview-refresh.safetensors", content=content)
+    created = finalize_lora_draft(
+        settings,
+        draft_id=draft["draft_id"],
+        display_name="Preview Refresh",
+        trigger_words=["preview refresh"],
+        preview_content=_build_preview_bytes(color=(32, 180, 96)),
+    )
+
+    initial_entry = next((entry for entry in list_loras(settings) if entry["id"] == created["id"]), None)
+    assert initial_entry is not None
+    initial_key = str(initial_entry["preview_cache_key"])
+    assert initial_key
+
+    update_lora(
+        settings,
+        lora_id=created["id"],
+        display_name="Preview Refresh",
+        trigger_words=["preview refresh"],
+        preview_content=_build_preview_bytes(color=(180, 32, 96)),
+    )
+
+    updated_entry = next((entry for entry in list_loras(settings) if entry["id"] == created["id"]), None)
+    assert updated_entry is not None
+    assert str(updated_entry["preview_cache_key"])
+    assert updated_entry["preview_cache_key"] != initial_key
+
+
 def test_list_loras_is_sorted_by_display_name(temp_app_paths, make_app_settings) -> None:
     settings = make_app_settings(paths=temp_app_paths)
 

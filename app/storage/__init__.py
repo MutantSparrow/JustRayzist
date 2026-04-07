@@ -10,6 +10,7 @@ from app.storage.gallery_index import (
     list_import_sources,
     list_images,
     normalize_owner_id,
+    rebuild_gallery,
     sync_outputs_to_gallery,
 )
 from app.storage.soak_report import (
@@ -36,6 +37,7 @@ __all__ = [
     "list_images",
     "load_metrics_jsonl",
     "normalize_owner_id",
+    "rebuild_gallery",
     "save_png_with_metadata",
     "sync_outputs_to_gallery",
     "summarize_session",

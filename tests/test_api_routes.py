@@ -190,6 +190,20 @@ def test_upscale_route_maps_cancellation_to_409(monkeypatch) -> None:
     assert response.json()["detail"] == "Upscale cancelled."
 
 
+def test_upscale_route_rejects_legacy_mode_and_scale_fields() -> None:
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/upscale",
+        headers=CLIENT_HEADER,
+        json={
+            "filename": "source.png",
+            "upscale_mode": "hq",
+            "upscale_scale": 4,
+        },
+    )
+    assert response.status_code == 422
+
+
 def test_client_jobs_route_requires_client_header() -> None:
     client = TestClient(api_main.app)
     response = client.get("/client-jobs")
@@ -386,6 +400,7 @@ def test_api_manifest_route_lists_bulk_download_route() -> None:
     assert any(item["path"] == "/images/download-zip" for item in items)
     assert any(item["path"] == "/client-jobs" for item in items)
     assert any(item["path"] == "/client-jobs/cancel" for item in items)
+    assert any(item["path"] == "/gallery/rebuild" for item in items)
     assert any(item["path"].startswith("/images?") and "color=blue" in item["path"] for item in items)
     assert any(item["path"] == "/health" for item in items)
 
@@ -409,6 +424,35 @@ def test_delete_gallery_route_accepts_query_confirmation(monkeypatch) -> None:
     assert payload["deleted_rows"] == 1
 
 
+def test_gallery_rebuild_route_forwards_owner_scope(monkeypatch) -> None:
+    def fake_rebuild_gallery(owner_id: str):
+        assert owner_id == "example-client"
+        return {
+            "owner_id": owner_id,
+            "scanned_files": 3,
+            "indexed": 1,
+            "updated": 2,
+            "removed_missing": 1,
+            "total_items": 3,
+        }
+
+    monkeypatch.setattr(api_main.inference, "rebuild_gallery", fake_rebuild_gallery)
+
+    client = TestClient(api_main.app)
+    response = client.post("/gallery/rebuild", headers=CLIENT_HEADER)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "owner_id": "example-client",
+        "scanned_files": 3,
+        "indexed": 1,
+        "updated": 2,
+        "removed_missing": 1,
+        "total_items": 3,
+    }
+
+
 def test_server_kill_route_schedules_shutdown(monkeypatch) -> None:
     called = {"count": 0}
 
@@ -423,6 +467,7 @@ def test_server_kill_route_schedules_shutdown(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["message"] == "Server shutdown initiated."
     assert called["count"] == 1
+
 
 
 

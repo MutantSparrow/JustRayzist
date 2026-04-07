@@ -104,24 +104,14 @@ python -m app.cli.main generate `
   --height 1024
 ```
 
-Supported generation cap: `1536x1536`.
+Supported generation cap: UI presets up to `1536x1536`; raw API requests up to `2048x2048`.
 
-Upscale test:
-
-```powershell
-python -m app.cli.main upscale-test `
-  --input-image outputs\_Upscale_test.png `
-  --checkpoint models\upscaler\2x_RealESRGAN_x2plus.pth `
-  --profiles high,balanced,constrained
-```
-
-Upscale and refine:
+SeedVR2 x2 still benchmark:
 
 ```powershell
-python -m app.cli.main upscale-refine `
-  --pack Rayzist_bf16 `
-  --input-image outputs\sample.png `
-  --prompt "portrait photo"
+python -m app.cli.main seedvr2-still-benchmark `
+  --inputs outputs\sample.png `
+  --presets seed_faithful,seed_sharp
 ```
 
 Soak run and report:
@@ -141,8 +131,7 @@ Engineering-only benchmark commands:
 These commands keep forced `--profile` / `--profiles` flags for diagnostics and reproducible comparisons. They are not part of the normal startup/runtime flow.
 
 ```powershell
-python -m app.cli.main seedvr2-benchmark --profiles high,balanced,constrained
-python -m app.cli.main seedvr2-blend-benchmark --profile high --alphas 25,50,75
+python -m app.cli.main seedvr2-still-benchmark --inputs outputs\sample.png --presets seed_faithful,seed_sharp
 ```
 
 Procedural latent preview:
@@ -156,11 +145,6 @@ Engineering compare/probe commands:
 These commands are discoverable in the CLI, but they are intended for diagnostics, benchmarking, and regression work rather than normal daily generation.
 
 ```powershell
-python -m app.cli.main upscale-test `
-  --input-image outputs\_Upscale_test.png `
-  --checkpoint models\upscaler\2x_RealESRGAN_x2plus.pth `
-  --profiles high,balanced,constrained
-
 python -m app.cli.main pack-compare `
   --prompt "A cinematic skyline at sunrise"
 
@@ -173,27 +157,23 @@ python -m app.cli.main prompt-grid-benchmark `
   --prompt "PROMPT 2" `
   --prompt "PROMPT 3"
 
-python -m app.cli.main seedvr2-benchmark `
-  --profiles high,balanced,constrained
-
-python -m app.cli.main seedvr2-blend-benchmark `
-  --profile high `
-  --alphas 25,50,75
+python -m app.cli.main seedvr2-still-benchmark `
+  --inputs outputs\sample.png `
+  --presets seed_faithful,seed_sharp
 ```
 
 What they are for:
 
-- `upscale-test`: compare plain x2 upscale settings across forced profiles.
 - `pack-compare`: compare a base pack against a candidate runtime strategy such as derived FP8 storage.
 - `pack-compare-suite`: run the multi-pack benchmark matrix and generate contact sheets/reports.
 - `prompt-grid-benchmark`: run forced-tier plus auto-tier prompt grids with generation/upscale artifacts.
-- `seedvr2-benchmark` / `seedvr2-blend-benchmark`: benchmark SeedVR2 runtime behavior and blend modes.
+- `seedvr2-still-benchmark`: benchmark SeedVR2 x2 direct behavior with still-image presets.
 
 ## API Usage
 
 Base URL: `http://127.0.0.1:37717`
 
-Supported generation cap: `1536x1536`.
+Supported generation cap: UI presets up to `1536x1536`; raw API requests up to `2048x2048`.
 Client-scoped routes require `X-JustRayzist-Client`.
 Use `procedural_creativity` (`0-3`) to control Creative Mode.
 In the main UI, scheduler behavior is derived automatically from Creative Mode. `scheduler_mode` remains optional for raw API and CLI calls.
@@ -226,6 +206,7 @@ $headers = @{ "X-JustRayzist-Client" = "desktop-client" }
 - `POST /images/download-zip`
 - `DELETE /images/{filename}?confirm=DELETE`
 - `DELETE /gallery?confirm=DELETE`
+- `POST /gallery/rebuild`
 - `GET /gallery/import-sources`
 - `POST /gallery/import`
 - `POST /server/kill`
@@ -242,7 +223,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.5.2",
+  "version": "1.5.4",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -272,7 +253,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.5.2",
+  "app_version": "1.5.4",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -381,7 +362,7 @@ Sample response:
 
 ### `POST /lora-drafts`
 
-Upload one `.safetensors` LoRA into draft storage for metadata inspection before saving it into the live library.
+Upload one `.safetensors` LoRA into draft storage for metadata inspection before saving it into the live library. LoRA uploads are capped at 10 GiB.
 
 Sample request body:
 
@@ -437,7 +418,7 @@ Sample response:
 
 ### `POST /loras`
 
-Finalize a staged LoRA draft into the live library with a chosen name, saved trigger words, and an optional thumbnail image.
+Finalize a staged LoRA draft into the live library with a chosen name, saved trigger words, and an optional thumbnail image. Thumbnail uploads are capped at 10 MiB.
 
 Sample request body:
 
@@ -482,7 +463,7 @@ Sample response:
 
 ### `PATCH /loras/{lora_id}`
 
-Update the display name, saved trigger words, and optional thumbnail image for one installed LoRA without replacing the weights file.
+Update the display name, saved trigger words, and optional thumbnail image for one installed LoRA without replacing the weights file. Thumbnail uploads are capped at 10 MiB.
 
 Sample request body:
 
@@ -598,7 +579,7 @@ Sample response:
 
 ### `POST /upscale`
 
-Upscale one gallery image with the app's mixed-model fast upscale flow.
+Upscale one gallery image with the fixed SeedVR2 direct x2 faithful path.
 
 Requires `X-JustRayzist-Client`.
 
@@ -622,7 +603,8 @@ Sample response:
   "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
   "mode": "api_upscale",
   "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-  "upscale_engine": "x2_seedvr2_blend",
+  "upscale_engine": "seedvr2_direct_x2_faithful",
+  "execution_mode": "seedvr2_direct_x2_faithful",
   "duration_ms": 23456,
   "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png"
 }
@@ -819,6 +801,26 @@ Sample response:
   "deleted_files": 42,
   "deleted_rows": 42,
   "remaining_rows": 0
+}
+```
+
+### `POST /gallery/rebuild`
+
+Rebuild the current client-scoped gallery index after manual PNG copies, replacements, or deletions in the gallery folder.
+
+Requires `X-JustRayzist-Client`.
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "owner_id": "example-client",
+  "scanned_files": 12,
+  "indexed": 2,
+  "updated": 10,
+  "removed_missing": 1,
+  "total_items": 12
 }
 ```
 

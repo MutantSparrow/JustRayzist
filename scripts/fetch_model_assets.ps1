@@ -293,13 +293,6 @@ $assets = @(
     RepoFile = "ema_vae_fp16.safetensors"
     RelativeOutputPath = "models/seedvr2/ema_vae_fp16.safetensors"
     Sha256 = "20678548f420d98d26f11442d3528f8b8c94e57ee046ef93dbb7633da8612ca1"
-  },
-  @{
-    Name = "Upscaler checkpoint (RealESRGAN x2plus)"
-    RepoId = "imagepipeline/superresolution"
-    RepoFile = "RealESRGAN_x2plus.pth"
-    RelativeOutputPath = "models/upscaler/2x_RealESRGAN_x2plus.pth"
-    Sha256 = "49fafd45f8fd7aa8d31ab2a22d14d91b536c34494a5cfe31eb5d89c2fa266abb"
   }
 )
 

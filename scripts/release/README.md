@@ -2,16 +2,10 @@
 
 Use these commands from repository root.
 
-## Bootstrap Artifact (Recommended)
+## Release Artifact
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version vX.Y.Z -Clean
-```
-
-## Bundled Artifact (Large, Optional)
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version vX.Y.Z -Clean
+powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Lane cu128 -Version vX.Y.Z -Clean
 ```
 
 ## Repository Readiness Check
@@ -40,6 +34,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\release\clean_legacy_artifact
 
 ## Packaging Notes
 
-- packaged releases should preserve the auto resource-tier startup model
+- packaged releases are bootstrap-only
 - hidden packs remain engineering-only and should not appear in the normal launcher flow
 - `UpdateApp.bat` is the packaged in-place update path and should preserve local models, outputs, and data

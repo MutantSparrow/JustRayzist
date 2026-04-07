@@ -2530,7 +2530,6 @@ class DiffusersZImageBackend:
         has_default = any("default." in key for key in string_keys)
         has_legacy_dotted = any(".lora.down.weight" in key or ".lora.up.weight" in key for key in string_keys)
         has_non_diffusers = any(".lora_down.weight" in key or ".lora_up.weight" in key for key in string_keys)
-        has_diffusers = any(".lora_A.weight" in key or ".lora_B.weight" in key for key in string_keys)
         has_alphas = any(key.endswith(".alpha") for key in string_keys)
 
         format_label = "diffusers-native"
@@ -3314,6 +3313,45 @@ class DiffusersZImageBackend:
         if not isinstance(input_image, Image.Image):
             raise ValueError("input_image must be a PIL.Image.Image instance.")
 
+        checkpoint_path = request.upscaler_checkpoint or (
+            self._settings.paths.models_dir / "upscaler" / "2x_RealESRGAN_x2plus.pth"
+        )
+        if not checkpoint_path.exists():
+            raise ValueError(f"Upscaler checkpoint not found: {checkpoint_path}")
+
+        upscale_result = upscale_image(
+            image=input_image,
+            checkpoint_path=checkpoint_path,
+            profile_name=self._settings.runtime_profile.name,
+        )
+        return self._refine_existing_image(
+            input_image=input_image,
+            refine_input_image=upscale_result.image,
+            request=request,
+            upscale_duration_ms=int(upscale_result.duration_ms),
+            mode="upscale_then_img2img",
+        )
+
+    def refine_image(self, input_image: object, request: GenerationRequest) -> GenerationResult:
+        if not isinstance(input_image, Image.Image):
+            raise ValueError("input_image must be a PIL.Image.Image instance.")
+        return self._refine_existing_image(
+            input_image=input_image,
+            refine_input_image=input_image,
+            request=request,
+            upscale_duration_ms=0,
+            mode="img2img_refine",
+        )
+
+    def _refine_existing_image(
+        self,
+        *,
+        input_image: Image.Image,
+        refine_input_image: Image.Image,
+        request: GenerationRequest,
+        upscale_duration_ms: int,
+        mode: str,
+    ) -> GenerationResult:
         loaded = self._ensure_loaded()
         txt_pipe = loaded.pipeline
         img_pipe = self._ensure_img2img_pipe()
@@ -3340,22 +3378,9 @@ class DiffusersZImageBackend:
             torch_module=torch,
         )
 
-        checkpoint_path = request.upscaler_checkpoint or (
-            self._settings.paths.models_dir / "upscaler" / "2x_RealESRGAN_x2plus.pth"
-        )
-        if not checkpoint_path.exists():
-            raise ValueError(f"Upscaler checkpoint not found: {checkpoint_path}")
-
         pre_mem = cuda_memory_snapshot(torch)
         pre_proc_mem = process_memory_snapshot()
         started = now_perf()
-
-        upscale_result = upscale_image(
-            image=input_image,
-            checkpoint_path=checkpoint_path,
-            profile_name=self._settings.runtime_profile.name,
-        )
-        refine_input_image = upscale_result.image
 
         tile_size_requested, tile_overlap_requested = self._resolve_refine_tiling(
             request,
@@ -3401,8 +3426,8 @@ class DiffusersZImageBackend:
             prompt_original=prompt_original,
             prompt_effective=prompt_effective,
             prompt_enhanced=prompt_enhanced,
-            mode="upscale_then_img2img",
-            upscale_duration_ms=upscale_result.duration_ms,
+            mode=mode,
+            upscale_duration_ms=int(upscale_duration_ms),
             refine_duration_ms=refine_duration_ms,
             refine_strength=refine_strength,
             refine_tile_size=effective_tile_size,

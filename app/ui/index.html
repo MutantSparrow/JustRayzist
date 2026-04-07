@@ -6,7 +6,7 @@
   <title>JustRayzist</title>
   <link rel="icon" type="image/x-icon" href="/img/favicon.ico">
   <link rel="shortcut icon" href="/img/favicon.ico">
-  <link rel="stylesheet" href="/ui/styles.css?v=20260326_06">
+  <link rel="stylesheet" href="/ui/styles.css?v=20260407_10">
 </head>
 <body>
   <header class="topbar">
@@ -105,6 +105,11 @@
       <button id="prompt-enhance-button" class="toggle-seed-button" type="button">
         PROMPT ENHANCER: OFF
       </button>
+    </div>
+
+    <div class="setting-group">
+      <label>Upscale</label>
+      <p id="upscale-settings-hint" class="setting-hint">Upscale uses SeedVR2 direct x2 faithful mode.</p>
     </div>
 
     <div class="setting-group setting-actions-row">
@@ -231,22 +236,22 @@
   <section id="lora-editor-modal" class="confirm-modal lora-editor-modal hidden" aria-hidden="true">
     <div class="confirm-dialog lora-editor-dialog">
       <div class="lora-editor-header">
-        <div class="lora-editor-header-copy">
-          <h3 id="lora-editor-title" class="lora-editor-title">ADD LORA</h3>
-          <div id="lora-editor-file" class="lora-editor-file"></div>
-        </div>
+        <h3 id="lora-editor-title" class="lora-editor-title">ADD LORA</h3>
       </div>
       <div id="lora-editor-progress" class="lora-editor-progress hidden" aria-live="polite">
         <div id="lora-editor-progress-spinner" class="tile-spinner lora-editor-progress-spinner">Uploading... 0%</div>
       </div>
       <div class="lora-editor-body">
-        <div class="setting-group">
+        <div class="setting-group lora-editor-name-group">
           <label for="lora-editor-name">LoRA Name</label>
           <input id="lora-editor-name" type="text" maxlength="128" placeholder="LoRA name">
+          <div class="lora-editor-file-inline">
+            <span class="lora-editor-file-label">Source File:</span>
+            <span id="lora-editor-file" class="lora-editor-file"></span>
+          </div>
         </div>
         <div class="lora-editor-grid">
           <div class="lora-editor-thumbnail-block">
-            <label>Thumbnail</label>
             <div class="lora-editor-thumbnail-frame">
               <img id="lora-editor-thumbnail-preview" class="lora-editor-thumbnail-preview" alt="LoRA thumbnail preview">
             </div>
@@ -254,18 +259,13 @@
               <button id="lora-editor-thumbnail-button" class="close-button" type="button">Choose Thumbnail</button>
               <input id="lora-editor-thumbnail-input" type="file" accept="image/*" hidden>
             </div>
-            <div class="lora-editor-trigger-header">
-              <label for="lora-editor-trigger-input">Trigger Words</label>
-              <button id="lora-editor-fetch-triggers" class="close-button" type="button">Fetch Triggers</button>
-            </div>
+          </div>
+          <div class="lora-editor-trigger-block">
+            <label for="lora-editor-trigger-input">Trigger Words</label>
             <div id="lora-editor-trigger-chips" class="lora-trigger-chips"></div>
             <input id="lora-editor-trigger-input" type="text" placeholder="Add a trigger and press Enter">
           </div>
         </div>
-        <details class="lora-editor-metadata">
-          <summary>Metadata Summary</summary>
-          <div id="lora-editor-metadata-summary" class="lora-editor-metadata-summary"></div>
-        </details>
       </div>
       <div class="lora-editor-actions">
         <button id="lora-editor-close" class="btn btn-hfill" type="button">Cancel</button>
@@ -301,6 +301,6 @@
     <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
   </section>
 
-  <script src="/ui/app.js?v=20260326_06"></script>
+  <script src="/ui/app.js?v=20260407_10"></script>
 </body>
 </html>

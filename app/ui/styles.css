@@ -194,10 +194,13 @@ select {
   letter-spacing: 1px;
   margin: 0;
   outline: none;
+  overflow: hidden;
   padding: 0.75em 1.5em;
   position: relative;
   text-decoration: none;
+  text-transform: uppercase;
   transition: all 0.3s;
+  z-index: 0;
 }
 
 .btn::after {
@@ -332,18 +335,6 @@ select {
 
 .lora-drawer-toggle[aria-expanded="true"] .lora-drawer-toggle-arrow {
   transform: translateX(-1px) scaleX(1);
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 .settings-panel {
@@ -486,17 +477,50 @@ select {
 
 .lora-list {
   overflow-y: auto;
+  overflow-x: hidden;
+  min-width: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  grid-template-columns: repeat(var(--lora-masonry-columns, 2), minmax(0, 1fr));
   gap: 12px;
   align-content: start;
-  padding-right: 2px;
+  align-items: start;
+  padding-right: 6px;
+  padding-bottom: 12px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--lime) #0a0d12;
+}
+
+.lora-list-column {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.lora-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.lora-list::-webkit-scrollbar-track {
+  background: #0a0d12;
+}
+
+.lora-list::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #b7ff00, #7fc300);
+  border: 2px solid #0a0d12;
+}
+
+.lora-list::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #c9ff4b, #93df12);
 }
 
 .lora-card {
   position: relative;
   display: block;
-  aspect-ratio: 1;
+  width: 100%;
+  margin: 0;
+  min-width: 0;
   padding: 0;
   border: 1px solid #2f2f36;
   background: rgba(16, 17, 22, 0.92);
@@ -505,7 +529,8 @@ select {
   transition: border-color 140ms ease, background 140ms ease, box-shadow 160ms ease;
 }
 
-.lora-card:hover {
+.lora-card:hover,
+.lora-card:focus-within {
   border-color: #5a3a5f;
   background: rgba(22, 19, 28, 0.96);
 }
@@ -521,8 +546,8 @@ select {
 
 .lora-card-preview {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
+  aspect-ratio: 1 / 1;
   background: #0d111a;
   display: block;
 }
@@ -537,15 +562,18 @@ select {
   background:
     linear-gradient(180deg, rgba(4, 4, 7, 0.2) 0%, rgba(4, 4, 7, 0.08) 18%, rgba(4, 4, 7, 0.8) 66%, rgba(4, 4, 7, 0.95) 100%);
   opacity: 0;
+  pointer-events: none;
   transform: translateY(6px);
   transition: opacity 140ms ease, transform 140ms ease;
 }
 
 .lora-card:hover .lora-card-overlay,
+.lora-card:focus-within .lora-card-overlay,
 .lora-card.touch-focused .lora-card-overlay,
 .lora-card.pending .lora-card-overlay,
 .lora-card.applied .lora-card-overlay {
   opacity: 1;
+  pointer-events: auto;
   transform: translateY(0);
 }
 
@@ -597,6 +625,13 @@ select {
   color: #000;
 }
 
+.lora-card-icon-button:focus-visible {
+  outline: none;
+  border-color: var(--lime);
+  background: var(--lime);
+  color: #000;
+}
+
 .lora-card-icon-button.danger {
   border-color: #6b2020;
   background: rgba(24, 9, 9, 0.9);
@@ -604,6 +639,13 @@ select {
 }
 
 .lora-card-icon-button.danger:hover {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #000;
+}
+
+.lora-card-icon-button.danger:focus-visible {
+  outline: none;
   border-color: var(--danger);
   background: var(--danger);
   color: #000;
@@ -723,6 +765,9 @@ select {
   color: var(--lime);
   text-align: center;
   padding: 14px;
+  aspect-ratio: 1 / 1;
+  min-height: 168px;
+  overflow: hidden;
 }
 
 .lora-add-tile:hover {
@@ -801,24 +846,27 @@ body.lora-drawer-open .gallery-area {
   margin-right: 0;
 }
 
-.lora-editor-dialog {
-  width: min(520px, calc(100vw - 32px));
+.confirm-dialog.lora-editor-dialog {
+  width: min(calc(100vw - 24px), clamp(780px, 52vw, 1080px));
+  max-height: min(90vh, 840px);
   background: linear-gradient(180deg, rgba(9, 9, 9, 0.98), rgba(15, 15, 18, 0.98));
   border: 1px solid #2f3535;
+  padding: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 
 .lora-editor-header {
-  margin-bottom: 10px;
-}
-
-.lora-editor-header-copy {
-  display: grid;
-  gap: 6px;
+  margin: 0;
+  padding: 10px 18px 9px;
+  background: var(--lime);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.35);
 }
 
 .lora-editor-title {
   margin: 0;
-  color: var(--lime);
+  color: #050608;
   font-size: 1.55rem;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -827,21 +875,43 @@ body.lora-drawer-open .gallery-area {
 
 .lora-editor-body {
   display: grid;
-  gap: 16px;
+  gap: 18px;
+  padding: 0 18px 18px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.lora-editor-file-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.lora-editor-file-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  text-transform: uppercase;
 }
 
 .lora-editor-file {
-  min-height: 20px;
-  font-size: 0.78rem;
-  color: #afb4be;
+  min-height: 0;
+  padding: 0;
+  font-size: 0.8rem;
+  color: #9da4af;
   line-height: 1.35;
+  border: 0;
+  background: none;
+  word-break: break-word;
 }
 
 .lora-editor-progress {
   min-height: 96px;
   display: grid;
   place-items: center;
-  padding: 10px 0 18px;
+  padding: 18px 18px 14px;
 }
 
 .lora-editor-progress-spinner {
@@ -869,18 +939,22 @@ body.lora-drawer-open .gallery-area {
 }
 
 .lora-editor-grid {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 24px;
+  align-items: start;
 }
 
 .lora-editor-thumbnail-block {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .lora-editor-thumbnail-frame {
   position: relative;
-  width: min(100%, 340px);
-  margin: 0 auto;
+  width: min(100%, clamp(180px, 24vw, 340px));
+  margin: 0;
   aspect-ratio: 1;
   border: 1px solid #31383f;
   background: #05070c;
@@ -909,27 +983,40 @@ body.lora-drawer-open .gallery-area {
   opacity: 0;
 }
 
-.lora-editor-thumbnail-actions,
-.lora-editor-actions {
+.lora-editor-thumbnail-actions {
   display: flex;
   justify-content: center;
   gap: 8px;
 }
 
-.lora-editor-trigger-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.lora-editor-trigger-block {
+  display: grid;
   gap: 10px;
-  margin-top: 6px;
+  align-content: start;
+  min-width: 0;
+}
+
+.lora-editor-trigger-block label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 0.82rem;
+  letter-spacing: 0.45px;
+  color: #ddd;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .lora-trigger-chips {
-  min-height: 44px;
+  width: 100%;
+  min-height: 236px;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-content: flex-start;
+  padding: 12px;
+  border: 1px solid #252c31;
+  background: #07090d;
+  overflow-y: auto;
 }
 
 .lora-trigger-chip {
@@ -945,50 +1032,17 @@ body.lora-drawer-open .gallery-area {
   border-color: rgba(183, 255, 0, 0.72);
 }
 
-.lora-editor-metadata {
-  border-top: 1px solid #25282f;
-  padding-top: 12px;
-}
-
-.lora-editor-metadata summary {
-  cursor: pointer;
-  color: #d7dce5;
-  font-weight: 700;
-}
-
-.lora-editor-metadata-summary {
-  display: grid;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.lora-editor-metadata-row {
-  display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
-  gap: 10px;
-  font-size: 0.78rem;
-  line-height: 1.4;
-}
-
-.lora-editor-metadata-key {
-  color: var(--lime);
-  word-break: break-word;
-}
-
-.lora-editor-metadata-value,
-.lora-editor-metadata-empty {
-  color: #c8d0dd;
-  word-break: break-word;
-}
-
 .lora-editor-actions {
-  justify-content: stretch;
+  display: flex;
+  justify-content: flex-end;
   gap: 12px;
-  margin-top: 18px;
+  margin-top: 0;
+  padding: 14px 18px 18px;
+  border-top: 1px solid #252a30;
 }
 
 .lora-editor-actions .btn {
-  flex: 1 1 0;
+  flex: 0 0 180px;
   min-height: 52px;
 }
 
@@ -1038,6 +1092,11 @@ body.lora-drawer-open .gallery-area {
   color: var(--lime);
 }
 
+.toggle-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .toggle-seed-button {
   width: 100%;
   height: 38px;
@@ -1051,6 +1110,48 @@ body.lora-drawer-open .gallery-area {
 .toggle-seed-button.active {
   color: var(--lime);
   border-color: var(--lime);
+}
+
+.setting-hint {
+  margin: 8px 0 0;
+  color: #8d8d8d;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.lora-editor-name-group {
+  margin-bottom: 0;
+  padding-top: 12px;
+}
+
+.lora-editor-name-group input,
+.lora-editor-trigger-block input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #2e353d;
+  background: rgba(255, 255, 255, 0.03);
+  color: #f4f7fb;
+  padding: 0 14px;
+  outline: none;
+  box-shadow: none;
+}
+
+.lora-editor-name-group input {
+  min-height: 56px;
+  font-size: 1.24rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.lora-editor-trigger-block input {
+  min-height: 44px;
+  font-size: 0.94rem;
+}
+
+.lora-editor-name-group input:focus,
+.lora-editor-trigger-block input:focus {
+  border-bottom-color: var(--lime);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .slider-setting {
@@ -1078,6 +1179,7 @@ body.lora-drawer-open .gallery-area {
   color: var(--danger);
   font-weight: 700;
   cursor: pointer;
+  text-transform: uppercase;
   position: relative;
   overflow: hidden;
   z-index: 0;
@@ -2142,17 +2244,16 @@ body.lora-drawer-open .gallery-area {
   font-size: 0.8rem;
 }
 
-.download-link,
-.close-button,
-.upscale-link {
-  border: 1px solid #3a3a3a;
+.close-button {
+  border: 1px solid var(--lime);
   height: 30px;
   line-height: 28px;
   padding: 0 10px;
-  color: #e7e7e7;
+  color: var(--lime);
   text-decoration: none;
   background: #111;
   cursor: pointer;
+  text-transform: uppercase;
   position: relative;
   overflow: hidden;
   z-index: 0;
@@ -2162,9 +2263,7 @@ body.lora-drawer-open .gallery-area {
     background 0.2s ease;
 }
 
-.download-link::after,
-.close-button::after,
-.upscale-link::after {
+.close-button::after {
   content: "";
   position: absolute;
   left: 0;
@@ -2172,50 +2271,14 @@ body.lora-drawer-open .gallery-area {
   width: 0;
   height: 100%;
   z-index: -1;
-  transition: width 0.33s ease;
-}
-
-.download-link {
-  border-color: var(--magenta);
-  color: var(--magenta);
-}
-
-.download-link::after {
-  background: var(--magenta);
-}
-
-.upscale-link {
-  border-color: var(--magenta);
-  color: var(--magenta);
-}
-
-.upscale-link::after {
-  background: var(--magenta);
-}
-
-.upscale-link:hover {
-  border-color: #ff5bc0;
-  color: #000;
-}
-
-.upscale-link:hover::after {
-  width: 100%;
-}
-
-.close-button {
-  border-color: var(--lime);
-  color: var(--lime);
-}
-
-.close-button::after {
   background: var(--lime);
+  transition: width 0.33s ease;
 }
 
 .close-button:hover {
   color: #000;
 }
 
-.download-link:hover::after,
 .close-button:hover::after {
   width: 100%;
 }
@@ -2327,26 +2390,12 @@ body.lora-drawer-open .gallery-area {
 
 .viewer-favorite-button.tone-dark {
   color: #fff;
-  border-color: rgba(255, 255, 255, 0.34);
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.9));
-}
-
-.viewer-favorite-button.tone-dark:hover {
-  border-color: #fff;
-  background: #f1f1f1;
-  color: #000;
 }
 
 .viewer-favorite-button.tone-light {
   color: #111;
-  border-color: rgba(255, 255, 255, 0.78);
   filter: drop-shadow(0 1px 2px rgba(255, 255, 255, 0.92));
-}
-
-.viewer-favorite-button.tone-light:hover {
-  border-color: #111;
-  background: #111;
-  color: #fff;
 }
 
 .viewer-hints {
@@ -2874,6 +2923,24 @@ body.lora-drawer-open .gallery-area {
   }
 }
 
+@media (max-width: 920px) {
+  .confirm-dialog.lora-editor-dialog {
+    width: min(100vw, calc(100vw - 18px));
+  }
+
+  .lora-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .lora-editor-thumbnail-frame {
+    width: min(100%, clamp(160px, 22vh, 260px));
+  }
+
+  .lora-trigger-chips {
+    min-height: 140px;
+  }
+}
+
 @media (max-width: 600px) {
   .topbar {
     grid-template-columns: 1fr;
@@ -2932,18 +2999,10 @@ body.lora-drawer-open .gallery-area {
   }
 
   .lora-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(var(--lora-masonry-columns, 1), minmax(0, 1fr));
   }
 
-  .lora-editor-dialog {
-    width: min(100vw, calc(100vw - 18px));
-  }
-
-  .lora-editor-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .lora-editor-metadata-row {
-    grid-template-columns: 1fr;
+  .lora-editor-actions .btn {
+    flex: 1 1 0;
   }
 }

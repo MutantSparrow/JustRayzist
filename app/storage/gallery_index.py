@@ -14,7 +14,7 @@ from app.config.settings import AppSettings
 
 LEGACY_OWNER_ID = "legacy"
 LEGACY_IMPORT_SOURCE_ID = "__legacy_root__"
-MANAGED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+MANAGED_IMAGE_SUFFIXES = {".png"}
 _WINDOWS_RESERVED_NAMES = {
     "con",
     "prn",
@@ -668,7 +668,7 @@ def sync_outputs_to_gallery(settings: AppSettings) -> int:
     db_path = ensure_gallery_schema(settings)
     outputs_dir = settings.paths.outputs_dir
     outputs_dir.mkdir(parents=True, exist_ok=True)
-    output_files = sorted(outputs_dir.rglob("*.png"))
+    output_files = sorted(_iter_managed_images(outputs_dir.resolve()))
 
     indexed = 0
     with _open_connection(db_path) as conn:
@@ -685,6 +685,50 @@ def sync_outputs_to_gallery(settings: AppSettings) -> int:
             indexed += 1
         conn.commit()
     return indexed + removed_missing
+
+
+def rebuild_gallery(settings: AppSettings, owner_id: str) -> dict[str, int | str]:
+    db_path = ensure_gallery_schema(settings)
+    safe_owner = normalize_owner_id(owner_id)
+    outputs_dir = settings.paths.outputs_dir.resolve()
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    if safe_owner == LEGACY_OWNER_ID:
+        output_files = sorted(path for path in outputs_dir.glob("*.png") if path.is_file())
+    else:
+        owner_dir = _owner_output_dir(settings, safe_owner)
+        owner_dir.mkdir(parents=True, exist_ok=True)
+        output_files = sorted(_iter_managed_images(owner_dir))
+
+    indexed = 0
+    updated = 0
+    with _open_connection(db_path) as conn:
+        removed_missing = _prune_missing_rows(conn, settings, owner_id=safe_owner)
+        existing_rows = conn.execute(
+            "SELECT filename FROM images WHERE owner_id = ?",
+            (safe_owner,),
+        ).fetchall()
+        existing = {str(row["filename"]) for row in existing_rows}
+        for output_path in output_files:
+            metadata = _read_png_metadata(output_path)
+            _upsert_image(conn, settings, output_path, metadata, owner_id=safe_owner)
+            if output_path.name in existing:
+                updated += 1
+            else:
+                indexed += 1
+        total_row = conn.execute(
+            "SELECT COUNT(*) AS total FROM images WHERE owner_id = ?",
+            (safe_owner,),
+        ).fetchone()
+        conn.commit()
+
+    return {
+        "owner_id": safe_owner,
+        "scanned_files": len(output_files),
+        "indexed": indexed,
+        "updated": updated,
+        "removed_missing": removed_missing,
+        "total_items": int(total_row["total"]) if total_row is not None else 0,
+    }
 
 
 def _rebuild_color_flags(

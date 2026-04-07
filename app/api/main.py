@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
-import re
 import threading
 import time
 import zipfile
@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.datastructures import FormData, Headers, UploadFile
+from starlette.formparsers import MultiPartException, MultiPartParser
 
 from app.api.api_manifest import api_manifest_payload
 from app.api.inference_service import InferenceService
@@ -29,6 +31,44 @@ configure_logging()
 LOGGER = logging.getLogger(__name__)
 settings = load_settings()
 inference = InferenceService(settings=settings)
+_MULTIPART_TEXT_LIMIT_BYTES = 256 * 1024
+_LORA_UPLOAD_LIMIT_BYTES = 10 * 1024 * 1024 * 1024
+_LORA_THUMBNAIL_LIMIT_BYTES = 10 * 1024 * 1024
+_NO_STORE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
+class _RevisionBroadcaster:
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._revision = 0
+
+    def current(self) -> int:
+        with self._condition:
+            return self._revision
+
+    def notify(self) -> int:
+        with self._condition:
+            self._revision += 1
+            self._condition.notify_all()
+            return self._revision
+
+    def wait_for_change(self, current_revision: int, timeout_seconds: float = 20.0) -> int:
+        with self._condition:
+            if self._revision != current_revision:
+                return self._revision
+            self._condition.wait(timeout_seconds)
+            return self._revision
+
+
+_LORA_LIBRARY_EVENTS = _RevisionBroadcaster()
+
+
+def _notify_lora_library_changed() -> None:
+    _LORA_LIBRARY_EVENTS.notify()
 
 
 @asynccontextmanager
@@ -84,6 +124,8 @@ class GenerateRequest(BaseModel):
 
 
 class UpscaleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     filename: str = Field(min_length=1, max_length=255)
     pack: str | None = Field(default=None)
     job_id: str | None = Field(default=None, max_length=255)
@@ -139,93 +181,116 @@ def _resolve_owner_id(client_header: str | None, client_query: str | None = None
         raise HTTPException(status_code=400, detail=f"Invalid client id: {exc}") from exc
 
 
-def _extract_content_disposition_param(header_value: str, key: str) -> str | None:
-    pattern = rf'{re.escape(key)}="([^"]*)"'
-    match = re.search(pattern, header_value, flags=re.IGNORECASE)
-    if match:
-        return match.group(1)
-    for segment in header_value.split(";"):
-        name, _sep, value = segment.strip().partition("=")
-        if name.strip().lower() != key.lower():
-            continue
-        return value.strip().strip('"')
-    return None
+def _format_upload_limit(limit_bytes: int) -> str:
+    units = (
+        (1024 * 1024 * 1024, "GiB"),
+        (1024 * 1024, "MiB"),
+        (1024, "KiB"),
+    )
+    for divisor, label in units:
+        if limit_bytes >= divisor and limit_bytes % divisor == 0:
+            return f"{limit_bytes // divisor} {label}"
+    return f"{limit_bytes} bytes"
 
 
-def _parse_multipart_file_upload(content_type: str, body: bytes) -> tuple[str, bytes]:
-    parts = _parse_multipart_parts(content_type, body)
-    for items in parts.values():
-        for part in items:
-            filename = str(part.get("filename") or "").strip()
-            if filename:
-                return filename, bytes(part.get("content") or b"")
-    raise ValueError("Upload did not include a file part.")
+class _MultipartSizeLimitExceeded(MultiPartException):
+    pass
 
 
-def _parse_multipart_parts(content_type: str, body: bytes) -> dict[str, list[dict[str, Any]]]:
-    match = re.search(r'boundary="?([^";]+)"?', str(content_type or ""), flags=re.IGNORECASE)
-    if not match:
-        raise ValueError("Upload is missing a multipart boundary.")
-    boundary = match.group(1).encode("utf-8")
-    delimiter = b"--" + boundary
-    parts: dict[str, list[dict[str, Any]]] = {}
-
-    for raw_part in body.split(delimiter):
-        part = raw_part.strip()
-        if not part or part == b"--":
-            continue
-        if part.endswith(b"--"):
-            part = part[:-2]
-        header_blob, separator, payload = part.partition(b"\r\n\r\n")
-        if not separator:
-            continue
-        header_lines = header_blob.decode("utf-8", errors="replace").split("\r\n")
-        headers: dict[str, str] = {}
-        for line in header_lines:
-            name, _sep, value = line.partition(":")
-            if not _sep:
-                continue
-            headers[name.strip().lower()] = value.strip()
-        content_disposition = headers.get("content-disposition", "")
-        field_name = _extract_content_disposition_param(content_disposition, "name")
-        if not field_name:
-            continue
-        payload_bytes = payload[:-2] if payload.endswith(b"\r\n") else payload
-        parts.setdefault(field_name, []).append(
-            {
-                "name": field_name,
-                "filename": _extract_content_disposition_param(content_disposition, "filename"),
-                "content_type": headers.get("content-type", ""),
-                "content": payload_bytes,
-            }
+class _LimitedMultipartParser(MultiPartParser):
+    def __init__(
+        self,
+        headers: Headers,
+        stream: Any,
+        *,
+        file_limits: dict[str, int],
+        max_files: int,
+        max_fields: int,
+        max_text_part_size: int,
+    ) -> None:
+        self._file_limits = {str(name): int(limit) for name, limit in file_limits.items()}
+        self._current_file_limit: int | None = None
+        self._current_file_size = 0
+        super().__init__(
+            headers,
+            stream,
+            max_files=max_files,
+            max_fields=max_fields,
+            max_part_size=max_text_part_size,
         )
-    return parts
+
+    def on_part_begin(self) -> None:
+        super().on_part_begin()
+        self._current_file_limit = None
+        self._current_file_size = 0
+
+    def on_headers_finished(self) -> None:
+        super().on_headers_finished()
+        if self._current_part.file is None:
+            return
+        self._current_file_limit = self._file_limits.get(self._current_part.field_name)
+        if self._current_file_limit is None:
+            raise MultiPartException(f"Unexpected multipart file field '{self._current_part.field_name}'.")
+
+    def on_part_data(self, data: bytes, start: int, end: int) -> None:
+        if self._current_part.file is not None:
+            self._current_file_size += end - start
+            if self._current_file_limit is not None and self._current_file_size > self._current_file_limit:
+                raise _MultipartSizeLimitExceeded(
+                    f"Multipart file field '{self._current_part.field_name}' exceeded the maximum size of "
+                    f"{_format_upload_limit(self._current_file_limit)}."
+                )
+        super().on_part_data(data, start, end)
 
 
-def _get_first_multipart_part(
-    parts: dict[str, list[dict[str, Any]]],
-    field_name: str,
+async def _parse_multipart_form(
+    request: Request,
     *,
-    required: bool = False,
-) -> dict[str, Any] | None:
-    items = parts.get(field_name) or []
-    if items:
-        return items[0]
-    if required:
-        raise ValueError(f"Missing multipart field '{field_name}'.")
-    return None
+    file_limits: dict[str, int],
+    max_fields: int = 10,
+) -> FormData:
+    content_type = str(request.headers.get("content-type") or "").strip()
+    if not content_type.lower().startswith("multipart/form-data"):
+        raise HTTPException(status_code=400, detail="Expected multipart/form-data upload.")
+    try:
+        parser = _LimitedMultipartParser(
+            Headers(request.headers),
+            request.stream(),
+            file_limits=file_limits,
+            max_files=max(1, len(file_limits)),
+            max_fields=max_fields,
+            max_text_part_size=_MULTIPART_TEXT_LIMIT_BYTES,
+        )
+    except AssertionError as exc:
+        raise ImportError("python-multipart") from exc
+    try:
+        return await parser.parse()
+    except _MultipartSizeLimitExceeded as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except MultiPartException as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _multipart_text_value(
-    parts: dict[str, list[dict[str, Any]]],
-    field_name: str,
-    *,
-    required: bool = False,
-) -> str | None:
-    part = _get_first_multipart_part(parts, field_name, required=required)
-    if part is None:
+def _multipart_file_value(form: FormData, field_name: str, *, required: bool = False) -> UploadFile | None:
+    value = form.get(field_name)
+    if value is None:
+        if required:
+            raise ValueError(f"Missing multipart field '{field_name}'.")
         return None
-    return bytes(part.get("content") or b"").decode("utf-8", errors="replace")
+    if not isinstance(value, UploadFile):
+        raise ValueError(f"Multipart field '{field_name}' must be a file upload.")
+    return value
+
+
+def _multipart_text_value(form: FormData, field_name: str, *, required: bool = False) -> str | None:
+    value = form.get(field_name)
+    if value is None:
+        if required:
+            raise ValueError(f"Missing multipart field '{field_name}'.")
+        return None
+    if isinstance(value, UploadFile):
+        raise ValueError(f"Multipart field '{field_name}' must be text.")
+    return str(value)
 
 
 @app.get("/health")
@@ -269,21 +334,47 @@ def model_packs() -> dict:
 
 
 @app.get("/loras")
-def loras() -> dict:
+def loras() -> JSONResponse:
     items = inference.list_loras()
-    return {
+    return JSONResponse(content={
         "items": items,
         "count": len(items),
         "capabilities": inference.lora_capabilities(),
-    }
+    }, headers=_NO_STORE_HEADERS)
+
+
+@app.get("/loras/events")
+async def lora_events(request: Request) -> StreamingResponse:
+    async def event_stream():
+        revision = _LORA_LIBRARY_EVENTS.current()
+        yield f"data: {revision}\n\n"
+        while True:
+            if await request.is_disconnected():
+                break
+            next_revision = await asyncio.to_thread(
+                _LORA_LIBRARY_EVENTS.wait_for_change,
+                revision,
+                20.0,
+            )
+            if next_revision != revision:
+                revision = next_revision
+                yield f"data: {revision}\n\n"
+                continue
+            yield ": keep-alive\n\n"
+
+    headers = {**_NO_STORE_HEADERS, "X-Accel-Buffering": "no"}
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 
 @app.post("/lora-drafts")
 async def lora_drafts_create(request: Request) -> dict:
-    content_type = str(request.headers.get("content-type") or "").strip()
+    form: FormData | None = None
     try:
-        filename, content = _parse_multipart_file_upload(content_type, await request.body())
-        draft = inference.create_lora_draft(filename=filename, content=content)
+        form = await _parse_multipart_form(request, file_limits={"file": _LORA_UPLOAD_LIMIT_BYTES}, max_fields=4)
+        upload = _multipart_file_value(form, "file", required=True)
+        draft = inference.create_lora_draft(filename=str(upload.filename or ""), content_file=upload.file)
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ImportError as exc:
@@ -291,6 +382,9 @@ async def lora_drafts_create(request: Request) -> dict:
     except Exception as exc:
         LOGGER.exception("Unhandled LoRA draft upload error.")
         raise HTTPException(status_code=500, detail="LoRA draft upload failed.") from exc
+    finally:
+        if form is not None:
+            await form.close()
     return {"status": "ok", "draft": draft}
 
 
@@ -307,19 +401,21 @@ def lora_draft_detect_triggers(draft_id: str) -> dict:
 
 @app.post("/loras")
 async def loras_create(request: Request) -> dict:
-    content_type = str(request.headers.get("content-type") or "").strip()
+    form: FormData | None = None
     try:
-        parts = _parse_multipart_parts(content_type, await request.body())
+        form = await _parse_multipart_form(request, file_limits={"thumbnail": _LORA_THUMBNAIL_LIMIT_BYTES}, max_fields=8)
+        thumbnail = _multipart_file_value(form, "thumbnail")
+        preview_content = None
+        if thumbnail is not None:
+            preview_content = bytes(thumbnail.file.read())
         item = inference.finalize_lora_draft(
-            draft_id=_multipart_text_value(parts, "draft_id", required=True),
-            display_name=_multipart_text_value(parts, "display_name", required=True),
-            trigger_words=_multipart_text_value(parts, "trigger_words"),
-            preview_content=(
-                bytes(_get_first_multipart_part(parts, "thumbnail").get("content") or b"")
-                if _get_first_multipart_part(parts, "thumbnail") is not None
-                else None
-            ),
+            draft_id=_multipart_text_value(form, "draft_id", required=True),
+            display_name=_multipart_text_value(form, "display_name", required=True),
+            trigger_words=_multipart_text_value(form, "trigger_words"),
+            preview_content=preview_content,
         )
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ImportError as exc:
@@ -327,6 +423,10 @@ async def loras_create(request: Request) -> dict:
     except Exception as exc:
         LOGGER.exception("Unhandled LoRA create error.")
         raise HTTPException(status_code=500, detail="LoRA save failed.") from exc
+    finally:
+        if form is not None:
+            await form.close()
+    _notify_lora_library_changed()
     return {
         "status": "ok",
         "item": item,
@@ -336,19 +436,21 @@ async def loras_create(request: Request) -> dict:
 
 @app.patch("/loras/{lora_id}")
 async def loras_update(lora_id: str, request: Request) -> dict:
-    content_type = str(request.headers.get("content-type") or "").strip()
+    form: FormData | None = None
     try:
-        parts = _parse_multipart_parts(content_type, await request.body())
+        form = await _parse_multipart_form(request, file_limits={"thumbnail": _LORA_THUMBNAIL_LIMIT_BYTES}, max_fields=6)
+        thumbnail = _multipart_file_value(form, "thumbnail")
+        preview_content = None
+        if thumbnail is not None:
+            preview_content = bytes(thumbnail.file.read())
         item = inference.update_lora(
             lora_id=lora_id,
-            display_name=_multipart_text_value(parts, "display_name", required=True),
-            trigger_words=_multipart_text_value(parts, "trigger_words"),
-            preview_content=(
-                bytes(_get_first_multipart_part(parts, "thumbnail").get("content") or b"")
-                if _get_first_multipart_part(parts, "thumbnail") is not None
-                else None
-            ),
+            display_name=_multipart_text_value(form, "display_name", required=True),
+            trigger_words=_multipart_text_value(form, "trigger_words"),
+            preview_content=preview_content,
         )
+    except HTTPException:
+        raise
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -358,6 +460,10 @@ async def loras_update(lora_id: str, request: Request) -> dict:
     except Exception as exc:
         LOGGER.exception("Unhandled LoRA update error.")
         raise HTTPException(status_code=500, detail="LoRA update failed.") from exc
+    finally:
+        if form is not None:
+            await form.close()
+    _notify_lora_library_changed()
     return {"status": "ok", "item": item}
 
 
@@ -369,7 +475,12 @@ def lora_preview(lora_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return FileResponse(preview_path, media_type="image/png", filename=preview_path.name)
+    return FileResponse(
+        preview_path,
+        media_type="image/png",
+        filename=preview_path.name,
+        headers=_NO_STORE_HEADERS,
+    )
 
 
 @app.delete("/loras/{lora_id}")
@@ -380,6 +491,7 @@ def lora_delete(lora_id: str) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _notify_lora_library_changed()
     return {"status": "ok", **result}
 
 
@@ -452,15 +564,16 @@ def upscale(
 ) -> dict:
     try:
         owner_id = _resolve_owner_id(x_justrayzist_client)
-        result = inference.upscale(
-            owner_id=owner_id,
-            filename=payload.filename,
-            pack_name=payload.pack,
-            job_id=payload.job_id,
-            seed=payload.seed,
-            scheduler_mode=payload.scheduler_mode,
-            enhance_prompt=payload.enhance_prompt,
-        )
+        upscale_kwargs: dict[str, object] = {
+            "owner_id": owner_id,
+            "filename": payload.filename,
+            "pack_name": payload.pack,
+            "job_id": payload.job_id,
+            "seed": payload.seed,
+            "scheduler_mode": payload.scheduler_mode,
+            "enhance_prompt": payload.enhance_prompt,
+        }
+        result = inference.upscale(**upscale_kwargs)
     except HTTPException:
         raise
     except GenerationCancelledError as exc:
@@ -592,6 +705,18 @@ def gallery_delete(
     }
 
 
+@app.post("/gallery/rebuild")
+def gallery_rebuild(
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> dict:
+    owner_id = _resolve_owner_id(x_justrayzist_client)
+    try:
+        result = inference.rebuild_gallery(owner_id=owner_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", **result}
+
+
 @app.delete("/images/{filename}")
 def image_delete(
     filename: str,
@@ -668,7 +793,7 @@ def index() -> FileResponse:
     index_path = Path(settings.paths.ui_dir) / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=500, detail=f"UI entry file not found: {index_path}")
-    return FileResponse(index_path, headers={"Cache-Control": "no-store"})
+    return FileResponse(index_path, headers=_NO_STORE_HEADERS)
 
 
 @app.get("/api", include_in_schema=False)
@@ -681,7 +806,7 @@ def api_docs_page() -> FileResponse:
     api_path = Path(settings.paths.ui_dir) / "api.html"
     if not api_path.exists():
         raise HTTPException(status_code=500, detail=f"API docs file not found: {api_path}")
-    return FileResponse(api_path, headers={"Cache-Control": "no-store"})
+    return FileResponse(api_path, headers=_NO_STORE_HEADERS)
 
 
 @app.get("/favicon.ico")

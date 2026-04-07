@@ -2,12 +2,9 @@
 
 ## Packaging Strategy
 
-The repository supports two Windows packaging flows:
+Release artifacts are bootstrap-only. They ship the app, scripts, and metadata without bundling Python/CUDA runtime payloads.
 
-- `bootstrap`: ships the app, scripts, and metadata without bundling Python/CUDA runtime payloads
-- `bundled`: adds PyInstaller one-dir binaries for the CLI and web entrypoints
-
-Model weights are not bundled in either mode. Packaged releases also include `UpdateApp.bat`, `scripts\update_release.ps1`, `release_manifest.json`, and the local README image assets so installs can update in place from GitHub releases.
+Model weights are not bundled in release artifacts. Packaged releases also include `UpdateApp.bat`, `scripts\update_release.ps1`, `release_manifest.json`, and the local README image assets so installs can update in place from GitHub releases.
 
 The packaged UX now matches source mode:
 
@@ -17,13 +14,12 @@ The packaged UX now matches source mode:
 
 ## Main Scripts
 
-- `scripts\pyinstaller\build_onedir.ps1`
 - `scripts\release\package_release.ps1`
 - `scripts\release\verify_repo_readiness.ps1`
 - `scripts\release\clean_legacy_artifacts.ps1`
 - `scripts\update_release.ps1`
 
-## Build One-Dir Binaries
+## Engineering-Only One-Dir Builds
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
@@ -35,24 +31,16 @@ Useful flags:
 - `-PythonExe C:\Path\To\python.exe`
 - `-SkipDependencyInstall`
 
-## Create a Bootstrap Release
+These outputs are for engineering validation only and are not shipped as release artifacts.
+
+## Create a Release
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bootstrap -Lane cu128 -Version v0.1.0 -Clean
-```
-
-## Create a Bundled Release
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Mode bundled -Lane cu128 -Version v0.1.0 -Clean
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Lane cu128 -Version v0.1.0 -Clean
 ```
 
 Useful flags:
 
-- `-UseActivePython`
-- `-SkipDependencyInstall`
-- `-SkipBuild`
-- `-IncludeCliBinary`
 - `-NoZip`
 
 ## Repository Readiness Check
@@ -97,4 +85,4 @@ Typical packaging outputs are written under `dist/`, including:
 
 - release folders such as `dist\JustRayzist_win64_cu128_v0.1.0_bootstrap`
 - optional zip archives for release distribution
-- PyInstaller one-dir build folders under `dist\pyinstaller\`
+- optional engineering-only PyInstaller build folders under `dist\pyinstaller\`

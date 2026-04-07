@@ -70,7 +70,11 @@ function Invoke-BestEffort {
 }
 
 $rootDir = (Resolve-Path (Join-Path $PSScriptRoot "..\\..")).Path
-$venvDir = [System.IO.Path]::GetFullPath((Join-Path $rootDir $BuildVenvDir))
+$resolvedBuildVenvDir = $BuildVenvDir
+if ((-not $PSBoundParameters.ContainsKey("BuildVenvDir")) -and $BuildVenvDir -eq ".build\\pyinstaller\\venv") {
+  $resolvedBuildVenvDir = Join-Path $BuildVenvDir $Lane
+}
+$venvDir = [System.IO.Path]::GetFullPath((Join-Path $rootDir $resolvedBuildVenvDir))
 $distBaseDir = [System.IO.Path]::GetFullPath((Join-Path $rootDir $DistRoot))
 $laneDistDir = Join-Path $distBaseDir $Lane
 $workDir = Join-Path $rootDir ".build\\pyinstaller\\work\\$Lane"
