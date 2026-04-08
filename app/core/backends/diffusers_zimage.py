@@ -2055,6 +2055,83 @@ class DiffusersZImageBackend:
         return tuple(matches)
 
     @classmethod
+    def _clause_contains_style_constraint(
+        cls,
+        clause: str,
+        style_constraints: tuple[str, ...],
+    ) -> bool:
+        lower_clause = clause.lower()
+        return any(style.lower() in lower_clause for style in style_constraints)
+
+    @classmethod
+    def _build_style_preserving_prompt_seed(cls, original_prompt: str) -> str | None:
+        clauses = cls._split_prompt_clauses(original_prompt)
+        if not clauses:
+            return None
+
+        style_constraints = cls._extract_style_constraints(original_prompt)
+        style_clauses = [
+            clause
+            for clause in clauses
+            if cls._clause_contains_style_constraint(clause, style_constraints)
+        ]
+        seeded: list[str] = []
+        seen: set[str] = set()
+
+        def push(part: str) -> None:
+            normalized = part.strip(" ,;:.")
+            if not normalized:
+                return
+            key = normalized.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            seeded.append(normalized)
+
+        push(clauses[0])
+        for clause in style_clauses:
+            push(clause)
+        for style in style_constraints:
+            if any(style.lower() in clause.lower() for clause in style_clauses):
+                continue
+            push(style)
+
+        if not seeded:
+            return None
+        return ", ".join(seeded)
+
+    @classmethod
+    def _truncate_prompt_to_token_budget(
+        cls,
+        *,
+        tokenizer: Any,
+        candidate_prompt: str,
+        max_tokens: int | None = None,
+    ) -> str | None:
+        budget = int(max_tokens or cls._PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET)
+        normalized = re.sub(r"\s+", " ", candidate_prompt).strip()
+        if not normalized:
+            return None
+
+        words = re.findall(r"\S+", normalized)
+        if not words:
+            return None
+
+        assembled: list[str] = []
+        best: str | None = None
+        for word in words:
+            trial = " ".join(assembled + [word]).strip()
+            try:
+                token_length = cls._pipeline_prompt_token_length(tokenizer, trial)
+            except Exception:
+                return trial
+            if token_length > budget:
+                break
+            assembled.append(word)
+            best = trial
+        return best
+
+    @classmethod
     def _compress_prompt_to_token_budget(
         cls,
         *,
@@ -2084,6 +2161,11 @@ class DiffusersZImageBackend:
         clauses = cls._split_prompt_clauses(candidate)
         if not clauses:
             return None
+        style_clauses = [
+            clause
+            for clause in clauses
+            if cls._clause_contains_style_constraint(clause, style_constraints)
+        ]
 
         prioritized: list[str] = []
         seen: set[str] = set()
@@ -2101,6 +2183,8 @@ class DiffusersZImageBackend:
         if prefix:
             push(prefix)
         push(clauses[0])
+        for clause in style_clauses:
+            push(clause)
         for clause in clauses[1:]:
             clause_lower = clause.lower()
             if any(keyword in clause_lower for keyword in cls._PROMPT_PRIORITY_KEYWORDS):
@@ -2152,7 +2236,32 @@ class DiffusersZImageBackend:
         )
         if fallback_original is not None:
             return fallback_original[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
-        return original_prompt[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
+
+        seeded_original = cls._build_style_preserving_prompt_seed(original_prompt)
+        if seeded_original is not None:
+            fallback_seeded = cls._compress_prompt_to_token_budget(
+                tokenizer=tokenizer,
+                original_prompt=original_prompt,
+                candidate_prompt=seeded_original,
+            )
+            if fallback_seeded is not None:
+                return fallback_seeded[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
+            truncated_seeded = cls._truncate_prompt_to_token_budget(
+                tokenizer=tokenizer,
+                candidate_prompt=seeded_original,
+            )
+            if truncated_seeded is not None:
+                return truncated_seeded[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
+
+        truncated_original = cls._truncate_prompt_to_token_budget(
+            tokenizer=tokenizer,
+            candidate_prompt=original_prompt,
+        )
+        if truncated_original is not None:
+            return truncated_original[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
+
+        normalized_original = re.sub(r"\s+", " ", original_prompt).strip()
+        return normalized_original[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
 
     @staticmethod
     @contextmanager
