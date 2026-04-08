@@ -20,6 +20,10 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 - fixes the library drawer pull tabs so LoRA and Wildcard drawers remain closable and clearly labeled when open
 
 <p align="center">
+  <img width="900" alt="Wildcard library preview" src="readme_images/wildcards_preview.png" />
+</p>
+
+<p align="center">
   <img width="900" alt="LoRA library preview" src="readme_images/lora_preview.png" />
 </p>
 
