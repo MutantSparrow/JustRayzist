@@ -70,6 +70,27 @@ class GenerationSession:
         self.stats.generation_count += 1
         return result
 
+    def suggest_wildcard_entries(
+        self,
+        *,
+        theme: str,
+        format_example: str,
+        seed: int | None = None,
+        existing_entries: list[str] | tuple[str, ...] | None = None,
+        target_count: int = 10,
+    ) -> dict[str, object]:
+        backend = self._ensure_backend()
+        suggest = getattr(backend, "suggest_wildcard_entries", None)
+        if not callable(suggest):
+            raise AttributeError("Active backend does not support wildcard suggestions.")
+        return suggest(
+            theme=theme,
+            format_example=format_example,
+            seed=seed,
+            existing_entries=existing_entries,
+            target_count=target_count,
+        )
+
     def cancel_active(self) -> None:
         if self._backend is None:
             return

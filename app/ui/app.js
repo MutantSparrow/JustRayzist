@@ -2,6 +2,7 @@ const topbarEl = document.querySelector(".topbar");
 const promptInputEl = document.getElementById("prompt-input");
 const generateButtonEl = document.getElementById("generate-button");
 const generateButtonLabelEl = document.getElementById("generate-button-label");
+const wildcardDrawerToggleEl = document.getElementById("wildcard-drawer-toggle");
 const loraDrawerToggleEl = document.getElementById("lora-drawer-toggle");
 const settingsButtonEl = document.getElementById("settings-button");
 const settingsPanelEl = document.getElementById("settings-panel");
@@ -54,6 +55,30 @@ const loraEditorThumbnailInputEl = document.getElementById("lora-editor-thumbnai
 const loraEditorTriggerChipsEl = document.getElementById("lora-editor-trigger-chips");
 const loraEditorTriggerInputEl = document.getElementById("lora-editor-trigger-input");
 const loraEditorSaveEl = document.getElementById("lora-editor-save");
+const wildcardDrawerBackdropEl = document.getElementById("wildcard-drawer-backdrop");
+const wildcardDrawerEl = document.getElementById("wildcard-drawer");
+const wildcardDrawerCapabilityEl = document.getElementById("wildcard-drawer-capability");
+const wildcardFilterInputEl = document.getElementById("wildcard-filter-input");
+const wildcardDrawerEmptyEl = document.getElementById("wildcard-drawer-empty");
+const wildcardListEl = document.getElementById("wildcard-list");
+const wildcardEditorModalEl = document.getElementById("wildcard-editor-modal");
+const wildcardEditorTitleEl = document.getElementById("wildcard-editor-title");
+const wildcardEditorNameEl = document.getElementById("wildcard-editor-name");
+const wildcardEditorTokenEl = document.getElementById("wildcard-editor-token");
+const wildcardEditorPlaceholderEl = document.getElementById("wildcard-editor-placeholder");
+const wildcardEditorValidationEl = document.getElementById("wildcard-editor-validation");
+const wildcardEditorGenerateButtonEl = document.getElementById("wildcard-editor-generate-button");
+const wildcardEditorContentEl = document.getElementById("wildcard-editor-content");
+const wildcardEditorCloseEl = document.getElementById("wildcard-editor-close");
+const wildcardEditorSaveEl = document.getElementById("wildcard-editor-save");
+const wildcardSuggestionModalEl = document.getElementById("wildcard-suggestion-modal");
+const wildcardSuggestionThemeEl = document.getElementById("wildcard-suggestion-theme");
+const wildcardSuggestionExampleEl = document.getElementById("wildcard-suggestion-example");
+const wildcardSuggestionGenerateEl = document.getElementById("wildcard-suggestion-generate");
+const wildcardSuggestionMessageEl = document.getElementById("wildcard-suggestion-message");
+const wildcardSuggestionListEl = document.getElementById("wildcard-suggestion-list");
+const wildcardSuggestionCloseEl = document.getElementById("wildcard-suggestion-close");
+const wildcardSuggestionApplyEl = document.getElementById("wildcard-suggestion-apply");
 const viewerModalEl = document.getElementById("viewer-modal");
 const viewerMetaEl = document.getElementById("viewer-meta");
 const viewerImageEl = document.getElementById("viewer-image");
@@ -83,6 +108,7 @@ const requiredUi = [
   ["prompt-input", promptInputEl],
   ["generate-button", generateButtonEl],
   ["generate-button-label", generateButtonLabelEl],
+  ["wildcard-drawer-toggle", wildcardDrawerToggleEl],
   ["lora-drawer-toggle", loraDrawerToggleEl],
   ["settings-button", settingsButtonEl],
   ["settings-panel", settingsPanelEl],
@@ -132,6 +158,30 @@ const requiredUi = [
   ["lora-editor-trigger-chips", loraEditorTriggerChipsEl],
   ["lora-editor-trigger-input", loraEditorTriggerInputEl],
   ["lora-editor-save", loraEditorSaveEl],
+  ["wildcard-drawer-backdrop", wildcardDrawerBackdropEl],
+  ["wildcard-drawer", wildcardDrawerEl],
+  ["wildcard-drawer-capability", wildcardDrawerCapabilityEl],
+  ["wildcard-filter-input", wildcardFilterInputEl],
+  ["wildcard-drawer-empty", wildcardDrawerEmptyEl],
+  ["wildcard-list", wildcardListEl],
+  ["wildcard-editor-modal", wildcardEditorModalEl],
+  ["wildcard-editor-title", wildcardEditorTitleEl],
+  ["wildcard-editor-name", wildcardEditorNameEl],
+  ["wildcard-editor-token", wildcardEditorTokenEl],
+  ["wildcard-editor-placeholder", wildcardEditorPlaceholderEl],
+  ["wildcard-editor-validation", wildcardEditorValidationEl],
+  ["wildcard-editor-generate-button", wildcardEditorGenerateButtonEl],
+  ["wildcard-editor-content", wildcardEditorContentEl],
+  ["wildcard-editor-close", wildcardEditorCloseEl],
+  ["wildcard-editor-save", wildcardEditorSaveEl],
+  ["wildcard-suggestion-modal", wildcardSuggestionModalEl],
+  ["wildcard-suggestion-theme", wildcardSuggestionThemeEl],
+  ["wildcard-suggestion-example", wildcardSuggestionExampleEl],
+  ["wildcard-suggestion-generate", wildcardSuggestionGenerateEl],
+  ["wildcard-suggestion-message", wildcardSuggestionMessageEl],
+  ["wildcard-suggestion-list", wildcardSuggestionListEl],
+  ["wildcard-suggestion-close", wildcardSuggestionCloseEl],
+  ["wildcard-suggestion-apply", wildcardSuggestionApplyEl],
   ["viewer-modal", viewerModalEl],
   ["viewer-meta", viewerMetaEl],
   ["viewer-image", viewerImageEl],
@@ -172,6 +222,7 @@ const GALLERY_COLOR_FILTERS = ["black", "white", "red", "yellow", "blue", "green
 const GALLERY_COLOR_CACHE_STATUS_MESSAGE = "Updating gallery color cache...";
 const GALLERY_COLOR_CACHE_POLL_INTERVAL_MS = 2500;
 const LORA_LIBRARY_POLL_INTERVAL_MS = 2500;
+const WILDCARD_LIBRARY_POLL_INTERVAL_MS = 2500;
 const LORA_MASONRY_SINGLE_COLUMN_BREAKPOINT_PX = 600;
 const GALLERY_SOFT_REMOVAL_DURATION_MS = 240;
 const TILE_ACTION_FX_DURATION_MS = 190;
@@ -287,6 +338,8 @@ const state = {
   galleryLoadRequestSeq: 0,
   loraLibraryLoadRequestSeq: 0,
   loraLibrarySignature: "",
+  wildcardLibraryLoadRequestSeq: 0,
+  wildcardLibrarySignature: "",
   zoom: 1.0,
   panX: 0,
   panY: 0,
@@ -351,6 +404,35 @@ const state = {
   loraEditorPreviewObjectUrl: null,
   loraEditorPreviewBlob: null,
   loraEditorBusy: false,
+  wildcardDrawerOpen: false,
+  wildcardLibrary: [],
+  wildcardFilter: "",
+  wildcardLibraryMasonryFrame: null,
+  wildcardLibraryPollTimer: null,
+  wildcardLibraryEventSource: null,
+  wildcardLibraryEventReconnectTimer: null,
+  wildcardCapabilities: {
+    supported: true,
+    active_pack: null,
+    suggestions_supported: false,
+  },
+  wildcardCopiedId: null,
+  wildcardCopyFeedbackTimer: null,
+  wildcardEditorOpen: false,
+  wildcardEditorMode: "create",
+  wildcardEditorId: null,
+  wildcardEditorDisplayName: "",
+  wildcardEditorToken: "",
+  wildcardEditorContentText: "",
+  wildcardEditorBusy: false,
+  wildcardSuggestionOpen: false,
+  wildcardSuggestionBusy: false,
+  wildcardSuggestionTheme: "",
+  wildcardSuggestionExample: "",
+  wildcardSuggestionItems: [],
+  wildcardSuggestionSeed: null,
+  wildcardSuggestionMessage: "",
+  wildcardSuggestionMessageIsError: false,
 };
 
 function randomSeed() {
@@ -662,6 +744,48 @@ function formatInitialLoraDisplayName(filename) {
     .trim();
 }
 
+function normalizeWildcardTokenForUi(rawToken) {
+  const text = String(rawToken || "").trim().toLowerCase();
+  const pieces = [];
+  for (const ch of text) {
+    if (/[a-z0-9]/.test(ch)) {
+      pieces.push(ch);
+      continue;
+    }
+    if ([" ", "_", "-", ".", ":"].includes(ch)) {
+      pieces.push("-");
+    }
+  }
+  const normalized = pieces.join("").replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
+  if (!normalized) {
+    throw new Error("Wildcard token is invalid.");
+  }
+  return normalized;
+}
+
+function wildcardPlaceholderForUi(rawToken) {
+  return `__${normalizeWildcardTokenForUi(rawToken)}__`;
+}
+
+function normalizeWildcardEntryValueForUi(rawValue) {
+  return String(rawValue || "").trim().replace(/\s+/g, " ");
+}
+
+function normalizeWildcardEntriesForUi(rawContent) {
+  return String(rawContent || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => normalizeWildcardEntryValueForUi(line))
+    .filter(Boolean);
+}
+
+function getWildcardById(wildcardId) {
+  const target = String(wildcardId || "").trim();
+  if (!target) return null;
+  return state.wildcardLibrary.find((item) => item.id === target) || null;
+}
+
 function loraEditorIsUploading() {
   return state.loraEditorPhase === "uploading" || state.loraEditorPhase === "analyzing";
 }
@@ -724,6 +848,9 @@ function setLoraDrawerOpen(open) {
   const next = Boolean(open);
   const wasOpen = state.loraDrawerOpen;
   const mobileOverlay = window.innerWidth <= 960;
+  if (next && state.wildcardDrawerOpen) {
+    setWildcardDrawerOpen(false);
+  }
   state.loraDrawerOpen = next;
   document.body.classList.toggle("lora-drawer-open", next && !mobileOverlay);
   loraDrawerEl.classList.toggle("open", next);
@@ -765,6 +892,20 @@ function parseImageLoras(item) {
     return item.loras;
   }
   const raw = String(item?.loras_json || "").trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function parseImageWildcards(item) {
+  if (Array.isArray(item?.wildcards)) {
+    return item.wildcards;
+  }
+  const raw = String(item?.wildcards_json || "").trim();
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -1723,6 +1864,789 @@ function cancelLoraEditor() {
   if (wasUploading) {
     setStatus("LoRA upload cancelled.");
   }
+}
+
+function clearWildcardCopyFeedback() {
+  if (state.wildcardCopyFeedbackTimer !== null) {
+    window.clearTimeout(state.wildcardCopyFeedbackTimer);
+    state.wildcardCopyFeedbackTimer = null;
+  }
+  if (state.wildcardCopiedId !== null) {
+    state.wildcardCopiedId = null;
+    renderWildcardLibrary();
+  }
+}
+
+function scheduleWildcardCopyFeedbackClear() {
+  if (state.wildcardCopyFeedbackTimer !== null) {
+    window.clearTimeout(state.wildcardCopyFeedbackTimer);
+  }
+  state.wildcardCopyFeedbackTimer = window.setTimeout(() => {
+    state.wildcardCopyFeedbackTimer = null;
+    state.wildcardCopiedId = null;
+    renderWildcardLibrary();
+  }, 1400);
+}
+
+function wildcardEditorValidationState() {
+  const displayName = String(state.wildcardEditorDisplayName || "").trim();
+  const rawToken = String(state.wildcardEditorToken || "");
+  const result = {
+    valid: false,
+    displayName,
+    normalizedToken: "",
+    placeholder: "",
+    contentText: "",
+    entries: [],
+    message: "",
+    isError: false,
+  };
+  if (!displayName) {
+    result.message = "Wildcard name is required.";
+    result.isError = true;
+    return result;
+  }
+  try {
+    result.normalizedToken = normalizeWildcardTokenForUi(rawToken);
+    result.placeholder = `__${result.normalizedToken}__`;
+  } catch (error) {
+    result.message = String(error?.message || error);
+    result.isError = true;
+    return result;
+  }
+  result.entries = normalizeWildcardEntriesForUi(state.wildcardEditorContentText);
+  result.contentText = result.entries.join("\n");
+  if (result.entries.length === 0) {
+    result.message = "Wildcard entries must include at least one non-empty line.";
+    result.isError = true;
+    return result;
+  }
+  result.valid = true;
+  result.message = `${result.entries.length} entr${result.entries.length === 1 ? "y" : "ies"} ready.`;
+  return result;
+}
+
+function updateWildcardEditorValidationUi() {
+  const validation = wildcardEditorValidationState();
+  wildcardEditorPlaceholderEl.textContent = validation.placeholder || "__...__";
+  wildcardEditorValidationEl.textContent = validation.message;
+  wildcardEditorValidationEl.classList.toggle("error", Boolean(validation.isError));
+  wildcardEditorSaveEl.disabled = state.wildcardEditorBusy || !validation.valid;
+  wildcardEditorSaveEl.textContent = state.wildcardEditorBusy ? "Saving..." : "Save Wildcard";
+  wildcardEditorGenerateButtonEl.disabled =
+    state.wildcardEditorBusy || !Boolean(state.wildcardCapabilities?.suggestions_supported);
+  return validation;
+}
+
+function updateWildcardCapabilityUi() {
+  const supported = Boolean(state.wildcardCapabilities?.supported);
+  const suggestionsSupported = Boolean(state.wildcardCapabilities?.suggestions_supported);
+  wildcardDrawerToggleEl.disabled = !supported;
+  wildcardDrawerCapabilityEl.classList.remove("error");
+  if (!supported) {
+    wildcardDrawerCapabilityEl.textContent = "Wildcards are unavailable for the current runtime.";
+    wildcardDrawerCapabilityEl.classList.add("error");
+  } else if (!suggestionsSupported) {
+    wildcardDrawerCapabilityEl.textContent = "Wildcard suggestions are unavailable for the current runtime.";
+  } else {
+    wildcardDrawerCapabilityEl.textContent = "";
+  }
+  wildcardEditorGenerateButtonEl.disabled = state.wildcardEditorBusy || !suggestionsSupported;
+  wildcardSuggestionGenerateEl.disabled = state.wildcardSuggestionBusy || !suggestionsSupported;
+  if (state.wildcardEditorOpen) {
+    updateWildcardEditorValidationUi();
+  }
+  if (state.wildcardSuggestionOpen) {
+    renderWildcardSuggestionList();
+  }
+}
+
+function setWildcardDrawerOpen(open) {
+  const next = Boolean(open);
+  const wasOpen = state.wildcardDrawerOpen;
+  const mobileOverlay = window.innerWidth <= 960;
+  if (next && state.loraDrawerOpen) {
+    setLoraDrawerOpen(false);
+  }
+  state.wildcardDrawerOpen = next;
+  document.body.classList.toggle("wildcard-drawer-open", next && !mobileOverlay);
+  wildcardDrawerEl.classList.toggle("open", next);
+  wildcardDrawerEl.setAttribute("aria-hidden", String(!next));
+  wildcardDrawerBackdropEl.classList.toggle("hidden", !next || !mobileOverlay);
+  wildcardDrawerBackdropEl.setAttribute("aria-hidden", String(!next || !mobileOverlay));
+  wildcardDrawerToggleEl.setAttribute("aria-expanded", String(next));
+  if (!next) {
+    stopWildcardLibraryPolling();
+    if (state.wildcardLibraryMasonryFrame !== null) {
+      window.cancelAnimationFrame(state.wildcardLibraryMasonryFrame);
+      state.wildcardLibraryMasonryFrame = null;
+    }
+  }
+  updateTopbarOffset();
+  if (next) {
+    wildcardFilterInputEl.focus();
+    if (!wasOpen) {
+      loadWildcardLibrary({ silent: true }).catch(() => {
+      });
+    }
+    scheduleWildcardLibraryPoll();
+    scheduleWildcardLibraryMasonryRelayout();
+  }
+}
+
+function createWildcardAddTile() {
+  const tile = document.createElement("button");
+  tile.type = "button";
+  tile.className = "lora-card lora-add-tile wildcard-add-tile";
+  tile.title = "Add a wildcard with a name, token, and multiline entries.";
+  const plus = document.createElement("span");
+  plus.className = "lora-add-plus";
+  plus.textContent = "+";
+  const body = document.createElement("div");
+  body.className = "lora-add-body";
+  const label = document.createElement("div");
+  label.className = "lora-add-label";
+  label.textContent = "ADD WILDCARD";
+  const hint = document.createElement("div");
+  hint.className = "lora-add-hint";
+  hint.textContent = "Create a reusable multiline prompt placeholder.";
+  body.append(label, hint);
+  tile.append(plus, body);
+  tile.addEventListener("click", () => {
+    if (!Boolean(state.wildcardCapabilities?.supported)) return;
+    openWildcardEditorForCreate();
+  });
+  return tile;
+}
+
+function getWildcardMasonryColumnCount() {
+  return window.innerWidth <= LORA_MASONRY_SINGLE_COLUMN_BREAKPOINT_PX ? 1 : 2;
+}
+
+function getWildcardMasonryOrder(element) {
+  return Number.parseInt(String(element?.dataset?.masonryOrder || "0"), 10) || 0;
+}
+
+function createWildcardMasonryColumns(columnCount) {
+  wildcardListEl.innerHTML = "";
+  wildcardListEl.style.setProperty("--lora-masonry-columns", String(columnCount));
+  const columns = [];
+  for (let index = 0; index < columnCount; index += 1) {
+    const column = document.createElement("div");
+    column.className = "lora-list-column";
+    column.dataset.columnIndex = String(index);
+    columns.push(column);
+  }
+  wildcardListEl.append(...columns);
+  return columns;
+}
+
+function appendToShortestWildcardMasonryColumn(item, columns, heights) {
+  if (columns.length === 0) return;
+  let targetIndex = 0;
+  for (let index = 1; index < heights.length; index += 1) {
+    if (heights[index] < heights[targetIndex]) {
+      targetIndex = index;
+    }
+  }
+  columns[targetIndex].append(item);
+  heights[targetIndex] = columns[targetIndex].scrollHeight;
+}
+
+function placeWildcardMasonryItems(items) {
+  const columnCount = getWildcardMasonryColumnCount();
+  const columns = createWildcardMasonryColumns(columnCount);
+  const heights = new Array(columnCount).fill(0);
+  items.forEach((item) => appendToShortestWildcardMasonryColumn(item, columns, heights));
+}
+
+function relayoutWildcardLibraryMasonry() {
+  const items = Array.from(wildcardListEl.querySelectorAll(".wildcard-card, .wildcard-add-tile"))
+    .sort((left, right) => getWildcardMasonryOrder(left) - getWildcardMasonryOrder(right));
+  if (items.length === 0) {
+    wildcardListEl.innerHTML = "";
+    wildcardListEl.style.setProperty("--lora-masonry-columns", String(getWildcardMasonryColumnCount()));
+    return;
+  }
+  placeWildcardMasonryItems(items);
+}
+
+function scheduleWildcardLibraryMasonryRelayout() {
+  if (state.wildcardLibraryMasonryFrame !== null) {
+    window.cancelAnimationFrame(state.wildcardLibraryMasonryFrame);
+  }
+  state.wildcardLibraryMasonryFrame = window.requestAnimationFrame(() => {
+    state.wildcardLibraryMasonryFrame = null;
+    relayoutWildcardLibraryMasonry();
+  });
+}
+
+function createWildcardLibraryCard(item, order) {
+  const displayName = String(item?.display_name || item?.token || "").trim() || "Unnamed Wildcard";
+  const placeholder = String(item?.placeholder || wildcardPlaceholderForUi(item?.token || "")).trim();
+  const card = document.createElement("article");
+  card.className = "wildcard-card";
+  card.dataset.wildcardId = String(item.id || "");
+  card.dataset.masonryOrder = String(order);
+  card.classList.toggle("copied", state.wildcardCopiedId === item.id);
+  card.title = `${displayName}\nClick to copy ${placeholder}`;
+
+  const topRow = document.createElement("div");
+  topRow.className = "wildcard-card-top-row";
+  const name = document.createElement("div");
+  name.className = "wildcard-card-name";
+  name.textContent = displayName;
+  topRow.append(name);
+
+  const actions = document.createElement("div");
+  actions.className = "lora-card-actions";
+
+  const editButton = document.createElement("button");
+  editButton.type = "button";
+  editButton.className = "lora-card-icon-button";
+  editButton.title = "Edit wildcard";
+  editButton.setAttribute("aria-label", "Edit wildcard");
+  editButton.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10-10-4-4L4 16v4"></path><path d="M13 7l4 4"></path></svg>';
+  editButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openWildcardEditorForItem(item);
+  });
+
+  const deleteButton = document.createElement("button");
+  deleteButton.type = "button";
+  deleteButton.className = "lora-card-icon-button danger";
+  deleteButton.title = "Delete wildcard";
+  deleteButton.setAttribute("aria-label", "Delete wildcard");
+  deleteButton.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V5h6v2"></path><path d="M7 7l1 12h8l1-12"></path><path d="M10 10v6"></path><path d="M14 10v6"></path></svg>';
+  deleteButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    showConfirmModal(
+      `Delete wildcard \"${displayName}\"? This cannot be undone.`,
+      async () => {
+        await deleteWildcardById(item.id);
+      },
+      "Delete",
+      "Cancel"
+    );
+  });
+  actions.append(editButton, deleteButton);
+  topRow.append(actions);
+
+  const token = document.createElement("code");
+  token.className = "wildcard-card-token";
+  token.textContent = placeholder;
+
+  const meta = document.createElement("div");
+  meta.className = "wildcard-card-meta";
+  const lineCount = document.createElement("span");
+  const entryCount = Number(item?.entry_count || normalizeWildcardEntriesForUi(item?.content_text || "").length || 0);
+  lineCount.textContent = `${entryCount} entr${entryCount === 1 ? "y" : "ies"}`;
+  meta.append(lineCount);
+  if (state.wildcardCopiedId === item.id) {
+    const copied = document.createElement("span");
+    copied.className = "wildcard-card-copy-state";
+    copied.textContent = "Copied";
+    meta.append(copied);
+  }
+
+  const preview = document.createElement("pre");
+  preview.className = "wildcard-card-preview";
+  preview.textContent = normalizeWildcardEntriesForUi(item?.content_text || "").slice(0, 4).join("\n");
+
+  card.append(topRow, token, meta, preview);
+  card.addEventListener("click", async () => {
+    const copied = await copyTextToClipboard(placeholder);
+    if (!copied) {
+      setStatus("Failed to copy wildcard placeholder.", true);
+      return;
+    }
+    state.wildcardCopiedId = item.id;
+    renderWildcardLibrary();
+    scheduleWildcardCopyFeedbackClear();
+    setStatus(`${placeholder} copied to clipboard.`);
+  });
+  return card;
+}
+
+function buildWildcardLibrarySignature(items, capabilities) {
+  const normalizedItems = (Array.isArray(items) ? items : []).map((item) => ({
+    id: String(item?.id || ""),
+    display_name: String(item?.display_name || ""),
+    token: String(item?.token || ""),
+    placeholder: String(item?.placeholder || ""),
+    content_text: String(item?.content_text || ""),
+    entry_count: Number(item?.entry_count || 0),
+    created_at: String(item?.created_at || ""),
+    updated_at: String(item?.updated_at || ""),
+  }));
+  const normalizedCapabilities = {
+    supported: Boolean(capabilities?.supported),
+    active_pack: String(capabilities?.active_pack || ""),
+    suggestions_supported: Boolean(capabilities?.suggestions_supported),
+  };
+  return JSON.stringify({ items: normalizedItems, capabilities: normalizedCapabilities });
+}
+
+function renderWildcardLibrary() {
+  try {
+    const filterValue = String(state.wildcardFilter || "").trim().toLowerCase();
+    const filteredItems = state.wildcardLibrary.filter((item) => {
+      if (!filterValue) return true;
+      const haystack = `${item.display_name || ""} ${item.token || ""} ${item.placeholder || ""}`.toLowerCase();
+      return haystack.includes(filterValue);
+    });
+    const items = [];
+    const addTile = createWildcardAddTile();
+    addTile.dataset.masonryOrder = "0";
+    items.push(addTile);
+    if (filteredItems.length === 0) {
+      wildcardDrawerEmptyEl.classList.remove("hidden");
+      wildcardDrawerEmptyEl.textContent =
+        state.wildcardLibrary.length === 0
+          ? "No wildcards installed yet."
+          : "No wildcards match the current filter.";
+    } else {
+      wildcardDrawerEmptyEl.classList.add("hidden");
+    }
+    filteredItems.forEach((item, index) => {
+      items.push(createWildcardLibraryCard(item, index + 1));
+    });
+    placeWildcardMasonryItems(items);
+    scheduleWildcardLibraryMasonryRelayout();
+  } catch (error) {
+    if (state.wildcardLibraryMasonryFrame !== null) {
+      window.cancelAnimationFrame(state.wildcardLibraryMasonryFrame);
+      state.wildcardLibraryMasonryFrame = null;
+    }
+    wildcardListEl.innerHTML = "";
+    wildcardListEl.style.setProperty("--lora-masonry-columns", "1");
+    wildcardDrawerEmptyEl.classList.remove("hidden");
+    wildcardDrawerEmptyEl.textContent = "Failed to render the wildcard library.";
+    setStatus(`Failed to render wildcards: ${String(error?.message || error)}`, true);
+  }
+}
+
+async function loadWildcardLibrary(options = {}) {
+  const requestId = state.wildcardLibraryLoadRequestSeq + 1;
+  state.wildcardLibraryLoadRequestSeq = requestId;
+  const query = new URLSearchParams({ _: String(Date.now()) });
+  const response = await apiFetch(`/wildcards?${query.toString()}`, { cache: "no-store" });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_) {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(formatApiError(payload, "Failed to load wildcards."));
+  }
+  if (requestId !== state.wildcardLibraryLoadRequestSeq) {
+    return;
+  }
+  const nextLibrary = Array.isArray(payload?.items) ? payload.items : [];
+  const nextCapabilities = payload?.capabilities || state.wildcardCapabilities;
+  const nextSignature = buildWildcardLibrarySignature(nextLibrary, nextCapabilities);
+  if (nextSignature === state.wildcardLibrarySignature) {
+    return;
+  }
+  state.wildcardLibrary = nextLibrary;
+  state.wildcardCapabilities = nextCapabilities;
+  state.wildcardLibrarySignature = nextSignature;
+  if (state.wildcardCopiedId && !state.wildcardLibrary.some((item) => item.id === state.wildcardCopiedId)) {
+    clearWildcardCopyFeedback();
+  }
+  updateWildcardCapabilityUi();
+  renderWildcardLibrary();
+}
+
+function stopWildcardLibraryPolling() {
+  if (state.wildcardLibraryPollTimer === null) return;
+  window.clearTimeout(state.wildcardLibraryPollTimer);
+  state.wildcardLibraryPollTimer = null;
+}
+
+function scheduleWildcardLibraryPoll() {
+  if (!state.wildcardDrawerOpen || document.hidden) {
+    stopWildcardLibraryPolling();
+    return;
+  }
+  if (state.wildcardLibraryPollTimer !== null) {
+    return;
+  }
+  state.wildcardLibraryPollTimer = window.setTimeout(async () => {
+    state.wildcardLibraryPollTimer = null;
+    try {
+      await loadWildcardLibrary({ silent: true });
+    } catch (_) {
+    } finally {
+      if (state.wildcardDrawerOpen && !document.hidden) {
+        scheduleWildcardLibraryPoll();
+      }
+    }
+  }, WILDCARD_LIBRARY_POLL_INTERVAL_MS);
+}
+
+function stopWildcardLibraryEventStream() {
+  if (state.wildcardLibraryEventReconnectTimer !== null) {
+    window.clearTimeout(state.wildcardLibraryEventReconnectTimer);
+    state.wildcardLibraryEventReconnectTimer = null;
+  }
+  if (state.wildcardLibraryEventSource === null) {
+    return;
+  }
+  const source = state.wildcardLibraryEventSource;
+  state.wildcardLibraryEventSource = null;
+  source.onmessage = null;
+  source.onerror = null;
+  try {
+    source.close();
+  } catch (_) {
+  }
+}
+
+function scheduleWildcardLibraryEventReconnect() {
+  if (state.wildcardLibraryEventSource !== null || state.wildcardLibraryEventReconnectTimer !== null) {
+    return;
+  }
+  state.wildcardLibraryEventReconnectTimer = window.setTimeout(() => {
+    state.wildcardLibraryEventReconnectTimer = null;
+    startWildcardLibraryEventStream();
+  }, 3000);
+}
+
+function startWildcardLibraryEventStream() {
+  if (typeof window.EventSource !== "function") {
+    return;
+  }
+  if (state.wildcardLibraryEventReconnectTimer !== null) {
+    window.clearTimeout(state.wildcardLibraryEventReconnectTimer);
+    state.wildcardLibraryEventReconnectTimer = null;
+  }
+  if (state.wildcardLibraryEventSource !== null) {
+    return;
+  }
+  const source = new window.EventSource("/wildcards/events");
+  state.wildcardLibraryEventSource = source;
+  source.onmessage = () => {
+    loadWildcardLibrary({ silent: true }).catch(() => {
+    });
+  };
+  source.onerror = () => {
+    if (state.wildcardLibraryEventSource !== source) {
+      return;
+    }
+    state.wildcardLibraryEventSource = null;
+    source.onmessage = null;
+    source.onerror = null;
+    try {
+      source.close();
+    } catch (_) {
+    }
+    scheduleWildcardLibraryEventReconnect();
+  };
+}
+
+function renderWildcardEditor() {
+  wildcardEditorTitleEl.textContent = state.wildcardEditorMode === "edit" ? "EDIT WILDCARD" : "ADD WILDCARD";
+  wildcardEditorNameEl.value = state.wildcardEditorDisplayName || "";
+  wildcardEditorTokenEl.value = state.wildcardEditorToken || "";
+  wildcardEditorContentEl.value = state.wildcardEditorContentText || "";
+  wildcardEditorNameEl.disabled = state.wildcardEditorBusy;
+  wildcardEditorTokenEl.disabled = state.wildcardEditorBusy;
+  wildcardEditorContentEl.disabled = state.wildcardEditorBusy;
+  wildcardEditorCloseEl.disabled = state.wildcardEditorBusy;
+  updateWildcardEditorValidationUi();
+}
+
+function setWildcardEditorOpen(open) {
+  const next = Boolean(open);
+  state.wildcardEditorOpen = next;
+  wildcardEditorModalEl.classList.toggle("hidden", !next);
+  wildcardEditorModalEl.setAttribute("aria-hidden", String(!next));
+  if (next) {
+    renderWildcardEditor();
+    wildcardEditorNameEl.focus();
+  }
+}
+
+function closeWildcardEditor() {
+  state.wildcardEditorOpen = false;
+  state.wildcardEditorMode = "create";
+  state.wildcardEditorId = null;
+  state.wildcardEditorDisplayName = "";
+  state.wildcardEditorToken = "";
+  state.wildcardEditorContentText = "";
+  state.wildcardEditorBusy = false;
+  wildcardEditorModalEl.classList.add("hidden");
+  wildcardEditorModalEl.setAttribute("aria-hidden", "true");
+  closeWildcardSuggestionModal({ preserveDraft: false });
+}
+
+function openWildcardEditorForCreate() {
+  state.wildcardEditorMode = "create";
+  state.wildcardEditorId = null;
+  state.wildcardEditorDisplayName = "";
+  state.wildcardEditorToken = "";
+  state.wildcardEditorContentText = "";
+  state.wildcardEditorBusy = false;
+  setWildcardEditorOpen(true);
+}
+
+function openWildcardEditorForItem(item) {
+  state.wildcardEditorMode = "edit";
+  state.wildcardEditorId = String(item?.id || "").trim();
+  state.wildcardEditorDisplayName = String(item?.display_name || "").trim();
+  state.wildcardEditorToken = String(item?.token || "").trim();
+  state.wildcardEditorContentText = String(item?.content_text || "").replace(/\r\n/g, "\n");
+  state.wildcardEditorBusy = false;
+  setWildcardEditorOpen(true);
+}
+
+async function saveWildcardEditor() {
+  const validation = wildcardEditorValidationState();
+  if (!validation.valid) {
+    renderWildcardEditor();
+    setStatus(validation.message || "Wildcard is invalid.", true);
+    return false;
+  }
+  state.wildcardEditorBusy = true;
+  renderWildcardEditor();
+  try {
+    const mode = state.wildcardEditorMode;
+    const response = await apiFetch(
+      mode === "edit" && state.wildcardEditorId
+        ? `/wildcards/${encodeURIComponent(state.wildcardEditorId)}`
+        : "/wildcards",
+      {
+        method: mode === "edit" ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          display_name: validation.displayName,
+          token: validation.normalizedToken,
+          content_text: validation.contentText,
+        }),
+      }
+    );
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(
+        formatApiError(
+          payload,
+          mode === "edit" ? "Failed to update wildcard." : "Failed to save wildcard."
+        )
+      );
+    }
+    await loadWildcardLibrary();
+    closeWildcardEditor();
+    setWildcardDrawerOpen(true);
+    setStatus(
+      mode === "edit"
+        ? `Updated ${payload?.item?.display_name || validation.displayName}.`
+        : `Saved ${payload?.item?.display_name || validation.displayName}.`
+    );
+    return true;
+  } catch (error) {
+    setStatus(String(error?.message || error), true);
+    return false;
+  } finally {
+    state.wildcardEditorBusy = false;
+    if (state.wildcardEditorOpen) {
+      renderWildcardEditor();
+    }
+  }
+}
+
+async function deleteWildcardById(wildcardId) {
+  const target = String(wildcardId || "").trim();
+  if (!target) return false;
+  const response = await apiFetch(`/wildcards/${encodeURIComponent(target)}`, { method: "DELETE" });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_) {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(formatApiError(payload, "Failed to delete wildcard."));
+  }
+  state.wildcardLibrary = state.wildcardLibrary.filter((item) => item.id !== target);
+  if (state.wildcardCopiedId === target) {
+    clearWildcardCopyFeedback();
+  }
+  renderWildcardLibrary();
+  setStatus(`Deleted wildcard ${target}.`);
+  return true;
+}
+
+function renderWildcardSuggestionList() {
+  wildcardSuggestionMessageEl.textContent = state.wildcardSuggestionMessage || "";
+  wildcardSuggestionMessageEl.classList.toggle("error", Boolean(state.wildcardSuggestionMessageIsError));
+  wildcardSuggestionThemeEl.value = state.wildcardSuggestionTheme || "";
+  wildcardSuggestionExampleEl.value = state.wildcardSuggestionExample || "";
+  wildcardSuggestionThemeEl.disabled = state.wildcardSuggestionBusy;
+  wildcardSuggestionExampleEl.disabled = state.wildcardSuggestionBusy;
+  wildcardSuggestionGenerateEl.disabled =
+    state.wildcardSuggestionBusy || !Boolean(state.wildcardCapabilities?.suggestions_supported);
+  wildcardSuggestionGenerateEl.textContent = state.wildcardSuggestionBusy ? "Generating..." : "Generate 10";
+  const selectedCount = state.wildcardSuggestionItems.filter((item) => item.selected).length;
+  wildcardSuggestionApplyEl.disabled = state.wildcardSuggestionBusy || selectedCount === 0;
+  wildcardSuggestionCloseEl.disabled = state.wildcardSuggestionBusy;
+  wildcardSuggestionListEl.innerHTML = "";
+  if (state.wildcardSuggestionItems.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "wildcard-suggestion-empty";
+    empty.textContent = "No suggestions yet. Enter a theme and format example, then generate.";
+    wildcardSuggestionListEl.append(empty);
+    return;
+  }
+  state.wildcardSuggestionItems.forEach((item, index) => {
+    const row = document.createElement("label");
+    row.className = "wildcard-suggestion-item";
+    row.classList.toggle("selected", Boolean(item.selected));
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = Boolean(item.selected);
+    checkbox.addEventListener("click", (event) => event.stopPropagation());
+    checkbox.addEventListener("change", () => {
+      state.wildcardSuggestionItems[index] = { ...item, selected: checkbox.checked };
+      renderWildcardSuggestionList();
+    });
+    const value = document.createElement("span");
+    value.className = "wildcard-suggestion-value";
+    value.textContent = item.value;
+    row.append(checkbox, value);
+    row.addEventListener("click", (event) => {
+      if (event.target === checkbox) return;
+      state.wildcardSuggestionItems[index] = { ...item, selected: !item.selected };
+      renderWildcardSuggestionList();
+    });
+    wildcardSuggestionListEl.append(row);
+  });
+}
+
+function setWildcardSuggestionOpen(open) {
+  const next = Boolean(open);
+  state.wildcardSuggestionOpen = next;
+  wildcardSuggestionModalEl.classList.toggle("hidden", !next);
+  wildcardSuggestionModalEl.setAttribute("aria-hidden", String(!next));
+  if (next) {
+    renderWildcardSuggestionList();
+    if (!state.wildcardSuggestionTheme) {
+      wildcardSuggestionThemeEl.focus();
+    } else {
+      wildcardSuggestionExampleEl.focus();
+    }
+  }
+}
+
+function closeWildcardSuggestionModal(options = {}) {
+  const preserveDraft = options.preserveDraft !== false;
+  state.wildcardSuggestionOpen = false;
+  state.wildcardSuggestionBusy = false;
+  wildcardSuggestionModalEl.classList.add("hidden");
+  wildcardSuggestionModalEl.setAttribute("aria-hidden", "true");
+  if (!preserveDraft) {
+    state.wildcardSuggestionTheme = "";
+    state.wildcardSuggestionExample = "";
+    state.wildcardSuggestionItems = [];
+    state.wildcardSuggestionSeed = null;
+    state.wildcardSuggestionMessage = "";
+    state.wildcardSuggestionMessageIsError = false;
+  }
+}
+
+function openWildcardSuggestionModal() {
+  state.wildcardSuggestionMessage = "";
+  state.wildcardSuggestionMessageIsError = false;
+  setWildcardSuggestionOpen(true);
+}
+
+async function requestWildcardSuggestions() {
+  if (!Boolean(state.wildcardCapabilities?.suggestions_supported)) {
+    state.wildcardSuggestionMessage = "Wildcard suggestions are unavailable for the current runtime.";
+    state.wildcardSuggestionMessageIsError = true;
+    renderWildcardSuggestionList();
+    return false;
+  }
+  const theme = String(state.wildcardSuggestionTheme || "").trim();
+  const formatExample = String(state.wildcardSuggestionExample || "").trim();
+  if (!theme || !formatExample) {
+    state.wildcardSuggestionMessage = "Theme and format example are required.";
+    state.wildcardSuggestionMessageIsError = true;
+    renderWildcardSuggestionList();
+    return false;
+  }
+  state.wildcardSuggestionBusy = true;
+  state.wildcardSuggestionMessage = "";
+  state.wildcardSuggestionMessageIsError = false;
+  renderWildcardSuggestionList();
+  try {
+    const response = await apiFetch("/wildcards/suggestions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        theme,
+        format_example: formatExample,
+        existing_entries: normalizeWildcardEntriesForUi(state.wildcardEditorContentText),
+        seed: state.freezeSeed ? resolveSeedForGeneration() : null,
+      }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(formatApiError(payload, "Failed to generate wildcard suggestions."));
+    }
+    const suggestions = Array.isArray(payload?.suggestions) ? payload.suggestions : [];
+    state.wildcardSuggestionSeed = payload?.seed ?? null;
+    state.wildcardSuggestionItems = suggestions.map((value) => ({ value: String(value || ""), selected: false }));
+    state.wildcardSuggestionMessage =
+      payload?.message
+      || `Generated ${suggestions.length} suggestion${suggestions.length === 1 ? "" : "s"}.`;
+    state.wildcardSuggestionMessageIsError = false;
+    renderWildcardSuggestionList();
+    return true;
+  } catch (error) {
+    state.wildcardSuggestionItems = [];
+    state.wildcardSuggestionMessage = String(error?.message || error);
+    state.wildcardSuggestionMessageIsError = true;
+    renderWildcardSuggestionList();
+    return false;
+  } finally {
+    state.wildcardSuggestionBusy = false;
+    renderWildcardSuggestionList();
+  }
+}
+
+function applySelectedWildcardSuggestions() {
+  const selectedValues = state.wildcardSuggestionItems
+    .filter((item) => item.selected)
+    .map((item) => normalizeWildcardEntryValueForUi(item.value))
+    .filter(Boolean);
+  if (selectedValues.length === 0) {
+    setStatus("Select at least one suggestion first.", true);
+    return false;
+  }
+  const existingEntries = normalizeWildcardEntriesForUi(state.wildcardEditorContentText);
+  const existingSet = new Set(existingEntries.map((item) => item.toLowerCase()));
+  let added = 0;
+  for (const value of selectedValues) {
+    const key = value.toLowerCase();
+    if (existingSet.has(key)) continue;
+    existingEntries.push(value);
+    existingSet.add(key);
+    added += 1;
+  }
+  if (added === 0) {
+    setStatus("Selected suggestions are already in this wildcard.", true);
+    return false;
+  }
+  state.wildcardEditorContentText = existingEntries.join("\n");
+  renderWildcardEditor();
+  closeWildcardSuggestionModal();
+  setWildcardEditorOpen(true);
+  setStatus(`Added ${added} suggestion${added === 1 ? "" : "s"} to the wildcard.`);
+  return true;
 }
 
 function setSettingsVisible(visible) {
@@ -2857,9 +3781,16 @@ function applyViewerItemMeta(item) {
     const promptDisplay = state.viewerPromptExpanded ? promptText : shortPrompt(promptText, 140);
     const promptTitle = state.viewerPromptExpanded ? "Click to collapse prompt" : "Click to expand prompt";
     const loras = parseImageLoras(item);
+    const wildcards = parseImageWildcards(item);
     const loraLabel =
       loras.length > 0
         ? loras.map((entry) => `${entry.name || entry.id} ${formatLoraWeight(entry.weight)}`).join(", ")
+        : "";
+    const wildcardLabel =
+      wildcards.length > 0
+        ? wildcards
+          .map((entry) => `${entry.placeholder || `__${entry.token || "wildcard"}__`} -> ${entry.selected_entry || ""}`)
+          .join(", ")
         : "";
     viewerMetaEl.classList.toggle("expanded", state.viewerPromptExpanded);
     const parts = [
@@ -2874,6 +3805,10 @@ function applyViewerItemMeta(item) {
     if (loraLabel) {
       parts.push('<span class="viewer-meta-sep">|</span>');
       parts.push(`<span>${escapeHtml(loraLabel)}</span>`);
+    }
+    if (wildcardLabel) {
+      parts.push('<span class="viewer-meta-sep">|</span>');
+      parts.push(`<span>${escapeHtml(`Wildcards ${wildcardLabel}`)}</span>`);
     }
     viewerMetaEl.innerHTML = parts.join(" ");
   }
@@ -4205,10 +5140,24 @@ async function bootstrap() {
       renderLoraLibrary();
       setStatus(String(error?.message || error), true);
     }
+    try {
+      await loadWildcardLibrary({ silent: true });
+    } catch (error) {
+      state.wildcardLibrary = [];
+      state.wildcardCapabilities = {
+        supported: true,
+        active_pack: null,
+        suggestions_supported: false,
+      };
+      updateWildcardCapabilityUi();
+      renderWildcardLibrary();
+      setStatus(String(error?.message || error), true);
+    }
     updateSettingsSummary();
     updateViewerNavState();
     updateGenerateButtonState();
     startLoraLibraryEventStream();
+    startWildcardLibraryEventStream();
     await loadImages();
     await refreshClientJobState();
     if (state.queue.length > 0 || state.activeJob) {
@@ -4225,6 +5174,11 @@ async function bootstrap() {
 }
 
 settingsButtonEl.addEventListener("click", toggleSettingsVisible);
+wildcardDrawerToggleEl.addEventListener("click", () => {
+  if (wildcardDrawerToggleEl.disabled) return;
+  renderWildcardLibrary();
+  setWildcardDrawerOpen(!state.wildcardDrawerOpen);
+});
 loraDrawerToggleEl.addEventListener("click", () => {
   if (loraDrawerToggleEl.disabled) return;
   state.loraPendingSelections = cloneLoraSelections(
@@ -4232,6 +5186,13 @@ loraDrawerToggleEl.addEventListener("click", () => {
   );
   renderLoraLibrary();
   setLoraDrawerOpen(!state.loraDrawerOpen);
+});
+wildcardDrawerBackdropEl.addEventListener("click", () => {
+  setWildcardDrawerOpen(false);
+});
+wildcardFilterInputEl.addEventListener("input", () => {
+  state.wildcardFilter = String(wildcardFilterInputEl.value || "");
+  renderWildcardLibrary();
 });
 loraDrawerCloseEl.addEventListener("click", () => {
   applyPendingLoras({ closeDrawer: true });
@@ -4290,6 +5251,61 @@ loraEditorTriggerInputEl.addEventListener("keydown", (event) => {
 loraEditorSaveEl.addEventListener("click", () => {
   saveLoraEditor().catch((error) => setStatus(String(error?.message || error), true));
 });
+wildcardEditorCloseEl.addEventListener("click", () => {
+  if (state.wildcardEditorBusy) return;
+  closeWildcardEditor();
+});
+wildcardEditorModalEl.addEventListener("click", (event) => {
+  if (event.target !== wildcardEditorModalEl) return;
+  event.preventDefault();
+});
+wildcardEditorNameEl.addEventListener("input", () => {
+  state.wildcardEditorDisplayName = String(wildcardEditorNameEl.value || "");
+  updateWildcardEditorValidationUi();
+});
+wildcardEditorTokenEl.addEventListener("input", () => {
+  state.wildcardEditorToken = String(wildcardEditorTokenEl.value || "");
+  updateWildcardEditorValidationUi();
+});
+wildcardEditorContentEl.addEventListener("input", () => {
+  state.wildcardEditorContentText = String(wildcardEditorContentEl.value || "");
+  updateWildcardEditorValidationUi();
+});
+wildcardEditorGenerateButtonEl.addEventListener("click", () => {
+  if (!Boolean(state.wildcardCapabilities?.suggestions_supported)) {
+    setStatus("Wildcard suggestions are unavailable for the current runtime.", true);
+    return;
+  }
+  openWildcardSuggestionModal();
+});
+wildcardEditorSaveEl.addEventListener("click", () => {
+  saveWildcardEditor().catch((error) => setStatus(String(error?.message || error), true));
+});
+wildcardSuggestionModalEl.addEventListener("click", (event) => {
+  if (event.target !== wildcardSuggestionModalEl) return;
+  event.preventDefault();
+});
+wildcardSuggestionCloseEl.addEventListener("click", () => {
+  if (state.wildcardSuggestionBusy) return;
+  closeWildcardSuggestionModal();
+});
+wildcardSuggestionThemeEl.addEventListener("input", () => {
+  state.wildcardSuggestionTheme = String(wildcardSuggestionThemeEl.value || "");
+});
+wildcardSuggestionExampleEl.addEventListener("input", () => {
+  state.wildcardSuggestionExample = String(wildcardSuggestionExampleEl.value || "");
+});
+wildcardSuggestionGenerateEl.addEventListener("click", () => {
+  requestWildcardSuggestions().catch((error) => {
+    state.wildcardSuggestionMessage = String(error?.message || error);
+    state.wildcardSuggestionMessageIsError = true;
+    state.wildcardSuggestionBusy = false;
+    renderWildcardSuggestionList();
+  });
+});
+wildcardSuggestionApplyEl.addEventListener("click", () => {
+  applySelectedWildcardSuggestions();
+});
 generateButtonEl.addEventListener("click", () => {
   enqueueGenerationFromPrompt();
 });
@@ -4330,6 +5346,10 @@ promptInputEl.addEventListener("input", updateTopbarOffset);
 promptInputEl.addEventListener("mouseup", updateTopbarOffset);
 promptInputEl.addEventListener("touchend", updateTopbarOffset);
 window.addEventListener("resize", () => {
+  if (state.wildcardDrawerOpen) {
+    setWildcardDrawerOpen(true);
+    scheduleWildcardLibraryMasonryRelayout();
+  }
   if (state.loraDrawerOpen) {
     setLoraDrawerOpen(true);
     scheduleLoraLibraryMasonryRelayout();
@@ -4338,12 +5358,20 @@ window.addEventListener("resize", () => {
   scheduleGalleryRelayout({ animate: true });
 });
 window.addEventListener("focus", () => {
+  loadWildcardLibrary({ silent: true }).catch(() => {
+  });
+  startWildcardLibraryEventStream();
+  scheduleWildcardLibraryPoll();
   loadLoraLibrary({ refreshSummary: false, silent: true }).catch(() => {
   });
   startLoraLibraryEventStream();
   scheduleLoraLibraryPoll();
 });
 window.addEventListener("pageshow", () => {
+  loadWildcardLibrary({ silent: true }).catch(() => {
+  });
+  startWildcardLibraryEventStream();
+  scheduleWildcardLibraryPoll();
   loadLoraLibrary({ refreshSummary: false, silent: true }).catch(() => {
   });
   startLoraLibraryEventStream();
@@ -4351,15 +5379,22 @@ window.addEventListener("pageshow", () => {
 });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
+    stopWildcardLibraryPolling();
     stopLoraLibraryPolling();
     return;
   }
+  loadWildcardLibrary({ silent: true }).catch(() => {
+  });
+  startWildcardLibraryEventStream();
+  scheduleWildcardLibraryPoll();
   loadLoraLibrary({ refreshSummary: false, silent: true }).catch(() => {
   });
   startLoraLibraryEventStream();
   scheduleLoraLibraryPoll();
 });
 window.addEventListener("beforeunload", () => {
+  clearWildcardCopyFeedback();
+  stopWildcardLibraryEventStream();
   stopLoraLibraryEventStream();
 });
 window.addEventListener(
@@ -4545,6 +5580,14 @@ document.addEventListener("keydown", (event) => {
     cancelZipDownload();
     return;
   }
+  if (event.key === "Escape" && !wildcardSuggestionModalEl.classList.contains("hidden")) {
+    event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape" && !wildcardEditorModalEl.classList.contains("hidden")) {
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Escape" && !loraEditorModalEl.classList.contains("hidden")) {
     event.preventDefault();
     return;
@@ -4578,6 +5621,7 @@ document.addEventListener("keydown", (event) => {
     hideConfirmModal();
     hideViewer();
     setSettingsVisible(false);
+    setWildcardDrawerOpen(false);
     setLoraDrawerOpen(false);
     if (state.multiSelectMode) {
       toggleMultiSelectMode(false);

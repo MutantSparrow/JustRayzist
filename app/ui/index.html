@@ -6,7 +6,7 @@
   <title>JustRayzist</title>
   <link rel="icon" type="image/x-icon" href="/img/favicon.ico">
   <link rel="shortcut icon" href="/img/favicon.ico">
-  <link rel="stylesheet" href="/ui/styles.css?v=20260407_10">
+  <link rel="stylesheet" href="/ui/styles.css?v=20260408_01">
 </head>
 <body>
   <header class="topbar">
@@ -42,6 +42,17 @@
         <span id="generate-button-label" class="generate-button-label">GENERATE</span>
       </button>
       <button
+        id="wildcard-drawer-toggle"
+        class="lora-drawer-toggle wildcard-drawer-toggle"
+        type="button"
+        aria-label="Open Wildcard drawer"
+        aria-controls="wildcard-drawer"
+        aria-expanded="false"
+        title="Wildcards"
+      >
+        <span class="drawer-toggle-label wildcard-drawer-toggle-label" aria-hidden="true">WILDCARD</span>
+      </button>
+      <button
         id="lora-drawer-toggle"
         class="lora-drawer-toggle"
         type="button"
@@ -50,7 +61,7 @@
         aria-expanded="false"
         title="LoRAs"
       >
-        <span class="lora-drawer-toggle-arrow" aria-hidden="true">▶</span>
+        <span class="drawer-toggle-label lora-drawer-toggle-label" aria-hidden="true">LORA</span>
       </button>
     </div>
   </header>
@@ -131,6 +142,19 @@
     <input id="lora-upload-input" type="file" accept=".safetensors" hidden>
     <p id="lora-drawer-empty" class="lora-drawer-empty hidden">No LoRAs installed.</p>
     <section id="lora-list" class="lora-list"></section>
+  </aside>
+
+  <div id="wildcard-drawer-backdrop" class="lora-drawer-backdrop hidden" aria-hidden="true"></div>
+  <aside id="wildcard-drawer" class="lora-drawer wildcard-drawer" aria-hidden="true">
+    <div class="lora-drawer-header">
+      <h2 class="lora-drawer-title wildcard-drawer-title">WILDCARD LIBRARY</h2>
+    </div>
+    <div class="lora-drawer-tools">
+      <input id="wildcard-filter-input" type="text" placeholder="Filter wildcards by name or token">
+    </div>
+    <div id="wildcard-drawer-capability" class="lora-drawer-capability" aria-live="polite"></div>
+    <p id="wildcard-drawer-empty" class="lora-drawer-empty hidden">No wildcards installed.</p>
+    <section id="wildcard-list" class="lora-list wildcard-list"></section>
   </aside>
 
   <main class="gallery-area">
@@ -274,6 +298,74 @@
     </div>
   </section>
 
+  <section id="wildcard-editor-modal" class="confirm-modal wildcard-editor-modal hidden" aria-hidden="true">
+    <div class="confirm-dialog wildcard-editor-dialog">
+      <div class="lora-editor-header wildcard-editor-header">
+        <h3 id="wildcard-editor-title" class="lora-editor-title">ADD WILDCARD</h3>
+      </div>
+      <div class="lora-editor-body wildcard-editor-body">
+        <div class="setting-group wildcard-editor-name-group">
+          <label for="wildcard-editor-name">Wildcard Name</label>
+          <input id="wildcard-editor-name" type="text" maxlength="128" placeholder="Picturesque Locations">
+        </div>
+        <div class="wildcard-editor-grid">
+          <div class="wildcard-editor-token-block">
+            <label for="wildcard-editor-token">Placeholder Token</label>
+            <input id="wildcard-editor-token" type="text" maxlength="128" placeholder="picturesque-locations">
+            <div class="wildcard-editor-placeholder-inline">
+              <span class="wildcard-editor-placeholder-label">Prompt placeholder:</span>
+              <code id="wildcard-editor-placeholder" class="wildcard-editor-placeholder">__picturesque-locations__</code>
+            </div>
+            <div id="wildcard-editor-validation" class="wildcard-editor-validation" aria-live="polite"></div>
+            <button id="wildcard-editor-generate-button" class="btn btn-hfill" type="button">Generate New Wildcards</button>
+          </div>
+          <div class="wildcard-editor-content-block">
+            <label for="wildcard-editor-content">Entries</label>
+            <textarea
+              id="wildcard-editor-content"
+              class="wildcard-editor-content"
+              rows="12"
+              maxlength="200000"
+              placeholder="One entry per line"
+            ></textarea>
+            <p class="wildcard-editor-content-hint">One entry per line. Empty lines are ignored.</p>
+          </div>
+        </div>
+      </div>
+      <div class="lora-editor-actions">
+        <button id="wildcard-editor-close" class="btn btn-hfill" type="button">Cancel</button>
+        <button id="wildcard-editor-save" class="btn btn-hfill btn-hfill-lime" type="button">Save Wildcard</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="wildcard-suggestion-modal" class="confirm-modal wildcard-suggestion-modal hidden" aria-hidden="true">
+    <div class="confirm-dialog wildcard-suggestion-dialog">
+      <div class="lora-editor-header wildcard-editor-header">
+        <h3 class="lora-editor-title">GENERATE NEW WILDCARDS</h3>
+      </div>
+      <div class="wildcard-suggestion-body">
+        <div class="setting-group">
+          <label for="wildcard-suggestion-theme">Topic / Theme</label>
+          <input id="wildcard-suggestion-theme" type="text" maxlength="500" placeholder="picturesque locations">
+        </div>
+        <div class="setting-group">
+          <label for="wildcard-suggestion-example">Format Example</label>
+          <input id="wildcard-suggestion-example" type="text" maxlength="1000" placeholder="a cabin in the Schwarzwald">
+        </div>
+        <div class="wildcard-suggestion-toolbar">
+          <button id="wildcard-suggestion-generate" class="btn btn-hfill btn-hfill-lime" type="button">Generate 10</button>
+        </div>
+        <div id="wildcard-suggestion-message" class="lora-drawer-capability wildcard-suggestion-message" aria-live="polite"></div>
+        <section id="wildcard-suggestion-list" class="wildcard-suggestion-list"></section>
+      </div>
+      <div class="lora-editor-actions">
+        <button id="wildcard-suggestion-close" class="btn btn-hfill" type="button">Cancel</button>
+        <button id="wildcard-suggestion-apply" class="btn btn-hfill btn-hfill-lime" type="button">Add To Wildcard</button>
+      </div>
+    </div>
+  </section>
+
   <section id="confirm-modal" class="confirm-modal hidden" aria-hidden="true">
     <div class="confirm-dialog">
       <p id="confirm-modal-message" class="confirm-message"></p>
@@ -301,6 +393,6 @@
     <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
   </section>
 
-  <script src="/ui/app.js?v=20260407_10"></script>
+  <script src="/ui/app.js?v=20260408_01"></script>
 </body>
 </html>

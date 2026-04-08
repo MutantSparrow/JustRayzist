@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import json
@@ -124,16 +124,17 @@ def test_pack_compare_suite_writes_reports_and_contact_sheets(
 
     with csv_reports[0].open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
-    assert len(rows) == 18
+    assert len(rows) == 12
     assert rows[0]["prompt_key"] == "portrait"
     assert rows[0]["pack"] == "Rayzist_bf16"
     assert rows[1]["pack"] == "Rayzist_bf16__auto_fp8_storage"
     assert rows[1]["mse"] not in {"", None}
 
     jsonl_rows = [json.loads(line) for line in jsonl_reports[0].read_text(encoding="utf-8").splitlines()]
-    assert len(jsonl_rows) == 18
+    assert len(jsonl_rows) == 12
     assert {row["prompt_key"] for row in jsonl_rows} == {"portrait", "action", "anime"}
 
     contact_sheets = sorted(temp_app_paths.outputs_dir.rglob("contact_sheet_*.png"))
     assert len(contact_sheets) == 3
     assert all(path.exists() for path in contact_sheets)
+

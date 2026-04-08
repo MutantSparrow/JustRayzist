@@ -209,6 +209,11 @@ $headers = @{ "X-JustRayzist-Client" = "desktop-client" }
 - `GET /config`
 - `GET /model-packs`
 - `GET /loras`
+- `GET /wildcards`
+- `POST /wildcards`
+- `PATCH /wildcards/{wildcard_id}`
+- `DELETE /wildcards/{wildcard_id}`
+- `POST /wildcards/suggestions`
 - `POST /lora-drafts`
 - `POST /lora-drafts/{draft_id}/detect-triggers`
 - `POST /loras`
@@ -242,7 +247,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -255,6 +260,7 @@ Sample response:
   "fp8_storage_preserved_tensor_count": 0,
   "fp8_promoted_tensor_count": 0,
   "lora_capable": true,
+  "wildcard_suggestions_capable": true,
   "gallery_color_cache_active": false,
   "gallery_color_cache_version": "dominant_v6",
   "gallery_color_cache_target_version": "dominant_v6",
@@ -272,7 +278,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.6.1",
+  "app_version": "1.7.0",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -312,6 +318,7 @@ Sample response:
     "fp8_storage_preserved_tensor_count": 0,
     "fp8_promoted_tensor_count": 0,
     "lora_capable": true,
+    "wildcard_suggestions_capable": true,
     "gallery_color_cache_active": false,
     "gallery_color_cache_version": "dominant_v6",
     "gallery_color_cache_target_version": "dominant_v6",
@@ -376,6 +383,156 @@ Sample response:
     "max_weight": 2.0,
     "default_weight": 1.0
   }
+}
+```
+
+### `GET /wildcards`
+
+List installed wildcards, their editable prompt tokens, multiline content, and runtime wildcard capabilities.
+
+Sample response:
+
+```json
+{
+  "count": 1,
+  "items": [
+    {
+      "id": "3c03cc4d8cf5476e831d6603626d7843",
+      "display_name": "Picturesque Locations",
+      "token": "picturesque-locations",
+      "placeholder": "__picturesque-locations__",
+      "content_text": "a cabin in the Schwarzwald\na chalet in the French Alps",
+      "entry_count": 2,
+      "created_at": "2026-04-08T12:00:00+00:00",
+      "updated_at": "2026-04-08T12:00:00+00:00"
+    }
+  ],
+  "capabilities": {
+    "supported": true,
+    "active_pack": "Rayzist_bf16",
+    "suggestions_supported": true
+  }
+}
+```
+
+### `POST /wildcards`
+
+Create one wildcard with a display name, editable prompt token, and multiline entries.
+
+Sample request body:
+
+```json
+{
+  "display_name": "Picturesque Locations",
+  "token": "picturesque-locations",
+  "content_text": "a cabin in the Schwarzwald\na chalet in the French Alps"
+}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "item": {
+    "id": "3c03cc4d8cf5476e831d6603626d7843",
+    "display_name": "Picturesque Locations",
+    "token": "picturesque-locations",
+    "placeholder": "__picturesque-locations__",
+    "content_text": "a cabin in the Schwarzwald\na chalet in the French Alps",
+    "entry_count": 2,
+    "created_at": "2026-04-08T12:00:00+00:00",
+    "updated_at": "2026-04-08T12:00:00+00:00"
+  },
+  "capabilities": {
+    "supported": true,
+    "active_pack": "Rayzist_bf16",
+    "suggestions_supported": true
+  }
+}
+```
+
+### `PATCH /wildcards/{wildcard_id}`
+
+Update one wildcard's display name, editable prompt token, and multiline entries.
+
+Sample request body:
+
+```json
+{
+  "display_name": "Picturesque Locations",
+  "token": "picturesque-locations",
+  "content_text": "a cabin in the Schwarzwald\na chalet in the French Alps\na white sandy beach in Bora-Bora"
+}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "item": {
+    "id": "3c03cc4d8cf5476e831d6603626d7843",
+    "display_name": "Picturesque Locations",
+    "token": "picturesque-locations",
+    "placeholder": "__picturesque-locations__",
+    "content_text": "a cabin in the Schwarzwald\na chalet in the French Alps\na white sandy beach in Bora-Bora",
+    "entry_count": 3,
+    "created_at": "2026-04-08T12:00:00+00:00",
+    "updated_at": "2026-04-08T12:10:00+00:00"
+  }
+}
+```
+
+### `DELETE /wildcards/{wildcard_id}`
+
+Delete one wildcard definition from the library.
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "id": "3c03cc4d8cf5476e831d6603626d7843",
+  "deleted": true
+}
+```
+
+### `POST /wildcards/suggestions`
+
+Ask the active text encoder for 10 wildcard entry suggestions that match a theme and stay within the example-length constraint.
+
+Sample request body:
+
+```json
+{
+  "theme": "picturesque locations",
+  "format_example": "a cabin in the Schwarzwald",
+  "seed": 123456,
+  "existing_entries": [
+    "a cabin in the Schwarzwald"
+  ]
+}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "suggestions": [
+    "a chalet in the French Alps",
+    "a white sandy beach in Bora-Bora",
+    "a small cafe in a Parisian side street"
+  ],
+  "accepted_count": 3,
+  "target_count": 10,
+  "seed": 123456,
+  "example_word_count": 5,
+  "min_words": 5,
+  "max_words": 5,
+  "partial": true,
+  "message": "Returned a partial set because the example-length filter was restrictive."
 }
 ```
 
@@ -576,15 +733,29 @@ Sample response:
   "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
   "output_path": "S:\\STABLEDIFFUSION\\JustRayzist\\outputs\\example-client\\justrayzist_YYYYMMDD_hhmmss_000.png",
   "prompt": "A cinematic skyline at sunrise",
+  "prompt_original": "A cinematic skyline at sunrise with __picturesque-locations__",
+  "prompt_wildcard_resolved": "A cinematic skyline at sunrise with a chalet in the French Alps",
   "width": 1024,
   "height": 1024,
   "duration_ms": 12345,
   "url": "/images/justrayzist_YYYYMMDD_hhmmss_000.png",
   "prompt_enhanced": false,
-  "prompt_effective_base": "A cinematic skyline at sunrise",
-  "prompt_effective": "A cinematic skyline at sunrise, cinematic style",
+  "prompt_effective_base": "A cinematic skyline at sunrise with a chalet in the French Alps",
+  "prompt_effective": "A cinematic skyline at sunrise with a chalet in the French Alps, cinematic style",
   "scheduler_mode": "euler",
   "procedural_creativity": 0,
+  "wildcard_count": 1,
+  "wildcards": [
+    {
+      "id": "3c03cc4d8cf5476e831d6603626d7843",
+      "display_name": "Picturesque Locations",
+      "token": "picturesque-locations",
+      "placeholder": "__picturesque-locations__",
+      "selected_entry": "a chalet in the French Alps",
+      "occurrence_index": 0,
+      "prompt_offset": 31
+    }
+  ],
   "lora_count": 1,
   "loras": [
     {

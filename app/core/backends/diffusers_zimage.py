@@ -16,6 +16,7 @@ from safetensors.torch import load_file as load_safetensors_file
 
 from app.config.profiles import RuntimeProfile
 from app.config.settings import AppSettings
+from app.core.prompt_wildcards import expand_prompt_wildcards
 from app.core.memory import (
     CudaMemorySnapshot,
     ProcessMemorySnapshot,
@@ -28,6 +29,7 @@ from app.core.platform_guidance import setup_repair_hint
 from app.core.pipeline_factory import LoadedZImagePipeline, build_zimage_pipeline
 from app.core.upscale import upscale_image
 from app.core.worker.types import GenerationRequest, LoraSelection, resolve_procedural_creativity
+from app.storage.wildcard_library import normalize_wildcard_entry_value
 
 LOGGER = logging.getLogger(__name__)
 
@@ -61,6 +63,7 @@ class GenerationResult:
     prompt_effective: str
     prompt_enhanced: bool
     prompt_effective_base: str | None = None
+    prompt_wildcard_resolved: str | None = None
     mode: str = "text2img"
     upscale_duration_ms: int | None = None
     refine_duration_ms: int | None = None
@@ -114,6 +117,8 @@ class GenerationResult:
     fp8_storage_preserved_tensor_count: int = 0
     fp8_promoted_tensor_count: int = 0
     fp8_normalized_tensor_names: tuple[str, ...] = ()
+    wildcards: tuple[dict[str, Any], ...] = ()
+    wildcard_count: int = 0
     loras: tuple[dict[str, Any], ...] = ()
     lora_count: int = 0
     lora_trigger_words: tuple[str, ...] = ()
@@ -128,6 +133,7 @@ class GenerationResult:
             "device": self.device,
             "duration_ms": self.duration_ms,
             "prompt_original": self.prompt_original,
+            "prompt_wildcard_resolved": self.prompt_wildcard_resolved,
             "prompt_effective": self.prompt_effective,
             "prompt_enhanced": self.prompt_enhanced,
             "prompt_effective_base": self.prompt_effective_base,
@@ -192,6 +198,8 @@ class GenerationResult:
             "fp8_storage_preserved_tensor_count": self.fp8_storage_preserved_tensor_count,
             "fp8_promoted_tensor_count": self.fp8_promoted_tensor_count,
             "fp8_normalized_tensor_names": list(self.fp8_normalized_tensor_names),
+            "wildcards": [dict(item) for item in self.wildcards],
+            "wildcard_count": self.wildcard_count,
             "loras": [dict(item) for item in self.loras],
             "lora_count": self.lora_count,
             "lora_trigger_words": list(self.lora_trigger_words),
@@ -855,8 +863,10 @@ class DiffusersZImageBackend:
     def runtime_status(self) -> dict[str, Any]:
         selected_pack = getattr(self._model_pack, "base_name", None) or getattr(self._model_pack, "name", None)
         lora_capable = True
+        wildcard_suggestions_capable = True
         if self._loaded is not None:
             lora_capable = self._pipe_supports_lora(self._loaded.pipeline)
+            wildcard_suggestions_capable = self._pipe_supports_wildcard_suggestions(self._loaded.pipeline)
         return {
             "backend": self._backend_name,
             "execution_mode": self._effective_execution_mode,
@@ -872,6 +882,7 @@ class DiffusersZImageBackend:
             "fp8_promoted_tensor_count": self._fp8_promoted_tensor_count,
             "fp8_normalized_tensor_names": list(self._fp8_normalized_tensor_names),
             "lora_capable": lora_capable,
+            "wildcard_suggestions_capable": wildcard_suggestions_capable,
         }
 
     def _ensure_img2img_pipe(self) -> Any:
@@ -2283,6 +2294,253 @@ class DiffusersZImageBackend:
                 torch_module.cuda.manual_seed_all(int(seed))
             yield
 
+    @staticmethod
+    def _count_whitespace_words(text: str) -> int:
+        return len(re.findall(r"\S+", str(text or "").strip()))
+
+    @staticmethod
+    def _extract_generated_completion_text(full_text: str, input_text: str) -> str:
+        candidate = full_text[len(input_text) :].strip() if full_text.startswith(input_text) else full_text.strip()
+        candidate = re.sub(r"<think>.*?</think>\s*", "", candidate, flags=re.DOTALL).strip()
+        if "Entries:" in candidate:
+            candidate = candidate.split("Entries:", 1)[-1].strip()
+        return candidate
+
+    @staticmethod
+    def _pipe_supports_wildcard_suggestions(pipe: Any) -> bool:
+        return getattr(pipe, "tokenizer", None) is not None and getattr(pipe, "text_encoder", None) is not None
+
+    @staticmethod
+    def _build_wildcard_suggestion_prompt(
+        tokenizer: Any,
+        *,
+        theme: str,
+        format_example: str,
+        target_count: int,
+        min_words: int,
+        max_words: int,
+    ) -> str:
+        system = (
+            "Generate wildcard entries for image prompts. Output newline-separated entries only. Do not number the "
+            "lines. Do not use bullets, quotes, headings, or commentary. Match the requested theme and keep each "
+            "entry close to the example's structure and length."
+        )
+        user_message = (
+            f"Theme/topic: {theme}\n"
+            f"Format example: {format_example}\n"
+            f"Target count: {target_count}\n"
+            f"Allowed word count per entry: {min_words} to {max_words}\n"
+            "Return only the entries, one per line."
+        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_message},
+        ]
+        if hasattr(tokenizer, "apply_chat_template"):
+            try:
+                rendered = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+                if isinstance(rendered, str) and rendered.strip():
+                    return rendered
+            except TypeError:
+                try:
+                    rendered = tokenizer.apply_chat_template(
+                        messages,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                    )
+                    if isinstance(rendered, str) and rendered.strip():
+                        return rendered
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return f"{system}\n\n{user_message}\n\nEntries:"
+
+    def _run_text_generation_attempt(
+        self,
+        *,
+        tokenizer: Any,
+        text_encoder: Any,
+        encoded: dict[str, Any],
+        torch_module: Any,
+        generate_kwargs: dict[str, Any],
+        generation_seed: int | None = None,
+    ) -> str:
+        output_ids = None
+        if hasattr(text_encoder, "generate"):
+            try:
+                with self._seeded_rng_context(torch_module, generation_seed):
+                    with torch_module.inference_mode():
+                        output_ids = text_encoder.generate(**encoded, **generate_kwargs)
+            except Exception as exc:
+                LOGGER.warning(
+                    "Wildcard suggestion generate() failed; falling back to base-model decode. %s",
+                    exc,
+                )
+
+        if output_ids is None:
+            output_ids = self._generate_with_base_model(
+                text_encoder=text_encoder,
+                encoded=encoded,
+                max_new_tokens=int(generate_kwargs.get("max_new_tokens", 192)),
+                eos_token_id=generate_kwargs.get("eos_token_id"),
+                torch_module=torch_module,
+                do_sample=bool(generate_kwargs.get("do_sample", True)),
+                temperature=float(generate_kwargs.get("temperature", 0.85)),
+                top_p=float(generate_kwargs.get("top_p", 0.92)),
+                repetition_penalty=float(generate_kwargs.get("repetition_penalty", 1.08)),
+            )
+
+        full_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+        input_text = tokenizer.decode(encoded["input_ids"][0], skip_special_tokens=True)
+        return self._extract_generated_completion_text(full_text, input_text)
+
+    @staticmethod
+    def _parse_wildcard_suggestion_candidates(text: str) -> list[str]:
+        candidates: list[str] = []
+        seen: set[str] = set()
+        for raw_line in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            line = re.sub(r"^\s*(?:[-*•]+|\d+[\.\)])\s*", "", raw_line).strip(" \t\"'")
+            normalized = normalize_wildcard_entry_value(line)
+            if not normalized:
+                continue
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(normalized)
+        return candidates
+
+    def suggest_wildcard_entries(
+        self,
+        *,
+        theme: str,
+        format_example: str,
+        seed: int | None = None,
+        existing_entries: list[str] | tuple[str, ...] | None = None,
+        target_count: int = 10,
+    ) -> dict[str, Any]:
+        normalized_theme = re.sub(r"\s+", " ", str(theme or "").strip())
+        normalized_example = normalize_wildcard_entry_value(format_example)
+        if not normalized_theme:
+            raise ValueError("Wildcard suggestion theme is required.")
+        if not normalized_example:
+            raise ValueError("Wildcard suggestion format example is required.")
+
+        example_word_count = self._count_whitespace_words(normalized_example)
+        if example_word_count <= 0:
+            raise ValueError("Wildcard suggestion format example is required.")
+        word_delta = int(math.floor(example_word_count * 0.15))
+        min_words = max(1, example_word_count - word_delta)
+        max_words = max(min_words, example_word_count + word_delta)
+        desired_count = max(1, int(target_count))
+
+        loaded = self._ensure_loaded()
+        pipe = loaded.pipeline
+        tokenizer = getattr(pipe, "tokenizer", None)
+        text_encoder = getattr(pipe, "text_encoder", None)
+        if tokenizer is None or text_encoder is None:
+            raise ValueError("Wildcard suggestions are unavailable for the current runtime.")
+
+        try:
+            import torch
+        except Exception as exc:
+            raise ImportError("torch") from exc
+
+        seen_existing = {
+            normalize_wildcard_entry_value(item).lower()
+            for item in (existing_entries or [])
+            if normalize_wildcard_entry_value(item)
+        }
+        accepted: list[str] = []
+        accepted_keys: set[str] = set(seen_existing)
+        partial_message: str | None = None
+        effective_seed = int(seed) if seed is not None else None
+
+        for attempt_index in range(4):
+            needed = desired_count - len(accepted)
+            if needed <= 0:
+                break
+            request_count = max(10, needed + 4)
+            prompt_text = self._build_wildcard_suggestion_prompt(
+                tokenizer,
+                theme=normalized_theme,
+                format_example=normalized_example,
+                target_count=request_count,
+                min_words=min_words,
+                max_words=max_words,
+            )
+            try:
+                encoded = tokenizer(prompt_text, return_tensors="pt")
+            except Exception as exc:
+                raise ValueError(f"Wildcard suggestion tokenizer failed: {exc}") from exc
+
+            model_device = self._resolve_module_device(text_encoder)
+            model_device_type = str(getattr(model_device, "type", ""))
+            if model_device is not None and model_device_type != "meta":
+                encoded = {key: value.to(model_device) for key, value in encoded.items()}
+
+            generate_kwargs: dict[str, Any] = {
+                "max_new_tokens": 256,
+                "do_sample": True,
+                "temperature": 0.85,
+                "top_p": 0.92,
+                "repetition_penalty": 1.08,
+            }
+            pad_token_id = getattr(tokenizer, "pad_token_id", None)
+            eos_token_id = getattr(tokenizer, "eos_token_id", None)
+            if pad_token_id is not None:
+                generate_kwargs["pad_token_id"] = pad_token_id
+            if eos_token_id is not None:
+                generate_kwargs["eos_token_id"] = eos_token_id
+
+            attempt_seed = None if effective_seed is None else effective_seed + (attempt_index * 9973)
+            try:
+                generated_text = self._run_text_generation_attempt(
+                    tokenizer=tokenizer,
+                    text_encoder=text_encoder,
+                    encoded=encoded,
+                    torch_module=torch,
+                    generate_kwargs=generate_kwargs,
+                    generation_seed=attempt_seed,
+                )
+            except Exception as exc:
+                raise ValueError(f"Wildcard suggestion decode failed: {exc}") from exc
+
+            for candidate in self._parse_wildcard_suggestion_candidates(generated_text):
+                candidate_key = candidate.lower()
+                if candidate_key in accepted_keys:
+                    continue
+                word_count = self._count_whitespace_words(candidate)
+                if word_count < min_words or word_count > max_words:
+                    continue
+                accepted_keys.add(candidate_key)
+                accepted.append(candidate)
+                if len(accepted) >= desired_count:
+                    break
+
+        if len(accepted) < desired_count:
+            partial_message = (
+                "The example format was restrictive, so only a partial suggestion set could be generated."
+            )
+
+        return {
+            "suggestions": accepted[:desired_count],
+            "accepted_count": min(len(accepted), desired_count),
+            "target_count": desired_count,
+            "seed": effective_seed,
+            "example_word_count": example_word_count,
+            "min_words": min_words,
+            "max_words": max_words,
+            "partial": len(accepted) < desired_count,
+            "message": partial_message,
+        }
+
     def _enhance_prompt(
         self,
         pipe: Any,
@@ -3262,9 +3520,15 @@ class DiffusersZImageBackend:
                 torch_module=torch,
             )
 
-        prompt_original, prompt_effective_base, prompt_enhanced = self._resolve_effective_prompt(
+        prompt_original = request.prompt
+        prompt_wildcard_resolved, wildcard_occurrences = expand_prompt_wildcards(
+            self._settings,
+            prompt_original,
+            seed=request.seed,
+        )
+        _, prompt_effective_base, prompt_enhanced = self._resolve_effective_prompt(
             pipe=pipe,
-            prompt=request.prompt,
+            prompt=prompt_wildcard_resolved,
             enhance_prompt=request.enhance_prompt,
             seed=request.seed,
             torch_module=torch,
@@ -3283,6 +3547,7 @@ class DiffusersZImageBackend:
             }
             for lora in request.loras
         )
+        wildcard_payload = tuple(item.to_dict() for item in wildcard_occurrences)
 
         self._preflight_fallback_triggered = False
         generate_preflight = self._run_vram_preflight(torch)
@@ -3371,6 +3636,7 @@ class DiffusersZImageBackend:
             device=loaded.device,
             duration_ms=duration_ms,
             prompt_original=prompt_original,
+            prompt_wildcard_resolved=prompt_wildcard_resolved,
             prompt_effective=prompt_effective,
             prompt_enhanced=prompt_enhanced,
             prompt_effective_base=prompt_effective_base,
@@ -3414,6 +3680,8 @@ class DiffusersZImageBackend:
             fp8_storage_preserved_tensor_count=self._fp8_storage_preserved_tensor_count,
             fp8_promoted_tensor_count=self._fp8_promoted_tensor_count,
             fp8_normalized_tensor_names=self._fp8_normalized_tensor_names,
+            wildcards=wildcard_payload,
+            wildcard_count=len(wildcard_payload),
             loras=lora_payload,
             lora_count=len(lora_payload),
             lora_trigger_words=lora_trigger_words,

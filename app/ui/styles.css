@@ -289,7 +289,7 @@ select {
   position: fixed;
   top: clamp(8px, calc((var(--topbar-offset) - 116px) / 2 + 8px), 40px);
   right: -1px;
-  width: 30px;
+  width: 34px;
   min-height: 116px;
   border: 1px solid #3d2740;
   border-left: 0;
@@ -315,7 +315,7 @@ select {
 }
 
 .lora-drawer-toggle[aria-expanded="true"] {
-  right: -1px;
+  right: var(--lora-drawer-current-width);
   background: #1a1020;
   color: #ffe8f6;
 }
@@ -325,16 +325,39 @@ select {
   cursor: not-allowed;
 }
 
-.lora-drawer-toggle-arrow {
+.drawer-toggle-label {
   display: inline-block;
-  font-size: 1.1rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
   line-height: 1;
-  transform: scaleX(-1);
-  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-transform: uppercase;
 }
 
-.lora-drawer-toggle[aria-expanded="true"] .lora-drawer-toggle-arrow {
-  transform: translateX(-1px) scaleX(1);
+.lora-drawer-toggle-label {
+  color: currentColor;
+}
+
+.wildcard-drawer-toggle {
+  right: 29px;
+  border-color: #274018;
+  color: var(--lime);
+}
+
+.wildcard-drawer-toggle:hover {
+  background: #0d1408;
+  color: #ebffbe;
+}
+
+.wildcard-drawer-toggle[aria-expanded="true"] {
+  background: #101908;
+  color: #f2ffc8;
+}
+
+.wildcard-drawer-toggle-label {
+  color: currentColor;
 }
 
 .settings-panel {
@@ -412,6 +435,19 @@ select {
   transform: translateX(0);
   opacity: 1;
   pointer-events: auto;
+}
+
+.wildcard-drawer {
+  grid-template-rows: auto auto auto 1fr;
+  border-color: #284012;
+  background:
+    linear-gradient(180deg, rgba(10, 12, 8, 0.99), rgba(16, 19, 12, 0.98)),
+    linear-gradient(45deg, rgba(183, 255, 0, 0.04) 12.5%, transparent 12.5%, transparent 50%, rgba(183, 255, 0, 0.04) 50%, rgba(183, 255, 0, 0.04) 62.5%, transparent 62.5%, transparent),
+    linear-gradient(-45deg, rgba(255, 44, 182, 0.02) 12.5%, transparent 12.5%, transparent 50%, rgba(255, 44, 182, 0.02) 50%, rgba(255, 44, 182, 0.02) 62.5%, transparent 62.5%, transparent);
+}
+
+.wildcard-drawer-title {
+  background: linear-gradient(90deg, var(--lime), #d8ff55);
 }
 
 .lora-drawer-header {
@@ -774,6 +810,104 @@ select {
   border-color: var(--lime);
   background: #090d05;
   transform: none;
+}
+
+.wildcard-card {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #2f3530;
+  background: rgba(14, 17, 13, 0.94);
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 160ms ease, transform 140ms ease;
+}
+
+.wildcard-card:hover,
+.wildcard-card:focus-within {
+  border-color: #93d84b;
+  background: rgba(18, 24, 16, 0.96);
+  transform: translateY(-1px);
+}
+
+.wildcard-card.copied {
+  border-color: var(--lime);
+  box-shadow: inset 0 0 0 1px rgba(183, 255, 0, 0.38);
+}
+
+.wildcard-card-top-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wildcard-card-name {
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #f0f5e7;
+  word-break: break-word;
+}
+
+.wildcard-card-token {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  max-width: 100%;
+  padding: 0 10px;
+  border: 1px solid rgba(183, 255, 0, 0.32);
+  background: rgba(183, 255, 0, 0.08);
+  color: #efffd1;
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 0.76rem;
+  line-height: 1.3;
+  word-break: break-all;
+}
+
+.wildcard-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 18px;
+  font-size: 0.74rem;
+  color: #abb59f;
+}
+
+.wildcard-card-copy-state {
+  color: var(--lime);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wildcard-card-preview {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #252c24;
+  background: rgba(7, 10, 7, 0.9);
+  color: #d8dfd0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.wildcard-add-tile {
+  min-height: 180px;
+  aspect-ratio: auto;
+}
+
+.wildcard-add-tile:hover {
+  background: #091006;
 }
 
 @keyframes loraSliderReveal {
@@ -1152,6 +1286,235 @@ body.lora-drawer-open .gallery-area {
 .lora-editor-trigger-block input:focus {
   border-bottom-color: var(--lime);
   background: rgba(255, 255, 255, 0.05);
+}
+
+.confirm-dialog.wildcard-editor-dialog,
+.confirm-dialog.wildcard-suggestion-dialog {
+  background: linear-gradient(180deg, rgba(9, 9, 9, 0.98), rgba(14, 16, 12, 0.98));
+  border: 1px solid #2f3535;
+  overflow: hidden;
+}
+
+.confirm-dialog.wildcard-editor-dialog {
+  width: min(calc(100vw - 24px), clamp(760px, 50vw, 980px));
+  max-height: min(90vh, 860px);
+  padding: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.wildcard-editor-header {
+  background: linear-gradient(90deg, var(--lime), #d8ff55);
+}
+
+.wildcard-editor-body {
+  display: grid;
+  gap: 18px;
+  padding: 0 18px 18px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.wildcard-editor-name-group {
+  margin-bottom: 0;
+  padding-top: 12px;
+}
+
+.wildcard-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.12fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.wildcard-editor-token-block,
+.wildcard-editor-content-block {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  min-width: 0;
+}
+
+.wildcard-editor-name-group input,
+.wildcard-editor-token-block input,
+.wildcard-editor-content,
+.wildcard-suggestion-body input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #2e353d;
+  background: rgba(255, 255, 255, 0.03);
+  color: #f4f7fb;
+  padding: 0 14px;
+  outline: none;
+  box-shadow: none;
+}
+
+.wildcard-editor-name-group input {
+  min-height: 56px;
+  font-size: 1.24rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.wildcard-editor-token-block input,
+.wildcard-suggestion-body input {
+  min-height: 44px;
+  font-size: 0.94rem;
+}
+
+.wildcard-editor-content {
+  min-height: 320px;
+  resize: vertical;
+  border: 1px solid #2e353d;
+  border-bottom-width: 1px;
+  padding: 12px 14px;
+  line-height: 1.45;
+}
+
+.wildcard-editor-name-group input:focus,
+.wildcard-editor-token-block input:focus,
+.wildcard-editor-content:focus,
+.wildcard-suggestion-body input:focus {
+  border-bottom-color: var(--lime);
+  border-color: var(--lime);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wildcard-editor-placeholder-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.wildcard-editor-placeholder-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.wildcard-editor-placeholder {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(183, 255, 0, 0.32);
+  background: rgba(183, 255, 0, 0.08);
+  color: #efffd1;
+  font-size: 0.8rem;
+  line-height: 1.3;
+  word-break: break-all;
+}
+
+.wildcard-editor-validation {
+  min-height: 18px;
+  font-size: 0.78rem;
+  color: #c1c1c1;
+}
+
+.wildcard-editor-validation.error {
+  color: #ff8d8d;
+}
+
+.wildcard-editor-content-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: #9ea6b2;
+}
+
+.confirm-dialog.wildcard-suggestion-dialog {
+  width: min(calc(100vw - 24px), clamp(720px, 46vw, 920px));
+  max-height: min(90vh, 840px);
+  padding: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.wildcard-suggestion-body {
+  display: grid;
+  gap: 16px;
+  padding: 16px 18px 18px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.wildcard-suggestion-toolbar {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.wildcard-suggestion-toolbar .btn {
+  min-width: 180px;
+}
+
+.wildcard-suggestion-message {
+  min-height: 18px;
+}
+
+.wildcard-suggestion-message.error {
+  color: #ff8d8d;
+}
+
+.wildcard-suggestion-list {
+  display: grid;
+  gap: 10px;
+  min-height: 120px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid #252c24;
+  background: rgba(7, 10, 7, 0.9);
+}
+
+.wildcard-suggestion-empty {
+  margin: 0;
+  color: #aeb8ab;
+  font-size: 0.82rem;
+}
+
+.wildcard-suggestion-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #273028;
+  background: rgba(14, 18, 13, 0.92);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.wildcard-suggestion-item:hover {
+  border-color: #93d84b;
+}
+
+.wildcard-suggestion-item.selected {
+  border-color: var(--lime);
+  background: rgba(183, 255, 0, 0.08);
+}
+
+.wildcard-suggestion-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--lime);
+  flex: 0 0 auto;
+}
+
+.wildcard-suggestion-value {
+  min-width: 0;
+  color: #eef5e7;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+body.lora-drawer-open .topbar,
+body.lora-drawer-open .gallery-area,
+body.wildcard-drawer-open .topbar,
+body.wildcard-drawer-open .gallery-area {
+  margin-right: 0;
 }
 
 .slider-setting {
@@ -2914,7 +3277,9 @@ body.lora-drawer-open .gallery-area {
   }
 
   body.lora-drawer-open .topbar,
-  body.lora-drawer-open .gallery-area {
+  body.lora-drawer-open .gallery-area,
+  body.wildcard-drawer-open .topbar,
+  body.wildcard-drawer-open .gallery-area {
     margin-right: 0;
   }
 
@@ -2932,12 +3297,21 @@ body.lora-drawer-open .gallery-area {
     grid-template-columns: 1fr;
   }
 
+  .wildcard-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
   .lora-editor-thumbnail-frame {
     width: min(100%, clamp(160px, 22vh, 260px));
   }
 
   .lora-trigger-chips {
     min-height: 140px;
+  }
+
+  .confirm-dialog.wildcard-editor-dialog,
+  .confirm-dialog.wildcard-suggestion-dialog {
+    width: min(100vw, calc(100vw - 18px));
   }
 }
 
@@ -2994,8 +3368,12 @@ body.lora-drawer-open .gallery-area {
     min-height: 104px;
   }
 
+  .wildcard-drawer-toggle {
+    right: 29px;
+  }
+
   .lora-drawer-toggle[aria-expanded="true"] {
-    right: -1px;
+    right: calc(var(--lora-drawer-current-width) - 34px);
   }
 
   .lora-list {
@@ -3004,5 +3382,9 @@ body.lora-drawer-open .gallery-area {
 
   .lora-editor-actions .btn {
     flex: 1 1 0;
+  }
+
+  .wildcard-editor-content {
+    min-height: 220px;
   }
 }

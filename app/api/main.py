@@ -65,10 +65,15 @@ class _RevisionBroadcaster:
 
 
 _LORA_LIBRARY_EVENTS = _RevisionBroadcaster()
+_WILDCARD_LIBRARY_EVENTS = _RevisionBroadcaster()
 
 
 def _notify_lora_library_changed() -> None:
     _LORA_LIBRARY_EVENTS.notify()
+
+
+def _notify_wildcard_library_changed() -> None:
+    _WILDCARD_LIBRARY_EVENTS.notify()
 
 
 @asynccontextmanager
@@ -121,6 +126,20 @@ class GenerateRequest(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError("LoRA ids must be unique within a request.")
         return value
+
+
+class WildcardUpsertRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=128)
+    token: str = Field(min_length=1, max_length=128)
+    content_text: str = Field(min_length=1, max_length=200_000)
+
+
+class WildcardSuggestionRequest(BaseModel):
+    theme: str = Field(min_length=1, max_length=500)
+    format_example: str = Field(min_length=1, max_length=1000)
+    seed: int | None = Field(default=None)
+    pack: str | None = Field(default=None)
+    existing_entries: list[str] = Field(default_factory=list, max_length=5000)
 
 
 class UpscaleRequest(BaseModel):
@@ -364,6 +383,111 @@ async def lora_events(request: Request) -> StreamingResponse:
 
     headers = {**_NO_STORE_HEADERS, "X-Accel-Buffering": "no"}
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
+
+
+@app.get("/wildcards")
+def wildcards() -> JSONResponse:
+    items = inference.list_wildcards()
+    return JSONResponse(
+        content={
+            "items": items,
+            "count": len(items),
+            "capabilities": inference.wildcard_capabilities(),
+        },
+        headers=_NO_STORE_HEADERS,
+    )
+
+
+@app.get("/wildcards/events")
+async def wildcard_events(request: Request) -> StreamingResponse:
+    async def event_stream():
+        revision = _WILDCARD_LIBRARY_EVENTS.current()
+        yield f"data: {revision}\n\n"
+        while True:
+            if await request.is_disconnected():
+                break
+            next_revision = await asyncio.to_thread(
+                _WILDCARD_LIBRARY_EVENTS.wait_for_change,
+                revision,
+                20.0,
+            )
+            if next_revision != revision:
+                revision = next_revision
+                yield f"data: {revision}\n\n"
+                continue
+            yield ": keep-alive\n\n"
+
+    headers = {**_NO_STORE_HEADERS, "X-Accel-Buffering": "no"}
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
+
+
+@app.post("/wildcards")
+def wildcards_create(payload: WildcardUpsertRequest) -> dict:
+    try:
+        item = inference.create_wildcard(
+            display_name=payload.display_name,
+            token=payload.token,
+            content_text=payload.content_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _notify_wildcard_library_changed()
+    return {
+        "status": "ok",
+        "item": item,
+        "capabilities": inference.wildcard_capabilities(),
+    }
+
+
+@app.patch("/wildcards/{wildcard_id}")
+def wildcards_update(wildcard_id: str, payload: WildcardUpsertRequest) -> dict:
+    try:
+        item = inference.update_wildcard(
+            wildcard_id=wildcard_id,
+            display_name=payload.display_name,
+            token=payload.token,
+            content_text=payload.content_text,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _notify_wildcard_library_changed()
+    return {"status": "ok", "item": item}
+
+
+@app.delete("/wildcards/{wildcard_id}")
+def wildcards_delete(wildcard_id: str) -> dict:
+    try:
+        result = inference.delete_wildcard(wildcard_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _notify_wildcard_library_changed()
+    return {"status": "ok", **result}
+
+
+@app.post("/wildcards/suggestions")
+def wildcard_suggestions(payload: WildcardSuggestionRequest) -> dict:
+    try:
+        result = inference.suggest_wildcard_entries(
+            theme=payload.theme,
+            format_example=payload.format_example,
+            existing_entries=payload.existing_entries,
+            seed=payload.seed,
+            pack_name=payload.pack,
+        )
+    except ModelPackValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"Missing dependency: {exc}") from exc
+    except Exception as exc:
+        LOGGER.exception("Unhandled wildcard suggestion error.")
+        raise HTTPException(status_code=500, detail="Wildcard suggestion generation failed.") from exc
+    return {"status": "ok", **result}
 
 
 @app.post("/lora-drafts")

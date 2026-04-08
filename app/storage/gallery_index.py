@@ -201,6 +201,7 @@ def _create_images_table(conn: sqlite3.Connection) -> None:
             filename TEXT NOT NULL,
             output_path TEXT NOT NULL,
             prompt TEXT NOT NULL,
+            prompt_wildcard_resolved TEXT,
             timestamp TEXT,
             application_name TEXT,
             application_version TEXT,
@@ -217,6 +218,8 @@ def _create_images_table(conn: sqlite3.Connection) -> None:
             source_filename TEXT,
             source_width INTEGER,
             source_height INTEGER,
+            wildcards_json TEXT,
+            wildcard_count INTEGER,
             loras_json TEXT,
             lora_count INTEGER,
             color_flags INTEGER,
@@ -409,11 +412,14 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
     existing = {str(row["name"]) for row in existing_rows}
     required_columns = {
         "owner_id": f"TEXT NOT NULL DEFAULT '{LEGACY_OWNER_ID}'",
+        "prompt_wildcard_resolved": "TEXT",
         "mode": "TEXT",
         "source_image": "TEXT",
         "source_filename": "TEXT",
         "source_width": "INTEGER",
         "source_height": "INTEGER",
+        "wildcards_json": "TEXT",
+        "wildcard_count": "INTEGER",
         "loras_json": "TEXT",
         "lora_count": "INTEGER",
         "color_flags": "INTEGER",
@@ -469,17 +475,18 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
             """
             INSERT INTO images (
                 owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
-                width, height, model_pack, backend, device, steps, guidance_scale, duration_ms, mode,
-                source_image, source_filename, source_width, source_height, loras_json, lora_count,
-                color_flags, favorite, created_at
+                prompt_wildcard_resolved, width, height, model_pack, backend, device, steps, guidance_scale,
+                duration_ms, mode, source_image, source_filename, source_width, source_height,
+                wildcards_json, wildcard_count, loras_json, lora_count, color_flags, favorite, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(owner_id, filename) DO UPDATE SET
                 output_path=excluded.output_path,
                 prompt=excluded.prompt,
                 timestamp=excluded.timestamp,
                 application_name=excluded.application_name,
                 application_version=excluded.application_version,
+                prompt_wildcard_resolved=excluded.prompt_wildcard_resolved,
                 width=excluded.width,
                 height=excluded.height,
                 model_pack=excluded.model_pack,
@@ -493,6 +500,8 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 source_filename=excluded.source_filename,
                 source_width=excluded.source_width,
                 source_height=excluded.source_height,
+                wildcards_json=excluded.wildcards_json,
+                wildcard_count=excluded.wildcard_count,
                 loras_json=excluded.loras_json,
                 lora_count=excluded.lora_count,
                 color_flags=excluded.color_flags,
@@ -507,6 +516,7 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 str(record.get("timestamp") or _utc_timestamp()),
                 record.get("application_name"),
                 record.get("application_version"),
+                record.get("prompt_wildcard_resolved"),
                 _to_int(record.get("width")),
                 _to_int(record.get("height")),
                 record.get("model_pack"),
@@ -520,6 +530,8 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 record.get("source_filename"),
                 _to_int(record.get("source_width")),
                 _to_int(record.get("source_height")),
+                record.get("wildcards_json"),
+                _to_int(record.get("wildcard_count")),
                 record.get("loras_json"),
                 _to_int(record.get("lora_count")),
                 _to_int(record.get("color_flags")),
@@ -585,17 +597,18 @@ def _upsert_image(
         """
         INSERT INTO images (
             owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
-            width, height, model_pack, backend, device, steps, guidance_scale, duration_ms,
-            mode, source_image, source_filename, source_width, source_height, loras_json, lora_count,
-            color_flags, favorite, created_at
+            prompt_wildcard_resolved, width, height, model_pack, backend, device, steps, guidance_scale,
+            duration_ms, mode, source_image, source_filename, source_width, source_height,
+            wildcards_json, wildcard_count, loras_json, lora_count, color_flags, favorite, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(owner_id, filename) DO UPDATE SET
             output_path=excluded.output_path,
             prompt=excluded.prompt,
             timestamp=excluded.timestamp,
             application_name=excluded.application_name,
             application_version=excluded.application_version,
+            prompt_wildcard_resolved=excluded.prompt_wildcard_resolved,
             width=excluded.width,
             height=excluded.height,
             model_pack=excluded.model_pack,
@@ -609,6 +622,8 @@ def _upsert_image(
             source_filename=excluded.source_filename,
             source_width=excluded.source_width,
             source_height=excluded.source_height,
+            wildcards_json=excluded.wildcards_json,
+            wildcard_count=excluded.wildcard_count,
             loras_json=excluded.loras_json,
             lora_count=excluded.lora_count,
             color_flags=excluded.color_flags,
@@ -623,6 +638,7 @@ def _upsert_image(
             timestamp,
             metadata.get("application_name"),
             metadata.get("application_version"),
+            metadata.get("prompt_wildcard_resolved"),
             _to_int(metadata.get("width")),
             _to_int(metadata.get("height")),
             metadata.get("model_pack"),
@@ -636,6 +652,8 @@ def _upsert_image(
             metadata.get("source_filename"),
             _to_int(metadata.get("source_width")),
             _to_int(metadata.get("source_height")),
+            metadata.get("wildcards_json"),
+            _to_int(metadata.get("wildcard_count")),
             metadata.get("loras_json"),
             _to_int(metadata.get("lora_count")),
             color_flags,

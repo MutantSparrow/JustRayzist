@@ -46,6 +46,13 @@ from app.storage.lora_library import (
     preview_path_for_lora,
     update_lora as update_library_lora,
 )
+from app.storage.wildcard_library import (
+    create_wildcard as create_library_wildcard,
+    delete_wildcard as delete_library_wildcard,
+    list_wildcards as list_library_wildcards,
+    normalize_wildcard_entry_value,
+    update_wildcard as update_library_wildcard,
+)
 from app.storage.gallery_index import (
     COLOR_CACHE_VERSION,
     delete_image,
@@ -161,8 +168,95 @@ class InferenceService:
             "default_weight": DEFAULT_LORA_WEIGHT,
         }
 
+    def wildcard_capabilities(self, pack_name: str | None = None) -> dict[str, Any]:
+        active_pack = None
+        suggestions_supported = False
+        try:
+            _base_pack, effective_pack, _resource_tier = self._resolve_runtime_pack(pack_name)
+            active_pack = effective_pack.base_name or effective_pack.name
+            suggestions_supported = True
+            with self._state_lock:
+                active_session = self._active_session if self._active_pack_name == effective_pack.name else None
+            if active_session is not None:
+                try:
+                    runtime_status = active_session.runtime_status()
+                    suggestions_supported = bool(runtime_status.get("wildcard_suggestions_capable", True))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return {
+            "supported": True,
+            "active_pack": active_pack,
+            "suggestions_supported": suggestions_supported,
+        }
+
     def list_loras(self) -> list[dict[str, Any]]:
         return list_library_loras(self._settings)
+
+    def list_wildcards(self) -> list[dict[str, Any]]:
+        return list_library_wildcards(self._settings)
+
+    def create_wildcard(self, *, display_name: Any, token: Any, content_text: Any) -> dict[str, Any]:
+        return create_library_wildcard(
+            self._settings,
+            display_name=display_name,
+            token=token,
+            content_text=content_text,
+        )
+
+    def update_wildcard(
+        self,
+        *,
+        wildcard_id: str,
+        display_name: Any,
+        token: Any,
+        content_text: Any,
+    ) -> dict[str, Any]:
+        return update_library_wildcard(
+            self._settings,
+            wildcard_id=wildcard_id,
+            display_name=display_name,
+            token=token,
+            content_text=content_text,
+        )
+
+    def delete_wildcard(self, wildcard_id: str) -> dict[str, Any]:
+        return delete_library_wildcard(self._settings, wildcard_id)
+
+    def suggest_wildcard_entries(
+        self,
+        *,
+        theme: str,
+        format_example: str,
+        existing_entries: list[str] | None = None,
+        seed: int | None = None,
+        pack_name: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_existing = [
+            normalize_wildcard_entry_value(item)
+            for item in (existing_entries or [])
+            if normalize_wildcard_entry_value(item)
+        ]
+        with self._state_lock:
+            _base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name)
+            session = self._session_for_pack(effective_pack, resource_tier)
+            effective_seed = int(seed) if seed is not None else random.randint(1, 2_147_483_647)
+
+        with self._generation_lock:
+            result = session.suggest_wildcard_entries(
+                theme=theme,
+                format_example=format_example,
+                seed=effective_seed,
+                existing_entries=normalized_existing,
+                target_count=10,
+            )
+            with self._state_lock:
+                try:
+                    self._active_backend_name = str(session.runtime_status().get("backend") or self._active_backend_name)
+                except Exception:
+                    pass
+        return dict(result)
 
     def create_lora_draft(
         self,
@@ -369,6 +463,10 @@ class InferenceService:
             ),
             "fp8_promoted_tensor_count": backend_status.get("fp8_promoted_tensor_count", 0),
             "lora_capable": backend_status.get("lora_capable", self.lora_capabilities().get("supported", False)),
+            "wildcard_suggestions_capable": backend_status.get(
+                "wildcard_suggestions_capable",
+                self.wildcard_capabilities().get("suggestions_supported", False),
+            ),
             "gallery_color_cache_active": color_cache_status.get("active", False),
             "gallery_color_cache_version": color_cache_status.get("version"),
             "gallery_color_cache_target_version": color_cache_status.get("target_version"),
@@ -854,6 +952,7 @@ class InferenceService:
                     extra_metadata={
                         "owner_id": safe_owner_id,
                         "prompt_original": result.prompt_original,
+                        "prompt_wildcard_resolved": result.prompt_wildcard_resolved or result.prompt_original,
                         "prompt_effective_base": result.prompt_effective_base or result.prompt_effective,
                         "prompt_effective": result.prompt_effective,
                         "prompt_enhanced": result.prompt_enhanced,
@@ -881,6 +980,8 @@ class InferenceService:
                         "resource_tier": result.resource_tier,
                         "execution_mode": result.execution_mode,
                         "procedural_creativity": result.procedural_creativity,
+                        "wildcards_json": json.dumps(result.wildcards),
+                        "wildcard_count": result.wildcard_count,
                         "loras_json": json.dumps(result.loras),
                         "lora_count": result.lora_count,
                     },
@@ -897,6 +998,7 @@ class InferenceService:
                         "mode": "api_generate",
                         "prompt": result.prompt_effective,
                         "prompt_original": result.prompt_original,
+                        "prompt_wildcard_resolved": result.prompt_wildcard_resolved or result.prompt_original,
                         "prompt_effective_base": result.prompt_effective_base or result.prompt_effective,
                         "prompt_effective": result.prompt_effective,
                         "prompt_enhanced": result.prompt_enhanced,
@@ -910,6 +1012,8 @@ class InferenceService:
                         "derived_strategy": effective_pack.derived_strategy,
                         "resource_tier": result.resource_tier,
                         "procedural_creativity": result.procedural_creativity,
+                        "wildcards": [dict(item) for item in result.wildcards],
+                        "wildcard_count": result.wildcard_count,
                         "loras": [dict(item) for item in result.loras],
                         "lora_count": result.lora_count,
                         **result.telemetry_dict(),
@@ -925,6 +1029,7 @@ class InferenceService:
                 image_row["seed"] = result.seed
                 image_row["scheduler_mode"] = result.scheduler_mode
                 image_row["prompt_original"] = result.prompt_original
+                image_row["prompt_wildcard_resolved"] = result.prompt_wildcard_resolved or result.prompt_original
                 image_row["prompt_effective_base"] = result.prompt_effective_base or result.prompt_effective
                 image_row["prompt_effective"] = result.prompt_effective
                 image_row["prompt_enhanced"] = result.prompt_enhanced
@@ -936,6 +1041,9 @@ class InferenceService:
                 image_row["fp8_fallback_reason"] = result.fp8_fallback_reason
                 image_row["fp8_runtime_mode"] = result.fp8_runtime_mode
                 image_row["procedural_creativity"] = result.procedural_creativity
+                image_row["wildcards"] = [dict(item) for item in result.wildcards]
+                image_row["wildcards_json"] = json.dumps(result.wildcards)
+                image_row["wildcard_count"] = result.wildcard_count
                 image_row["loras"] = [dict(item) for item in result.loras]
                 image_row["lora_count"] = result.lora_count
                 image_row["job_id"] = job_id
