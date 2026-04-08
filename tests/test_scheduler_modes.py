@@ -11,7 +11,7 @@ from app.core.worker.types import GenerationRequest
 
 def _make_backend(profile_name: str = "high") -> DiffusersZImageBackend:
     settings = SimpleNamespace(runtime_profile=RUNTIME_PROFILES[profile_name])
-    model_pack = SimpleNamespace(name="Rayzist2_bf16")
+    model_pack = SimpleNamespace(name="Rayzist_bf16")
     return DiffusersZImageBackend(settings=settings, model_pack=model_pack)
 
 

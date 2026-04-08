@@ -8,6 +8,7 @@ from typing import Any
 
 from app.config.profiles import RuntimeProfile
 from app.core.model_registry import ModelComponent, ModelPack
+from app.core.platform_guidance import setup_repair_hint
 
 LOGGER = logging.getLogger(__name__)
 
@@ -627,7 +628,7 @@ def _build_zimage_pipeline(
     except ImportError as exc:
         raise ImportError(
             "Installed diffusers build is missing required ZImage classes. "
-            "Run RunMeFirst.bat to repair the environment."
+            + setup_repair_hint()
         ) from exc
 
     device = "cuda" if torch.cuda.is_available() else "cpu"

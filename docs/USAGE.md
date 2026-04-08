@@ -4,25 +4,38 @@ This document focuses on source-mode usage and the main operational commands.
 
 ## Prerequisites
 
-- Windows host
+- Windows for packaged installs and the default source workflow
+- Linux and macOS source mode support
 - Python 3.11+
 - Model pack under `models/packs/<pack_name>/modelpack.yaml`
 - NVIDIA GPU recommended for practical performance
+- macOS setup is best-effort; accelerated generation is not guaranteed
 
 ## Setup
 
-Recommended:
+Windows:
 
 ```powershell
 .\RunMeFirst.bat
 ```
 
-Manual alternative:
+Linux or macOS source mode:
+
+```bash
+./RunMeFirst.sh
+```
+
+Manual alternatives:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe C:\Path\To\python.exe -Lane cu128
 powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1
-powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1 -ModelVariant fp8_full
+```
+
+```bash
+python3 scripts/portable/bootstrap_env.py --python-exe python3 --lane auto
+python3 scripts/portable/fetch_model_assets.py
+python3 scripts/portable/fetch_seedvr2_runtime.py
 ```
 
 ## Update a Packaged Install
@@ -57,11 +70,17 @@ Launcher mode:
 .\StartWeb.bat
 ```
 
+```bash
+./StartWeb.sh
+```
+
 Launcher flow:
 
 1. Select a public enabled model pack only when more than one is installed.
 2. Select local-only or LAN listen mode.
 3. Let the app auto-detect a memory strategy from available VRAM.
+
+`StartWeb.sh` accepts `--host`, `--port`, and `--pack`. If more than one public enabled pack exists and no TTY is available, provide `--pack` or `JUSTRAYZIST_PACK`.
 
 ## Web Gallery
 
@@ -78,10 +97,10 @@ Normal runs no longer ask the user to choose `high`, `balanced`, or `constrained
 - `resource_tier` is auto-detected from current free VRAM and drives memory strategy only.
 - Internal execution modes such as `full_cuda`, `model_offload`, and `sequential_offload` are selected automatically.
 - The app can downgrade or re-upgrade the internal resource tier between requests as available VRAM changes.
-- Public pack lists (`StartWeb.bat`, `GET /model-packs`) show only public enabled packs.
-- Setup and asset fetch auto-select `Rayzist_fp8_full` as the default installed pack when detected NVIDIA VRAM is below 13 GiB; otherwise they keep `Rayzist_bf16` enabled by default.
-- Real FP8 packs such as `Rayzist_fp8_full` and compatible custom FP8 packs are normal selectable public packs.
-- Real FP8 packs currently run as BF16 compute with FP8-at-rest preservation where safe; native FP8 inference is not implemented in the current release.
+- Public pack lists (`StartWeb.bat`, `StartWeb.sh`, `GET /model-packs`) show only public enabled packs.
+- Setup and asset fetch provision the bundled `Rayzist_bf16` pack.
+- Derived FP8 storage remains an internal constrained-memory strategy; native FP8 inference is not implemented in the current release.
+
 - In constrained conditions, compatible safetensors packs may auto-derive an internal FP8-storage runtime variant such as `Rayzist_bf16__auto_fp8_storage`.
 
 ## CLI Commands
@@ -223,7 +242,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.5.4",
+  "version": "1.6.0",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -253,7 +272,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.5.4",
+  "app_version": "1.6.0",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {

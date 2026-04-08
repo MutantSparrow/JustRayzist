@@ -1,9 +1,0 @@
-name: Rayzist2_fp8_full
-architecture: z_image_turbo
-backend_preference:
-  - fp8_zimage
-  - diffusers
-components:
-  transformer:
-    path: ./weights/Rayzist.v2.0.fp8_e4m3fn.full.safetensors
-    format: safetensors

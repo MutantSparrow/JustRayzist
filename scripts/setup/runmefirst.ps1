@@ -1,7 +1,5 @@
 param(
-  [switch]$ForceRepair,
-  [ValidateSet("auto", "bf16", "fp8_full")]
-  [string]$ModelVariant = "auto"
+  [switch]$ForceRepair
 )
 
 $ErrorActionPreference = "Stop"
@@ -463,13 +461,11 @@ try {
       "-Lane", $laneSelection.Lane
     )
   }
-
   Invoke-Step -Title "Download default model assets" -Action {
     Invoke-External -Executable "powershell" -Arguments @(
       "-NoProfile",
       "-ExecutionPolicy", "Bypass",
-      "-File", $fetchScript,
-      "-ModelVariant", $ModelVariant
+      "-File", $fetchScript
     )
   }
 

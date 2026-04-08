@@ -1,2 +1,2 @@
 APP_NAME = "JustRayzist"
-APP_VERSION = "1.5.4"
+APP_VERSION = "1.6.0"

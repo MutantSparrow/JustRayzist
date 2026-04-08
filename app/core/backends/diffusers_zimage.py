@@ -24,6 +24,7 @@ from app.core.memory import (
     process_memory_snapshot,
 )
 from app.core.model_registry import ModelPack
+from app.core.platform_guidance import setup_repair_hint
 from app.core.pipeline_factory import LoadedZImagePipeline, build_zimage_pipeline
 from app.core.upscale import upscale_image
 from app.core.worker.types import GenerationRequest, LoraSelection, resolve_procedural_creativity
@@ -882,7 +883,7 @@ class DiffusersZImageBackend:
         except ImportError as exc:
             raise ImportError(
                 "Installed diffusers build is missing ZImageImg2ImgPipeline. "
-                "Run RunMeFirst.bat to repair the environment."
+                + setup_repair_hint()
             ) from exc
 
         loaded = self._ensure_loaded()

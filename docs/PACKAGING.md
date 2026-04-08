@@ -1,5 +1,7 @@
 # Packaging
 
+Windows-only release engineering document. Linux and macOS support is source-mode only.
+
 ## Packaging Strategy
 
 Release artifacts are bootstrap-only. They ship the app, scripts, and metadata without bundling Python/CUDA runtime payloads.
@@ -59,7 +61,7 @@ powershell -ExecutionPolicy Bypass -File scripts\release\clean_legacy_artifacts.
 
 - `RunMeFirst.bat` is the primary setup and repair path
 - `StartWeb.bat` can auto-fetch the selected default pack assets when they are missing
-- install/setup auto-selects `Rayzist_fp8_full` below 13 GiB of detected NVIDIA VRAM and otherwise keeps `Rayzist_bf16` as the default enabled pack
+- install/setup provisions `Rayzist_bf16` as the bundled default enabled pack
 - `StartWeb.bat` now asks users only for pack selection when more than one public enabled pack exists, plus local/LAN listen mode
 - `StartWeb.bat` shows only public enabled packs and keeps hidden/experimental/disabled packs out of the normal packaged launcher flow
 - release packaging copies tracked pack metadata only, so local custom packs and local weight files are left to the installer/local machine

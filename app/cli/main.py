@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -28,6 +28,7 @@ from app.config import load_settings
 from app.api.inference_service import InferenceService
 from app.core.logging import configure_logging
 from app.core.backends import SUPPORTED_BACKENDS
+from app.core.platform_guidance import setup_repair_hint
 from app.core.model_registry import (
     ModelPackValidationError,
     discover_model_packs,
@@ -43,7 +44,6 @@ cli = typer.Typer(add_completion=False, help="JustRayzist CLI")
 DEFAULT_FP8_SUITE_PACKS = [
     "Rayzist_bf16",
     "Rayzist_bf16__auto_fp8_storage",
-    "Rayzist_fp8_full",
 ]
 
 DEFAULT_FP8_SUITE_PROMPTS = [
@@ -1207,7 +1207,7 @@ def generate(
     except ImportError as exc:
         typer.echo(
             f"Missing dependency during generation: {exc}. "
-            "Run RunMeFirst.bat (recommended) or repair with scripts/bootstrap_env.ps1."
+            + setup_repair_hint(include_manual_bootstrap=True)
         )
         raise typer.Exit(code=2) from exc
     except Exception as exc:

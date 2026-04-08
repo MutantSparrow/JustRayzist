@@ -1,8 +1,0 @@
-name: Rayzist2_bf16
-architecture: z_image_turbo
-backend_preference:
-  - diffusers
-components:
-  transformer:
-    path: ./weights/Rayzist.v2.0.safetensors
-    format: safetensors

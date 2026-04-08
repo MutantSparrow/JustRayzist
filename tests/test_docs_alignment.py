@@ -58,6 +58,12 @@ def test_user_docs_describe_auto_resource_tiering() -> None:
     assert "resource_tier" in readme
     assert "resource_tier" in usage
     assert "auto resource-tiering" in troubleshooting.lower()
+    assert "RunMeFirst.sh" in readme
+    assert "StartWeb.sh" in readme
+    assert "Linux and macOS source mode" in readme
+    assert "RunMeFirst.sh" in usage
+    assert "StartWeb.sh" in usage
+    assert "Windows-only" in packaging
     assert "JUSTRAYZIST_PROFILE" in readme
     assert "native FP8 inference is not implemented" in readme
     assert "native FP8 inference is not implemented" in usage
@@ -116,6 +122,7 @@ def test_api_tester_uses_manifest_feed() -> None:
     assert "API_MANIFEST_PATH" in api_docs
     assert 'fetch(API_MANIFEST_PATH' in api_docs
     assert "requires_client" in api_docs
+
 
 
 

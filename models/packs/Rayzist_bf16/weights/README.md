@@ -16,4 +16,8 @@ From project root, the automated fetch command is:
 powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1
 ```
 
+```bash
+python3 ./scripts/portable/fetch_model_assets.py
+```
+
 The fetch script uses Hugging Face CLI (`hf download`) with XET acceleration and verifies SHA256 checksums.

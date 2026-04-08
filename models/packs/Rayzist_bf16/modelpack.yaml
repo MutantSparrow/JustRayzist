@@ -1,4 +1,4 @@
-﻿name: Rayzist_bf16
+name: Rayzist_bf16
 enabled: true
 architecture: z_image_turbo
 backend_preference:
@@ -21,6 +21,3 @@ required_configs:
   - ./config/transformer/config.json
   - ./config/vae/config.json
   - ./config/text_encoder/config.json
-
-enabled: true
-

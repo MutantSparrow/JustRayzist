@@ -93,7 +93,6 @@ const requiredUi = [
   ["procedural-latent-slider", proceduralLatentSliderEl],
   ["procedural-latent-value", proceduralLatentValueEl],
   ["prompt-enhance-button", promptEnhanceButtonEl],
-  ["upscale-settings-hint", upscaleSettingsHintEl],
   ["delete-gallery-button", deleteGalleryButtonEl],
   ["kill-server-button", killServerButtonEl],
   ["filter-input", filterInputEl],
@@ -1310,28 +1309,40 @@ function setPendingLoraWeight(loraId, rawValue, options = {}) {
 }
 
 function renderLoraLibrary() {
-  const filterValue = String(state.loraFilter || "").trim().toLowerCase();
-  const filteredItems = state.loraLibrary.filter((item) => {
-    if (!filterValue) return true;
-    const haystack = `${item.display_name || ""} ${item.source_filename || ""}`.toLowerCase();
-    return haystack.includes(filterValue);
-  });
-  const items = [];
-  const addTile = createLoraAddTile();
-  addTile.dataset.masonryOrder = "0";
-  items.push(addTile);
-  if (filteredItems.length === 0) {
+  try {
+    const filterValue = String(state.loraFilter || "").trim().toLowerCase();
+    const filteredItems = state.loraLibrary.filter((item) => {
+      if (!filterValue) return true;
+      const haystack = `${item.display_name || ""} ${item.source_filename || ""}`.toLowerCase();
+      return haystack.includes(filterValue);
+    });
+    const items = [];
+    const addTile = createLoraAddTile();
+    addTile.dataset.masonryOrder = "0";
+    items.push(addTile);
+    if (filteredItems.length === 0) {
+      loraDrawerEmptyEl.classList.remove("hidden");
+      loraDrawerEmptyEl.textContent =
+        state.loraLibrary.length === 0 ? "No LoRAs installed yet." : "No LoRAs match the current filter.";
+    } else {
+      loraDrawerEmptyEl.classList.add("hidden");
+    }
+    filteredItems.forEach((item, index) => {
+      items.push(createLoraLibraryCard(item, index + 1));
+    });
+    placeLoraMasonryItems(items);
+    scheduleLoraLibraryMasonryRelayout();
+  } catch (error) {
+    if (state.loraLibraryMasonryFrame !== null) {
+      window.cancelAnimationFrame(state.loraLibraryMasonryFrame);
+      state.loraLibraryMasonryFrame = null;
+    }
+    loraListEl.innerHTML = "";
+    loraListEl.style.setProperty("--lora-masonry-columns", "1");
     loraDrawerEmptyEl.classList.remove("hidden");
-    loraDrawerEmptyEl.textContent =
-      state.loraLibrary.length === 0 ? "No LoRAs installed yet." : "No LoRAs match the current filter.";
-  } else {
-    loraDrawerEmptyEl.classList.add("hidden");
+    loraDrawerEmptyEl.textContent = "Failed to render the LoRA library.";
+    setStatus(`Failed to render LoRAs: ${String(error?.message || error)}`, true);
   }
-  filteredItems.forEach((item, index) => {
-    items.push(createLoraLibraryCard(item, index + 1));
-  });
-  placeLoraMasonryItems(items);
-  scheduleLoraLibraryMasonryRelayout();
 }
 
 function syncAppliedLorasWithLibrary() {
@@ -2616,7 +2627,9 @@ function getEffectiveUpscaleScale() {
 function updateUpscaleControls() {
   state.upscaleMode = "fast";
   state.upscaleScale = 2;
-  upscaleSettingsHintEl.textContent = "Upscale uses SeedVR2 direct x2 faithful mode.";
+  if (upscaleSettingsHintEl) {
+    upscaleSettingsHintEl.textContent = "Upscale uses SeedVR2 direct x2 faithful mode.";
+  }
 }
 
 function setUpscaleMode(mode) {

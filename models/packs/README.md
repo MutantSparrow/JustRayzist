@@ -55,10 +55,10 @@ required_configs:
 - Normal launcher and API pack lists only show packs where `user_visible: true` and `enabled: true`.
 - Packs can stay installed but unavailable to normal users by setting `enabled: false`.
 - Hidden or disabled packs are still valid for engineering and benchmark workflows when explicitly named.
-- `Rayzist_fp8_full` and compatible custom real-FP8 packs are examples of public FP8-checkpoint packs that use the dedicated FP8-checkpoint backend.
-- That backend currently runs BF16 compute with FP8-at-rest preservation where safe; it does not provide native FP8 inference.
-- `GET /model-packs` and `StartWeb.bat` show only public enabled packs.
-- Install-time asset fetch can switch the default enabled pack between `Rayzist_bf16` and `Rayzist_fp8_full` based on detected NVIDIA VRAM.
+- The bundled app ships with `Rayzist_bf16` as the default public enabled pack.
+- Derived FP8 storage is an internal runtime strategy; it does not provide native FP8 inference.
+- `GET /model-packs`, `StartWeb.bat`, and `StartWeb.sh` show only public enabled packs.
+- Install-time asset fetch provisions the bundled `Rayzist_bf16` pack.
 
 ## Supported component formats
 

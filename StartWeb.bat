@@ -118,18 +118,10 @@ if !PACK_COUNT! EQU 1 (
 )
 set "JUSTRAYZIST_PACK=!PACK!"
 if /I "!PACK!"=="Rayzist_bf16" (
-  call :ensure_default_pack_assets "bf16"
+  call :ensure_default_pack_assets
   if errorlevel 1 (
     set "EXIT_CODE=1"
     goto :after_run
-  )
-) else (
-  if /I "!PACK!"=="Rayzist_fp8_full" (
-    call :ensure_default_pack_assets "fp8_full"
-    if errorlevel 1 (
-      set "EXIT_CODE=1"
-      goto :after_run
-    )
   )
 )
 
@@ -301,21 +293,10 @@ if errorlevel 1 exit /b 1
 exit /b 0
 
 :ensure_default_pack_assets
-set "MODEL_VARIANT=%~1"
 set "PACK_ROOT=%CD%\models\packs\Rayzist_bf16"
 set "NEEDED_TRANSFORMER=%PACK_ROOT%\weights\Rayzist.v1.0.safetensors"
-if /I "!MODEL_VARIANT!"=="fp8_full" (
-  set "PACK_ROOT=%CD%\models\packs\Rayzist_fp8_full"
-  set "NEEDED_TRANSFORMER=%PACK_ROOT%\weights\Rayzist.v1.0.fp8_e4m3fn.full.safetensors"
-)
 set "NEEDED_VAE=%PACK_ROOT%\weights\diffusion_pytorch_model.safetensors"
-if /I "!MODEL_VARIANT!"=="fp8_full" (
-  set "NEEDED_VAE=%CD%\models\packs\Rayzist_bf16\weights\diffusion_pytorch_model.safetensors"
-)
 set "NEEDED_ENCODER=%PACK_ROOT%\config\text_encoder\model.safetensors"
-if /I "!MODEL_VARIANT!"=="fp8_full" (
-  set "NEEDED_ENCODER=%CD%\models\packs\Rayzist_bf16\config\text_encoder\model.safetensors"
-)
 set "NEEDED_SEEDVR2_DIT=%CD%\models\seedvr2\seedvr2_ema_3b_fp8_e4m3fn.safetensors"
 set "NEEDED_SEEDVR2_VAE=%CD%\models\seedvr2\ema_vae_fp16.safetensors"
 set "NEEDED_SEEDVR2_RUNTIME=%CD%\models\seedvr2\runtime\ComfyUI-SeedVR2_VideoUpscaler\inference_cli.py"
@@ -332,14 +313,14 @@ if not exist "!NEEDED_SEEDVR2_VAE!" set "MISSING_ASSETS=1"
 if !MISSING_ASSETS! EQU 0 exit /b 0
 
 echo.
-echo Missing default model assets for pack variant !MODEL_VARIANT!.
+echo Missing bundled model assets for Rayzist_bf16.
 if not exist "!FETCH_SCRIPT!" (
   echo Missing fetch script: !FETCH_SCRIPT!
   exit /b 1
 )
 echo Running fetch script:
 echo   !FETCH_SCRIPT!
-powershell -NoProfile -ExecutionPolicy Bypass -File "!FETCH_SCRIPT!" -ModelVariant !MODEL_VARIANT!
+powershell -NoProfile -ExecutionPolicy Bypass -File "!FETCH_SCRIPT!"
 if errorlevel 1 (
   echo Failed to fetch default model assets.
   echo Ensure Hugging Face CLI with XET is installed via:

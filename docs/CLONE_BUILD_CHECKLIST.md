@@ -21,6 +21,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\release\verify_repo_readiness
 .\RunMeFirst.bat
 ```
 
+```bash
+./RunMeFirst.sh
+```
+
 ## 4. Optional manual bootstrap
 
 ```powershell
@@ -41,6 +45,10 @@ python -m pytest -q tests -p no:cacheprovider
 
 ```powershell
 .\StartWeb.bat
+```
+
+```bash
+./StartWeb.sh
 ```
 
 Normal startup should now ask only for the public model pack and local/LAN listen mode. The app should auto-detect its internal resource tier from available VRAM instead of prompting for `high`, `balanced`, or `constrained`.

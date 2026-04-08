@@ -1,4 +1,4 @@
-﻿# JustRayzist
+# JustRayzist
 <img width="1900" alt="JustRayzist gallery overview" src="readme_images/gallery_view.png" />
 
 
@@ -13,7 +13,7 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 <img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
 <img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
-## New in v1.5.4
+## New in v1.6.0
 
 - restores the LoRA drawer masonry layout without bringing back the CSS multi-column overflow bug that caused clipped off-screen columns
 - keeps the cross-browser LoRA library sync fixes in place so add, rename, and delete changes still propagate between open browser sessions
@@ -60,7 +60,9 @@ The app is designed to run 100% without runtime internet dependencies once insta
 
 ## Requirements
 
-- Windows host (primary supported workflow).
+- Windows is the primary supported workflow, including packaged releases and `UpdateApp.bat`.
+- Linux and macOS source mode are supported through `RunMeFirst.sh` and `StartWeb.sh`.
+- macOS support is best-effort source setup only; accelerated generation is not guaranteed.
 - NVIDIA GPU strongly recommended for practical performance (CPU fallback is possible, but very slow).
 - Internet access for first-time setup (Python/dependencies/model downloads; everything is fetched from Hugging Face).
 
@@ -76,29 +78,48 @@ It *should* run purely on CPU thanks to smart offload but you *probably* do not 
 
 ## Installation
 
-From repository root:
+Windows from repository root:
 
 ```powershell
 .\RunMeFirst.bat
 ```
 
-`RunMeFirst.bat` will:
-- install Python 3.11 if missing
+Linux or macOS source mode from repository root:
+
+```bash
+./RunMeFirst.sh
+```
+
+The setup script will:
 - create or repair `.venv`
-- install matching torch/runtime dependencies based on your detected GPU
+- install runtime, SeedVR2, and dev dependencies
 - install Hugging Face CLI + XET support in the environment
 - fetch default model assets from Hugging Face
-- choose `Rayzist_bf16` or `Rayzist_fp8_full` as the default installed pack from detected NVIDIA VRAM
-- run sanity checks and create a desktop shortcut
+- fetch the bundled SeedVR2 runtime repository
+- run `doctor` and `validate-models`
+
+Windows `RunMeFirst.bat` also:
+- installs Python 3.11 if missing
+- selects the CUDA lane (`cu126` or `cu128`) from detected GPU/driver state
+- creates the desktop shortcut
+
+Linux source mode auto-selects CUDA requirements when `nvidia-smi` is available.
+macOS source mode uses the non-CUDA torch requirements path.
 
 Downloads are performed through Hugging Face CLI (`hf download`) with XET acceleration enabled (`HF_XET_HIGH_PERFORMANCE=1`), and each file is SHA256-verified before acceptance.
 
 ## Quick Start
 
-From repository root:
+Windows:
 
 ```powershell
 .\StartWeb.bat
+```
+
+Linux or macOS source mode:
+
+```bash
+./StartWeb.sh
 ```
 <br>
 ...or use the desktop shortcut.<br>
@@ -110,6 +131,9 @@ Launcher flow:
 3. Let the app auto-detect a memory strategy from current free VRAM.
 4. Open `http://127.0.0.1:37717/`.
 
+`StartWeb.sh` accepts `--host`, `--port`, and `--pack`.
+If exactly one public enabled pack exists it auto-selects it; otherwise it prompts when a TTY is available or requires `--pack` / `JUSTRAYZIST_PACK`.
+
 Normal startup no longer asks users to choose `high`, `balanced`, or `constrained`.
 The app keeps a stable `balanced` behavior baseline for normal quality defaults, then
 auto-detects an internal resource tier (`high`, `balanced`, or `constrained`) to pick
@@ -117,8 +141,8 @@ the safest execution/offload strategy for the hardware and current VRAM state.
 That resource tier can downgrade or re-upgrade between requests as available VRAM changes.
 
 Only public enabled packs appear in the launcher and `GET /model-packs`.
-If setup detects less than 13 GiB of NVIDIA VRAM, it enables `Rayzist_fp8_full` as the seamless default install instead of `Rayzist_bf16`.
-Real FP8 packs currently run as BF16 compute with FP8-at-rest preservation where safe; native FP8 inference is not implemented in the current release.
+Bundled setup now provisions `Rayzist_bf16` only.
+Derived FP8 storage remains an internal runtime strategy for constrained conditions; native FP8 inference is not implemented in the current release.
 Hidden, disabled, or experimental packs remain loadable only when explicitly named for engineering work.
 
 ## Update Packaged Install
@@ -140,7 +164,7 @@ Environment variables (used for CLI)
 - `JUSTRAYZIST_OFFLINE`: `1` (default) enables offline env guards.
 - `JUSTRAYZIST_ENV`: environment label (`dev` default).
 - `JUSTRAYZIST_PYTHON`: optional interpreter override for source-mode launcher.
-- `JUSTRAYZIST_LISTEN`: set `1` to force LAN listen mode from `StartWeb.bat`.
+- `JUSTRAYZIST_LISTEN`: set `1` to force LAN listen mode from `StartWeb.bat` or `StartWeb.sh`.
 - `JUSTRAYZIST_SKIP_GPU_PREFLIGHT`: set `1` to bypass lane/driver preflight in packaged mode.
 <br><br>
 
@@ -233,7 +257,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.5.4",
+  "version": "1.6.0",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -263,7 +287,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.5.4",
+  "app_version": "1.6.0",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {

@@ -248,8 +248,8 @@ def test_list_model_packs_hides_non_public_or_disabled_entries(monkeypatch, work
     root = _make_temp_root(workspace_tmp_path, "hidden-list")
     service = InferenceService(_make_settings(root, tier_name="balanced"))
     public_pack = _pack(root, name="Rayzist_bf16", complete=True, user_visible=True)
-    hidden_pack = _pack(root, name="Rayzist_fp8_full", complete=True, user_visible=False)
-    disabled_pack = _pack(root, name="Rayzist_fp8_disabled", complete=True, enabled=False)
+    hidden_pack = _pack(root, name="CustomHiddenPack", complete=True, user_visible=False)
+    disabled_pack = _pack(root, name="CustomDisabledPack", complete=True, enabled=False)
     pack_files = [public_pack.source_file, hidden_pack.source_file, disabled_pack.source_file]
 
     monkeypatch.setattr("app.api.inference_service.discover_model_packs", lambda _dir: pack_files)
@@ -267,8 +267,8 @@ def test_default_pack_selection_ignores_hidden_and_disabled_packs(monkeypatch, w
     root = _make_temp_root(workspace_tmp_path, "default-pack")
     service = InferenceService(_make_settings(root, tier_name="balanced"))
     public_pack = _pack(root, name="Rayzist_bf16", complete=True, user_visible=True)
-    hidden_pack = _pack(root, name="Rayzist_fp8_full", complete=True, user_visible=False)
-    disabled_pack = _pack(root, name="Rayzist_fp8_disabled", complete=True, enabled=False)
+    hidden_pack = _pack(root, name="CustomHiddenPack", complete=True, user_visible=False)
+    disabled_pack = _pack(root, name="CustomDisabledPack", complete=True, enabled=False)
     pack_files = [hidden_pack.source_file, disabled_pack.source_file, public_pack.source_file]
 
     monkeypatch.setattr("app.api.inference_service.discover_model_packs", lambda _dir: pack_files)
@@ -286,14 +286,14 @@ def test_default_pack_selection_ignores_hidden_and_disabled_packs(monkeypatch, w
 def test_explicit_disabled_pack_still_loads_by_name(monkeypatch, workspace_tmp_path: Path) -> None:
     root = _make_temp_root(workspace_tmp_path, "explicit-disabled-pack")
     service = InferenceService(_make_settings(root, tier_name="balanced"))
-    disabled_pack = _pack(root, name="Rayzist_fp8_full", complete=True, enabled=False)
+    disabled_pack = _pack(root, name="CustomDisabledPack", complete=True, enabled=False)
 
     monkeypatch.setattr(
         "app.api.inference_service.load_model_pack_by_name",
-        lambda _dir, pack_name: disabled_pack if pack_name == "Rayzist_fp8_full" else None,
+        lambda _dir, pack_name: disabled_pack if pack_name == "CustomDisabledPack" else None,
     )
 
-    selected = service._load_base_pack("Rayzist_fp8_full")
+    selected = service._load_base_pack("CustomDisabledPack")
 
-    assert selected.name == "Rayzist_fp8_full"
+    assert selected.name == "CustomDisabledPack"
     assert selected.enabled is False

@@ -23,6 +23,7 @@ from PIL import Image
 from app.config.settings import AppSettings
 from app.core.cancellation import GenerationCancelledError
 from app.core.memory import now_perf
+from app.core.platform_guidance import setup_repair_hint
 
 SEEDVR2_MODEL_REPO = "themindstudio/SeedVR2-3B-FP8-e4m3fn"
 SEEDVR2_MODEL_REVISION = "main"
@@ -1338,7 +1339,8 @@ def upscale_with_seedvr2(
     runtime_script = _runtime_script_path(settings)
     if not runtime_script.exists():
         raise RuntimeError(
-            "SeedVR2 runtime script not found. Run .\\RunMeFirst.bat to fetch runtime components."
+            "SeedVR2 runtime script not found. "
+            + setup_repair_hint(purpose="fetch runtime components")
         )
     _ensure_runtime_allocator_env_compat(runtime_script)
     _ensure_seedvr2_runtime_dependencies()

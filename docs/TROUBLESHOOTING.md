@@ -17,6 +17,11 @@ Actions:
 python -m app.cli.main validate-models
 ```
 
+```bash
+./RunMeFirst.sh
+python -m app.cli.main validate-models
+```
+
 ## `UpdateApp.bat` fails
 
 Check:
@@ -76,6 +81,10 @@ Or repair manually:
 powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe C:\Path\To\python.exe -Lane cu128
 ```
 
+```bash
+python3 scripts/portable/bootstrap_env.py --python-exe python3 --lane auto
+```
+
 ## `cannot import name 'ZImagePipeline' from 'diffusers'`
 
 Cause:
@@ -86,6 +95,10 @@ Action:
 
 ```powershell
 .\RunMeFirst.bat
+```
+
+```bash
+./RunMeFirst.sh
 ```
 
 The bootstrap script verifies the required diffusers symbols and repairs the environment if needed.
@@ -103,6 +116,12 @@ If SeedVR2 runtime files are missing:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\fetch_seedvr2_runtime.ps1
+```
+
+```bash
+./RunMeFirst.sh
+python3 scripts/portable/fetch_model_assets.py
+python3 scripts/portable/fetch_seedvr2_runtime.py
 ```
 
 ## Launcher fails GPU preflight
@@ -146,12 +165,13 @@ Check:
 
 Important:
 
-- only public enabled packs appear in `StartWeb.bat` and `GET /model-packs`
-- when exactly one public enabled pack exists, `StartWeb.bat` auto-selects it and skips the pack prompt
+- only public enabled packs appear in `StartWeb.bat`, `StartWeb.sh`, and `GET /model-packs`
+- when exactly one public enabled pack exists, `StartWeb.bat` and `StartWeb.sh` auto-select it and skip the pack prompt
 - hidden packs can still be loaded explicitly for engineering workflows
-- `Rayzist_fp8_full` and compatible custom real-FP8 packs can be public; if they are missing, validate their pack files and weights
+- bundled setup provisions only `Rayzist_bf16`; any additional pack is a local custom or engineering addition
+
 - `fp8_storage` is not a user pack anymore; constrained conditions may derive `<base>__auto_fp8_storage` automatically
-- real FP8 packs currently run through BF16 compute with FP8-at-rest preservation; native FP8 inference is not implemented yet
+- native FP8 inference is not implemented yet
 
 Actions:
 
@@ -230,4 +250,10 @@ Repair paths:
 .\RunMeFirst.bat
 powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1
 powershell -ExecutionPolicy Bypass -File scripts\fetch_seedvr2_runtime.ps1
+```
+
+```bash
+./RunMeFirst.sh
+python3 scripts/portable/fetch_model_assets.py
+python3 scripts/portable/fetch_seedvr2_runtime.py
 ```
