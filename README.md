@@ -13,11 +13,11 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 <img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
 <img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
-## New in v1.6.0
+## New in v1.6.1
 
-- restores the LoRA drawer masonry layout without bringing back the CSS multi-column overflow bug that caused clipped off-screen columns
-- keeps the cross-browser LoRA library sync fixes in place so add, rename, and delete changes still propagate between open browser sessions
-- keeps the tooltip/title fallback and hover/focus affordances on LoRA cards while rebalancing the drawer on image load and resize
+- hardens prompt enhancement fallback for very long prompts so explicit late style instructions are preserved instead of being dropped by raw truncation
+- keeps prompt fitting inside the tokenizer-safe budget even when the enhanced candidate or original prompt is severely over budget
+- adds regression coverage for late-style preservation and single-clause over-budget fallback handling
 
 <p align="center">
   <img width="900" alt="LoRA library preview" src="readme_images/lora_preview.png" />
@@ -257,7 +257,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -287,7 +287,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.6.0",
+  "app_version": "1.6.1",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
