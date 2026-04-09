@@ -223,6 +223,7 @@ const GALLERY_COLOR_CACHE_STATUS_MESSAGE = "Updating gallery color cache...";
 const GALLERY_COLOR_CACHE_POLL_INTERVAL_MS = 2500;
 const LORA_LIBRARY_POLL_INTERVAL_MS = 2500;
 const WILDCARD_LIBRARY_POLL_INTERVAL_MS = 2500;
+const WILDCARD_CARD_DOUBLE_CLICK_DELAY_MS = 280;
 const LORA_MASONRY_SINGLE_COLUMN_BREAKPOINT_PX = 600;
 const GALLERY_SOFT_REMOVAL_DURATION_MS = 240;
 const TILE_ACTION_FX_DURATION_MS = 190;
@@ -418,6 +419,7 @@ const state = {
   },
   wildcardCopiedId: null,
   wildcardCopyFeedbackTimer: null,
+  wildcardCardClickTimer: null,
   wildcardEditorOpen: false,
   wildcardEditorMode: "create",
   wildcardEditorId: null,
@@ -1888,6 +1890,57 @@ function scheduleWildcardCopyFeedbackClear() {
   }, 1400);
 }
 
+function clearWildcardCardClickTimer() {
+  if (state.wildcardCardClickTimer !== null) {
+    window.clearTimeout(state.wildcardCardClickTimer);
+    state.wildcardCardClickTimer = null;
+  }
+}
+
+function appendTextToPromptEnd(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  const current = String(promptInputEl.value || "");
+  const next = current
+    ? /\s$/.test(current)
+      ? `${current}${text}`
+      : `${current} ${text}`
+    : text;
+  promptInputEl.value = next;
+  updateTopbarOffset();
+  promptInputEl.focus();
+  if (typeof promptInputEl.setSelectionRange === "function") {
+    const end = next.length;
+    promptInputEl.setSelectionRange(end, end);
+  }
+  return true;
+}
+
+async function copyWildcardPlaceholderFromLibraryItem(item, options = {}) {
+  const placeholder = String(item?.placeholder || wildcardPlaceholderForUi(item?.token || "")).trim();
+  if (!placeholder) {
+    setStatus("Wildcard placeholder is invalid.", true);
+    return { copied: false, inserted: false };
+  }
+  const inserted = Boolean(options.insertIntoPrompt) ? appendTextToPromptEnd(placeholder) : false;
+  const copied = await copyTextToClipboard(placeholder);
+  if (copied) {
+    state.wildcardCopiedId = item.id;
+    renderWildcardLibrary();
+    scheduleWildcardCopyFeedbackClear();
+  }
+  if (copied && inserted) {
+    setStatus(`${placeholder} copied to clipboard and inserted into prompt.`);
+  } else if (copied) {
+    setStatus(`${placeholder} copied to clipboard.`);
+  } else if (inserted) {
+    setStatus(`${placeholder} inserted into prompt, but clipboard copy failed.`, true);
+  } else {
+    setStatus("Failed to copy wildcard placeholder.", true);
+  }
+  return { copied, inserted };
+}
+
 function wildcardEditorValidationState() {
   const displayName = String(state.wildcardEditorDisplayName || "").trim();
   const rawToken = String(state.wildcardEditorToken || "");
@@ -2089,7 +2142,7 @@ function createWildcardLibraryCard(item, order) {
   card.dataset.wildcardId = String(item.id || "");
   card.dataset.masonryOrder = String(order);
   card.classList.toggle("copied", state.wildcardCopiedId === item.id);
-  card.title = `${displayName}\nClick to copy ${placeholder}`;
+  card.title = `${displayName}\nClick to copy ${placeholder}\nDouble-click to copy and append it to the prompt`;
 
   const topRow = document.createElement("div");
   topRow.className = "wildcard-card-top-row";
@@ -2112,6 +2165,9 @@ function createWildcardLibraryCard(item, order) {
     event.stopPropagation();
     openWildcardEditorForItem(item);
   });
+  editButton.addEventListener("dblclick", (event) => {
+    event.stopPropagation();
+  });
 
   const deleteButton = document.createElement("button");
   deleteButton.type = "button";
@@ -2130,6 +2186,9 @@ function createWildcardLibraryCard(item, order) {
       "Delete",
       "Cancel"
     );
+  });
+  deleteButton.addEventListener("dblclick", (event) => {
+    event.stopPropagation();
   });
   actions.append(editButton, deleteButton);
   topRow.append(actions);
@@ -2156,16 +2215,20 @@ function createWildcardLibraryCard(item, order) {
   preview.textContent = normalizeWildcardEntriesForUi(item?.content_text || "").slice(0, 4).join("\n");
 
   card.append(topRow, token, meta, preview);
-  card.addEventListener("click", async () => {
-    const copied = await copyTextToClipboard(placeholder);
-    if (!copied) {
-      setStatus("Failed to copy wildcard placeholder.", true);
-      return;
-    }
-    state.wildcardCopiedId = item.id;
-    renderWildcardLibrary();
-    scheduleWildcardCopyFeedbackClear();
-    setStatus(`${placeholder} copied to clipboard.`);
+  card.addEventListener("click", (event) => {
+    if (event.detail !== 1) return;
+    clearWildcardCardClickTimer();
+    state.wildcardCardClickTimer = window.setTimeout(() => {
+      state.wildcardCardClickTimer = null;
+      copyWildcardPlaceholderFromLibraryItem(item).catch(() => {
+      });
+    }, WILDCARD_CARD_DOUBLE_CLICK_DELAY_MS);
+  });
+  card.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    clearWildcardCardClickTimer();
+    copyWildcardPlaceholderFromLibraryItem(item, { insertIntoPrompt: true }).catch(() => {
+    });
   });
   return card;
 }
@@ -2692,6 +2755,31 @@ function shortPrompt(value, limit = 84) {
   const raw = String(value || "").trim();
   if (raw.length <= limit) return raw;
   return `${raw.slice(0, limit - 3)}...`;
+}
+
+function buildViewerWildcardDetailsHtml(wildcards) {
+  if (!Array.isArray(wildcards) || wildcards.length === 0) {
+    return "";
+  }
+  const rows = wildcards
+    .map((entry) => {
+      const placeholder = String(entry?.placeholder || `__${entry?.token || "wildcard"}__`).trim();
+      const selectedEntry = String(entry?.selected_entry || "").trim() || "(empty entry)";
+      return [
+        '<div class="viewer-meta-wildcard-row">',
+        `<code class="viewer-meta-wildcard-placeholder">${escapeHtml(placeholder)}</code>`,
+        '<span class="viewer-meta-wildcard-arrow" aria-hidden="true">→</span>',
+        `<span class="viewer-meta-wildcard-value">${escapeHtml(selectedEntry)}</span>`,
+        "</div>",
+      ].join("");
+    })
+    .join("");
+  return [
+    '<div class="viewer-meta-expanded-block viewer-meta-wildcards-block">',
+    '<span class="viewer-meta-expanded-label">Wildcards</span>',
+    `<div class="viewer-meta-wildcard-list">${rows}</div>`,
+    "</div>",
+  ].join("");
 }
 
 function formatGalleryTimestamp(raw) {
@@ -3766,6 +3854,7 @@ function applyViewerItemMeta(item) {
     const compareAvailable = Boolean(sourceFilename);
     viewerMetaEl.classList.remove("expanded");
     viewerMetaEl.innerHTML = [
+      '<div class="viewer-meta-main-row">',
       `<span class="viewer-meta-source">Upscaled from ${escapeHtml(sourceFilename || "unknown image")}</span>`,
       '<span class="viewer-meta-sep">|</span>',
       `<button type="button" class="viewer-compare-hold" title="Hold to compare original"${
@@ -3773,7 +3862,8 @@ function applyViewerItemMeta(item) {
       }>${compareAvailable ? "HOLD TO SEE ORIGINAL" : "ORIGINAL NOT AVAILABLE"}</button>`,
       '<span class="viewer-meta-sep">|</span>',
       `<span>${escapeHtml(resolution)}</span>`,
-    ].join(" ");
+      "</div>",
+    ].join("");
   } else {
     const timestamp = item.timestamp || item.created_at;
     const pack = item.model_pack || "n/a";
@@ -3786,14 +3876,10 @@ function applyViewerItemMeta(item) {
       loras.length > 0
         ? loras.map((entry) => `${entry.name || entry.id} ${formatLoraWeight(entry.weight)}`).join(", ")
         : "";
-    const wildcardLabel =
-      wildcards.length > 0
-        ? wildcards
-          .map((entry) => `${entry.placeholder || `__${entry.token || "wildcard"}__`} -> ${entry.selected_entry || ""}`)
-          .join(", ")
-        : "";
+    const wildcardDetails = state.viewerPromptExpanded ? buildViewerWildcardDetailsHtml(wildcards) : "";
     viewerMetaEl.classList.toggle("expanded", state.viewerPromptExpanded);
     const parts = [
+      '<div class="viewer-meta-main-row">',
       `<span class="viewer-meta-timestamp">${escapeHtml(formatTimestamp(timestamp))}</span>`,
       '<span class="viewer-meta-sep">|</span>',
       `<button type="button" class="viewer-meta-prompt${state.viewerPromptExpanded ? " expanded" : ""}" title="${promptTitle}">${escapeHtml(promptDisplay)}</button>`,
@@ -3806,11 +3892,11 @@ function applyViewerItemMeta(item) {
       parts.push('<span class="viewer-meta-sep">|</span>');
       parts.push(`<span>${escapeHtml(loraLabel)}</span>`);
     }
-    if (wildcardLabel) {
-      parts.push('<span class="viewer-meta-sep">|</span>');
-      parts.push(`<span>${escapeHtml(`Wildcards ${wildcardLabel}`)}</span>`);
+    parts.push("</div>");
+    if (wildcardDetails) {
+      parts.push(wildcardDetails);
     }
-    viewerMetaEl.innerHTML = parts.join(" ");
+    viewerMetaEl.innerHTML = parts.join("");
   }
   viewerDownloadEl.href = buildDownloadUrl(item.filename);
   viewerDownloadEl.setAttribute("download", item.filename);

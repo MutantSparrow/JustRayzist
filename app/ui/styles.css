@@ -446,10 +446,6 @@ select {
     linear-gradient(-45deg, rgba(255, 44, 182, 0.02) 12.5%, transparent 12.5%, transparent 50%, rgba(255, 44, 182, 0.02) 50%, rgba(255, 44, 182, 0.02) 62.5%, transparent 62.5%, transparent);
 }
 
-.wildcard-drawer-title {
-  background: linear-gradient(90deg, var(--lime), #d8ff55);
-}
-
 .lora-drawer-header {
   margin: 0 -14px;
 }
@@ -458,12 +454,16 @@ select {
   margin: 0;
   width: 100%;
   padding: 10px 16px 12px;
-  background: var(--lime);
+  background: var(--magenta);
   color: #000;
   font-size: 1.45rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.lora-drawer-title.wildcard-drawer-title {
+  background: var(--lime);
 }
 
 .lora-drawer-save {
@@ -2538,6 +2538,16 @@ body.wildcard-drawer-open .gallery-area {
   white-space: nowrap;
 }
 
+.viewer-meta-main-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 100%;
+  overflow: hidden;
+  white-space: inherit;
+}
+
 .viewer-meta-timestamp {
   font-size: 0.96rem;
   font-weight: 700;
@@ -2551,6 +2561,12 @@ body.wildcard-drawer-open .gallery-area {
   max-height: 120px;
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.viewer-meta.expanded .viewer-meta-main-row {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  overflow: visible;
 }
 
 .viewer-meta-sep {
@@ -2589,6 +2605,60 @@ body.wildcard-drawer-open .gallery-area {
   text-overflow: clip;
   white-space: normal;
   line-height: 1.35;
+}
+
+.viewer-meta-expanded-block {
+  flex: 1 1 100%;
+  display: grid;
+  gap: 7px;
+  margin-top: 2px;
+  padding: 8px 10px;
+  border: 1px solid #252525;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.viewer-meta-expanded-label {
+  color: #aeb7a2;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.viewer-meta-wildcard-list {
+  display: grid;
+  gap: 7px;
+}
+
+.viewer-meta-wildcard-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.viewer-meta-wildcard-placeholder {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid rgba(183, 255, 0, 0.28);
+  background: rgba(183, 255, 0, 0.08);
+  color: #efffd1;
+  font-family: "Consolas", "Courier New", monospace;
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.viewer-meta-wildcard-arrow {
+  color: var(--lime);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.viewer-meta-wildcard-value {
+  min-width: 0;
+  color: #e5e5e5;
+  line-height: 1.35;
+  word-break: break-word;
 }
 
 .viewer-actions {

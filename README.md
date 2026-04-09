@@ -13,11 +13,11 @@ It even has a built in prompt enhancement feature, a proper image browser, impor
 <img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
 <img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
 
-## New in v1.7.0
+## New in v1.7.1
 
-- adds a full Wildcard Library with editable prompt tokens, deterministic seeded expansion, clipboard copy from cards, and encoder-powered wildcard suggestions
-- persists resolved wildcard substitutions in PNG metadata and gallery indexing while keeping the final model prompt clean of wildcard placeholders
-- fixes the library drawer pull tabs so LoRA and Wildcard drawers remain closable and clearly labeled when open
+- fixes fullscreen prompt details so wildcard substitutions stay hidden until prompt expansion and never get mixed into prompt copy actions
+- adds wildcard tile double-click insertion so a tile can copy once and append its placeholder to the prompt in one gesture
+- restores the flat accent treatment on library headers: LoRA stays magenta and Wildcard stays green
 
 <p align="center">
   <img width="900" alt="Wildcard library preview" src="readme_images/wildcards_preview.png" />
@@ -267,7 +267,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -298,7 +298,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.7.0",
+  "app_version": "1.7.1",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
