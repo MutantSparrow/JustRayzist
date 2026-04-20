@@ -218,6 +218,7 @@ def _create_images_table(conn: sqlite3.Connection) -> None:
             source_filename TEXT,
             source_width INTEGER,
             source_height INTEGER,
+            similarity REAL,
             wildcards_json TEXT,
             wildcard_count INTEGER,
             loras_json TEXT,
@@ -418,6 +419,7 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
         "source_filename": "TEXT",
         "source_width": "INTEGER",
         "source_height": "INTEGER",
+        "similarity": "REAL",
         "wildcards_json": "TEXT",
         "wildcard_count": "INTEGER",
         "loras_json": "TEXT",
@@ -476,10 +478,10 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
             INSERT INTO images (
                 owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
                 prompt_wildcard_resolved, width, height, model_pack, backend, device, steps, guidance_scale,
-                duration_ms, mode, source_image, source_filename, source_width, source_height,
+                duration_ms, mode, source_image, source_filename, source_width, source_height, similarity,
                 wildcards_json, wildcard_count, loras_json, lora_count, color_flags, favorite, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(owner_id, filename) DO UPDATE SET
                 output_path=excluded.output_path,
                 prompt=excluded.prompt,
@@ -500,6 +502,7 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 source_filename=excluded.source_filename,
                 source_width=excluded.source_width,
                 source_height=excluded.source_height,
+                similarity=excluded.similarity,
                 wildcards_json=excluded.wildcards_json,
                 wildcard_count=excluded.wildcard_count,
                 loras_json=excluded.loras_json,
@@ -530,6 +533,7 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 record.get("source_filename"),
                 _to_int(record.get("source_width")),
                 _to_int(record.get("source_height")),
+                _to_float(record.get("similarity")),
                 record.get("wildcards_json"),
                 _to_int(record.get("wildcard_count")),
                 record.get("loras_json"),
@@ -598,10 +602,10 @@ def _upsert_image(
         INSERT INTO images (
             owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
             prompt_wildcard_resolved, width, height, model_pack, backend, device, steps, guidance_scale,
-            duration_ms, mode, source_image, source_filename, source_width, source_height,
+            duration_ms, mode, source_image, source_filename, source_width, source_height, similarity,
             wildcards_json, wildcard_count, loras_json, lora_count, color_flags, favorite, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(owner_id, filename) DO UPDATE SET
             output_path=excluded.output_path,
             prompt=excluded.prompt,
@@ -622,6 +626,7 @@ def _upsert_image(
             source_filename=excluded.source_filename,
             source_width=excluded.source_width,
             source_height=excluded.source_height,
+            similarity=excluded.similarity,
             wildcards_json=excluded.wildcards_json,
             wildcard_count=excluded.wildcard_count,
             loras_json=excluded.loras_json,
@@ -652,6 +657,7 @@ def _upsert_image(
             metadata.get("source_filename"),
             _to_int(metadata.get("source_width")),
             _to_int(metadata.get("source_height")),
+            _to_float(metadata.get("similarity")),
             metadata.get("wildcards_json"),
             _to_int(metadata.get("wildcard_count")),
             metadata.get("loras_json"),

@@ -15,6 +15,8 @@ class ApiExample:
     requires_client: bool
     request: Any
     response: Any
+    request_media_type: str = "application/json"
+    file_fields: tuple[str, ...] = ()
     include_in_readme: bool = True
     include_in_usage: bool = True
 
@@ -445,6 +447,41 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ),
     ApiExample(
         method="POST",
+        path="/img2img",
+        description="Generate one variation from a reference image upload plus prompt and similarity.",
+        requires_client=True,
+        request={
+            "image": "<binary image upload>",
+            "prompt": "A cinematic skyline at sunrise",
+            "pack": "Rayzist_bf16",
+            "job_id": "pending_img2img_1712345678901_abcd1234",
+            "seed": 123456,
+            "scheduler_mode": "euler",
+            "enhance_prompt": False,
+            "similarity": 0.8,
+            "loras": [{"id": "cinematic-style", "weight": 1.0}],
+        },
+        response={
+            "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
+            "mode": "img2img",
+            "source_filename": "reference.png",
+            "source_width": 1024,
+            "source_height": 768,
+            "similarity": 0.8,
+            "duration_ms": 12345,
+            "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png",
+            "prompt_enhanced": False,
+            "prompt_effective_base": "A cinematic skyline at sunrise with a chalet in the French Alps",
+            "prompt_effective": "A cinematic skyline at sunrise with a chalet in the French Alps, cinematic style",
+            "scheduler_mode": "euler",
+            "wildcard_count": 1,
+            "lora_count": 1,
+        },
+        request_media_type="multipart/form-data",
+        file_fields=("image",),
+    ),
+    ApiExample(
+        method="POST",
         path="/upscale",
         description="Upscale one gallery image with the fixed SeedVR2 direct x2 faithful path.",
         requires_client=True,
@@ -467,9 +504,33 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
         },
     ),
     ApiExample(
+        method="POST",
+        path="/clarity",
+        description="Run the fixed FS clarity pipeline on one gallery image and return it at the original size.",
+        requires_client=True,
+        request={
+            "job_id": "pending_clarity_1712345678901_abcd1234",
+            "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+            "pack": "Rayzist_bf16",
+            "seed": 123456,
+            "scheduler_mode": "euler",
+            "enhance_prompt": False,
+        },
+        response={
+            "filename": "justrayzist_YYYYMMDD_hhmmss_002.png",
+            "mode": "api_clarity",
+            "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+            "clarity_engine": "fs_unsharp_downscale",
+            "working_width": 2048,
+            "working_height": 2048,
+            "duration_ms": 16789,
+            "url": "/images/justrayzist_YYYYMMDD_hhmmss_002.png",
+        },
+    ),
+    ApiExample(
         method="GET",
         path="/client-jobs",
-        description="Return the current active generation or upscale job for the requesting client.",
+        description="Return the current active generation, img2img, clarity, or upscale job for the requesting client.",
         requires_client=True,
         request=None,
         response={
@@ -618,7 +679,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ApiExample(
         method="POST",
         path="/server/kill",
-        description="Request local server shutdown.",
+        description="Request local server shutdown from the same machine that is hosting the app.",
         requires_client=False,
         request={},
         response={"status": "ok", "message": "Server shutdown initiated."},
@@ -664,7 +725,10 @@ def render_examples_markdown(*, include_usage_only: bool) -> str:
             lines.append("Requires `X-JustRayzist-Client`.")
             lines.append("")
         if entry.request is not None:
-            lines.append("Sample request body:")
+            if entry.request_media_type != "application/json":
+                lines.append(f"Sample request fields (`{entry.request_media_type}`):")
+            else:
+                lines.append("Sample request body:")
             lines.append("")
             if isinstance(entry.request, str):
                 lines.append("```text")

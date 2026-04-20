@@ -156,7 +156,6 @@ $excludeArgs = @(
   "--exclude-module", "gradio",
   "--exclude-module", "matplotlib",
   "--exclude-module", "sklearn",
-  "--exclude-module", "scipy",
   "--exclude-module", "pandas",
   "--exclude-module", "IPython"
 )

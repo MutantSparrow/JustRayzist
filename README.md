@@ -1,117 +1,100 @@
 # JustRayzist
-<img width="1900" alt="JustRayzist gallery overview" src="readme_images/gallery_view.png" />
 
+![JustRayzist gallery overview](readme_images/gallery_view.png)
 
-<br>Not feeling like ComfyUI? Too broke to get a monthly sub to an image platform?<br>
-Got 35GB of space on a drive somewhere and an RTX card? <br>
+JustRayzist is a local-first image generation app built around the Rayzist Z-Image Turbo fine-tune. It ships a FastAPI backend, a browser UI, a Typer CLI, bundled launch scripts, model-pack metadata, and supporting workflows for gallery management, LoRA libraries, wildcard libraries, prompt enhancement, and x2 SeedVR2 upscaling.
 
-### Enter Just Rayzist!
-A lightweight, easy to install and easier to run app that just runs.<br>
-Built around my Z-Image-Turbo finetune, it gives you a fast image generation platform, available through a local web page, command line or via local API so your favorite AI agents can use it.<br>
-The main UI ships presets up to 1536x1536, the raw API accepts up to 2048x2048, and the default upscale path is SeedVR2 direct x2. <br>
-It even has a built in prompt enhancement feature, a proper image browser, importable client galleries, and a Creative Mode slider when you want it to get a little weird.<br><br>
-<img height="200" alt="Upscale example 1" src="readme_images/upscale_1.png" />
-<img height="200" alt="Upscale example 2" src="readme_images/upscale_2.png" />
+The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
 
-## New in v1.7.1
+## New in v1.7.2
 
-- fixes fullscreen prompt details so wildcard substitutions stay hidden until prompt expansion and never get mixed into prompt copy actions
-- adds wildcard tile double-click insertion so a tile can copy once and append its placeholder to the prompt in one gesture
-- restores the flat accent treatment on library headers: LoRA stays magenta and Wildcard stays green
+- Adds end-to-end `img2img` support across UI, API, and CLI, including source-image lineage metadata and client job cancellation.
+- Adds fixed-FS `clarity` processing plus `clarity-compare` diagnostics for comparing output variants and saved reports.
+- Restricts `POST /server/kill` to local-machine callers and fixes packaged `justrayzist-web` launcher startup.
 
-<p align="center">
-  <img width="900" alt="Wildcard library preview" src="readme_images/wildcards_preview.png" />
-</p>
+![Wildcard library preview](readme_images/wildcards_preview.png)
 
-<p align="center">
-  <img width="900" alt="LoRA library preview" src="readme_images/lora_preview.png" />
-</p>
+![LoRA library preview](readme_images/lora_preview.png)
 
-## Specs
+## Features
 
-- FastAPI web API + browser UI
-- Typer CLI
-- Z-Image Turbo, and more specifically my very own finetune: [Rayzist](https://huggingface.co/MutantSparrow/Ray)
-- local model packs (`.safetensors` / `.gguf`)
-- Automatic resource-tier detection adapts memory strategy to available VRAM
-- SeedVR2 direct x2 upscale flow for the default app path
-- Creative Mode slider (`0-3`) for Light, Medium, and Extreme generation variants
-- RunMeFirst bootstrap installation and auto-repair
-- Run it locally or open it to LAN access
-- Multi-user LAN workspaces with per-user gallery isolation and import support
-- Model pack system to support custom Z-Image-Turbo models, VAEs or encoder models
-- Managed multi-LoRA library support with up to 3 active LoRAs per generation
-- Managed Wildcard Library support with editable placeholder tokens, seeded deterministic expansion, and encoder-assisted entry generation
-- PNG metadata writing and SQLite gallery indexing
-- Web gallery with masonry layout, favorites, color swatch filtering, queued job recovery/cancel, fullscreen compare-hold, and `/API` testing page
-- CLI workflows for generation, engineering-only mixed-model upscale probes, soak runs, soak reporting, SeedVR2 benchmarks, and procedural latent previews
-- Lane-aware bootstrap packaging (`cu126`, `cu128`) with GPU driver preflight
+- Local web UI, local API, and CLI in one repository.
+- Auto resource-tier detection with stable normal-user defaults.
+- Model-pack based runtime with public, hidden, disabled, and derived runtime pack behavior.
+- Multi-LoRA workflow with draft upload, trigger detection, thumbnails, and per-request weights.
+- Wildcard library with editable prompt tokens and encoder-assisted suggestion generation.
+- Gallery indexing with favorites, dominant-color filters, bulk download, rebuild, and import-from-source support.
+- Prompt enhancement and Creative Mode (`procedural_creativity` values `0-3`).
+- SeedVR2 direct x2 upscaling as the default upscale path.
+- Source-mode launchers for Windows, Linux, and macOS.
+- Windows packaging and in-place packaged update flow.
 
-The app is designed to run 100% without runtime internet dependencies once installed locally.
-
-<p align="center">
-  <img width="900" alt="Creative Mode example" src="readme_images/extra_creative_mode.png" />
-</p>
+![Creative Mode example](readme_images/extra_creative_mode.png)
 
 ## Tech Stack
 
 - Python 3.11+
-- PyTorch + CUDA wheels (`cu126`/`cu128`)
-- Diffusers + Transformers + Accelerate
 - FastAPI + Uvicorn
 - Typer
+- PyTorch
+- Diffusers, Transformers, Accelerate
 - Pillow
 - SQLite
+- PowerShell and Python helper scripts for setup and release tasks
 
 ## Requirements
 
-- Windows is the primary supported workflow, including packaged releases and `UpdateApp.bat`.
+- Windows is the primary supported workflow for packaged installs and release engineering.
 - Linux and macOS source mode are supported through `RunMeFirst.sh` and `StartWeb.sh`.
-- macOS support is best-effort source setup only; accelerated generation is not guaranteed.
-- NVIDIA GPU strongly recommended for practical performance (CPU fallback is possible, but very slow).
-- Internet access for first-time setup (Python/dependencies/model downloads; everything is fetched from Hugging Face).
+- An NVIDIA GPU is strongly recommended for practical performance.
+- macOS support is best-effort source setup only.
+- Internet access is required for first-time setup and model/runtime downloads.
 
-### CUDA Lane Baseline
+CUDA lane baseline:
 
-- `cu126`: NVIDIA driver `>= 561.17` (20xx/30xx/40xx fallback lane)
-- `cu128`: NVIDIA driver `>= 572.61` (preferred lane; required for 50xx)
+- `cu126`: NVIDIA driver `>= 561.17`
+- `cu128`: NVIDIA driver `>= 572.61`
 
-12, 16 and 24GB RTX cards supported: 20xx, 30xx, 40xx and 50xx series and up.<br>
-Tested on 4090, 4080, 3090, 3060 Ti.<br>
-It will work on 8GB cards provided you have enough system RAM, but it will slow down considerably.<br>
-It *should* run purely on CPU thanks to smart offload but you *probably* do not want to do this.
+The current bundled public pack is `Rayzist_bf16`. Derived FP8 storage remains an internal constrained-memory runtime strategy; native FP8 inference is not implemented in the current release.
 
 ## Installation
 
-Windows from repository root:
+Preferred setup from repository root:
+
+Windows:
 
 ```powershell
 .\RunMeFirst.bat
 ```
 
-Linux or macOS source mode from repository root:
+Linux and macOS source mode:
 
 ```bash
 ./RunMeFirst.sh
 ```
 
-The setup script will:
-- create or repair `.venv`
-- install runtime, SeedVR2, and dev dependencies
-- install Hugging Face CLI + XET support in the environment
-- fetch default model assets from Hugging Face
-- fetch the bundled SeedVR2 runtime repository
-- run `doctor` and `validate-models`
+What setup does:
 
-Windows `RunMeFirst.bat` also:
-- installs Python 3.11 if missing
-- selects the CUDA lane (`cu126` or `cu128`) from detected GPU/driver state
-- creates the desktop shortcut
+- Creates or repairs `.venv`.
+- Installs runtime, SeedVR2, and development dependencies.
+- Installs Hugging Face CLI with XET support.
+- Fetches the bundled default model assets.
+- Fetches the SeedVR2 runtime repository.
+- Runs `doctor` and `validate-models` sanity checks.
 
-Linux source mode auto-selects CUDA requirements when `nvidia-smi` is available.
-macOS source mode uses the non-CUDA torch requirements path.
+Manual alternatives:
 
-Downloads are performed through Hugging Face CLI (`hf download`) with XET acceleration enabled (`HF_XET_HIGH_PERFORMANCE=1`), and each file is SHA256-verified before acceptance.
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe C:\Path\To\python.exe -Lane cu128
+powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1
+powershell -ExecutionPolicy Bypass -File scripts\fetch_seedvr2_runtime.ps1
+```
+
+```bash
+python3 scripts/portable/bootstrap_env.py --python-exe python3 --lane auto
+python3 scripts/portable/fetch_model_assets.py
+python3 scripts/portable/fetch_seedvr2_runtime.py
+```
 
 ## Quick Start
 
@@ -121,111 +104,101 @@ Windows:
 .\StartWeb.bat
 ```
 
-Linux or macOS source mode:
+Linux and macOS source mode:
 
 ```bash
 ./StartWeb.sh
 ```
-<br>
-...or use the desktop shortcut.<br>
-<br>
-Launcher flow:
 
-1. Select model pack only when more than one public enabled pack is installed.
-2. Select if the server will listen to LAN connections.
-3. Let the app auto-detect a memory strategy from current free VRAM.
+Launcher behavior:
+
+1. Select a pack only when more than one public enabled pack is installed.
+2. Select local-only or LAN listen mode.
+3. Let the app auto-detect the internal `resource_tier` from free VRAM.
 4. Open `http://127.0.0.1:37717/`.
 
-`StartWeb.sh` accepts `--host`, `--port`, and `--pack`.
-If exactly one public enabled pack exists it auto-selects it; otherwise it prompts when a TTY is available or requires `--pack` / `JUSTRAYZIST_PACK`.
+`StartWeb.sh` accepts `--host`, `--port`, and `--pack`. If more than one public enabled pack exists and no TTY is available, provide `--pack` or set `JUSTRAYZIST_PACK`.
 
-Normal startup no longer asks users to choose `high`, `balanced`, or `constrained`.
-The app keeps a stable `balanced` behavior baseline for normal quality defaults, then
-auto-detects an internal resource tier (`high`, `balanced`, or `constrained`) to pick
-the safest execution/offload strategy for the hardware and current VRAM state.
-That resource tier can downgrade or re-upgrade between requests as available VRAM changes.
+## Packaged Update
 
-Only public enabled packs appear in the launcher and `GET /model-packs`.
-Bundled setup now provisions `Rayzist_bf16` only.
-Derived FP8 storage remains an internal runtime strategy for constrained conditions; native FP8 inference is not implemented in the current release.
-Hidden, disabled, or experimental packs remain loadable only when explicitly named for engineering work.
-
-## Update Packaged Install
-
-If you are using a packaged release folder instead of a git checkout, run:
+If you are running from a packaged Windows release folder instead of a git checkout:
 
 ```powershell
 .\UpdateApp.bat
 ```
 
-It checks the latest matching GitHub release for your current lane and mode, then updates the app in place without touching `models/`, `outputs/`, `data/`, `.venv/`, or your local lane marker.
-## CLI Usage
+The updater preserves `models/`, `outputs/`, `data/`, `.venv/`, and the local lane marker while replacing the shipped app files from the latest matching release.
 
-Environment variables (used for CLI)
+## Configuration
 
-- `JUSTRAYZIST_ROOT`: override workspace root.
-- `JUSTRAYZIST_PROFILE`: engineering-only runtime tier override for diagnostics and benchmarks.
+Environment variables used by launchers, source mode, or diagnostics:
+
+- `JUSTRAYZIST_ROOT`: override the workspace root.
 - `JUSTRAYZIST_PACK`: default model pack name.
-- `JUSTRAYZIST_OFFLINE`: `1` (default) enables offline env guards.
-- `JUSTRAYZIST_ENV`: environment label (`dev` default).
-- `JUSTRAYZIST_PYTHON`: optional interpreter override for source-mode launcher.
-- `JUSTRAYZIST_LISTEN`: set `1` to force LAN listen mode from `StartWeb.bat` or `StartWeb.sh`.
-- `JUSTRAYZIST_SKIP_GPU_PREFLIGHT`: set `1` to bypass lane/driver preflight in packaged mode.
-<br><br>
+- `JUSTRAYZIST_OFFLINE`: `1` by default; enables offline runtime guards.
+- `JUSTRAYZIST_ENV`: environment label, `dev` by default.
+- `JUSTRAYZIST_LISTEN`: set to `1` to force LAN listen mode from `StartWeb.bat` or `StartWeb.sh`.
+- `JUSTRAYZIST_PYTHON`: optional interpreter override for source-mode launchers.
+- `JUSTRAYZIST_SKIP_GPU_PREFLIGHT`: set to `1` to bypass packaged GPU lane preflight.
+- `JUSTRAYZIST_PROFILE`: engineering-only runtime tier override for diagnostics and benchmark workflows.
 
-From repository root:
+Normal startup does not ask users to choose `high`, `balanced`, or `constrained`. The stable `runtime_profile` baseline remains `balanced`; the mutable `resource_tier` reports the memory strategy the app selected for the current hardware state.
+
+## Usage Examples
+
+Basic status and validation:
 
 ```powershell
 python -m app.cli.main status
 python -m app.cli.main doctor
 python -m app.cli.main validate-models
 python -m app.cli.main validate-models --all
+```
+
+Serve the app directly:
+
+```powershell
 python -m app.cli.main serve --host 127.0.0.1 --port 37717
 ```
 
-Generate:
+Generate an image:
 
 ```powershell
 python -m app.cli.main generate --pack Rayzist_bf16 --prompt "cinematic skyline at sunrise"
 ```
 
-Soak test:
+Run a soak session and inspect reports:
 
 ```powershell
 python -m app.cli.main soak --pack Rayzist_bf16 --prompt "stress prompt" --iterations 20
-```
-
-Soak report:
-
-```powershell
 python -m app.cli.main soak-report --list-sessions
-python -m app.cli.main soak-report --session-id <session_id>
 ```
 
-Normal CLI commands use auto resource-tier detection. Forced profile/tier flags are kept only on engineering benchmark and probe commands:
+Engineering-only comparison and benchmark commands:
 
 ```powershell
 python -m app.cli.main pack-compare --prompt "cinematic skyline at sunrise"
 python -m app.cli.main pack-compare-suite --iterations 3
 python -m app.cli.main prompt-grid-benchmark --pack Rayzist_bf16 --prompt "PROMPT 1" --prompt "PROMPT 2" --prompt "PROMPT 3"
 python -m app.cli.main seedvr2-still-benchmark --inputs outputs\sample.png --presets seed_faithful,seed_sharp
-```
-
-Procedural latent preview:
-
-```powershell
 python -m app.cli.main procedural-latent-preview --count 16 --seed-start 1 --creativity 2
 ```
+
+The editable install also exposes the `justrayzist` console entry point.
 
 ## API Summary
 
 Base URL: `http://127.0.0.1:37717`
 
-Supported generation cap: UI presets up to `1536x1536`; raw API requests up to `2048x2048`.
-Client-scoped routes require `X-JustRayzist-Client`.
-Use `procedural_creativity` (`0-3`) to control Creative Mode.
-In the main UI, scheduler behavior is derived automatically from Creative Mode. `scheduler_mode` remains optional for raw API and CLI calls.
-Direct image fetches can use `?client_id=<client-id>` if you are linking them into a page or tool.
+Key API behavior:
+
+- Client-scoped routes require `X-JustRayzist-Client`.
+- UI presets go up to `1536x1536`; raw API requests allow up to `2048x2048`.
+- `procedural_creativity` controls Creative Mode with values `0-3`.
+- `scheduler_mode` remains optional for raw API and CLI usage.
+- `GET /health` and `GET /config` report both `runtime_profile` and `resource_tier`.
+- `GET /model-packs` returns public enabled packs only.
+- `POST /server/kill` is restricted to the local machine hosting the app.
 
 <!-- BEGIN GENERATED API ROUTES -->
 - `GET /health`
@@ -244,17 +217,13 @@ Direct image fetches can use `?client_id=<client-id>` if you are linking them in
 - `GET /loras/{lora_id}/preview`
 - `DELETE /loras/{lora_id}`
 - `POST /generate`
+- `POST /img2img`
 - `POST /upscale`
+- `POST /clarity`
 - `POST /images/download-zip`
 <!-- END GENERATED API ROUTES -->
 
-- `GET /API` (interactive API documentation + tester)
-
-`GET /health` and `GET /config` report both:
-- `runtime_profile`: the stable baseline defaults used for normal behavior
-- `resource_tier`: the currently detected internal memory strategy
-
-`GET /model-packs` returns public packs only. Internal derived strategies such as `<base>__auto_fp8_storage` are engineering/runtime details, not normal user pack names.
+`GET /API` serves the built-in API explorer and tester.
 
 <!-- BEGIN GENERATED API EXAMPLES -->
 ### `GET /health`
@@ -267,7 +236,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -298,7 +267,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.7.1",
+  "app_version": "1.7.2",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -787,6 +756,54 @@ Sample response:
 }
 ```
 
+### `POST /img2img`
+
+Generate one variation from a reference image upload plus prompt and similarity.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request fields (`multipart/form-data`):
+
+```json
+{
+  "image": "<binary image upload>",
+  "prompt": "A cinematic skyline at sunrise",
+  "pack": "Rayzist_bf16",
+  "job_id": "pending_img2img_1712345678901_abcd1234",
+  "seed": 123456,
+  "scheduler_mode": "euler",
+  "enhance_prompt": false,
+  "similarity": 0.8,
+  "loras": [
+    {
+      "id": "cinematic-style",
+      "weight": 1.0
+    }
+  ]
+}
+```
+
+Sample response:
+
+```json
+{
+  "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
+  "mode": "img2img",
+  "source_filename": "reference.png",
+  "source_width": 1024,
+  "source_height": 768,
+  "similarity": 0.8,
+  "duration_ms": 12345,
+  "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png",
+  "prompt_enhanced": false,
+  "prompt_effective_base": "A cinematic skyline at sunrise with a chalet in the French Alps",
+  "prompt_effective": "A cinematic skyline at sunrise with a chalet in the French Alps, cinematic style",
+  "scheduler_mode": "euler",
+  "wildcard_count": 1,
+  "lora_count": 1
+}
+```
+
 ### `POST /upscale`
 
 Upscale one gallery image with the fixed SeedVR2 direct x2 faithful path.
@@ -820,6 +837,40 @@ Sample response:
 }
 ```
 
+### `POST /clarity`
+
+Run the fixed FS clarity pipeline on one gallery image and return it at the original size.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "job_id": "pending_clarity_1712345678901_abcd1234",
+  "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+  "pack": "Rayzist_bf16",
+  "seed": 123456,
+  "scheduler_mode": "euler",
+  "enhance_prompt": false
+}
+```
+
+Sample response:
+
+```json
+{
+  "filename": "justrayzist_YYYYMMDD_hhmmss_002.png",
+  "mode": "api_clarity",
+  "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+  "clarity_engine": "fs_unsharp_downscale",
+  "working_width": 2048,
+  "working_height": 2048,
+  "duration_ms": 16789,
+  "url": "/images/justrayzist_YYYYMMDD_hhmmss_002.png"
+}
+```
+
 ### `POST /images/download-zip`
 
 Download a ZIP archive containing the selected client-scoped images.
@@ -844,43 +895,85 @@ ZIP binary response (attachment filename: <client>_selection.zip)
 ```
 <!-- END GENERATED API EXAMPLES -->
 
-The `/API` tester page uses the app's internal `GET /api-manifest` feed to stay aligned with the real handlers and current example payloads.
+## Project Structure
+
+```text
+app/
+  api/           FastAPI routes, request models, manifest-backed API docs
+  cli/           Typer commands and engineering workflows
+  config/        settings, runtime profiles, root/path resolution
+  core/          backend integration, pipelines, worker sessions, upscaling
+  entrypoints/   frozen/launcher entry points
+  storage/       gallery index, PNG metadata, LoRA and wildcard libraries
+  ui/            browser UI assets
+
+docs/            usage, troubleshooting, packaging, release notes
+models/          model-pack metadata, config, weights placeholders, upscaler notes
+requirements/    locked dependency files by purpose and CUDA lane
+scripts/         setup, packaging, release, and portable helpers
+tests/           pytest coverage for API, CLI, docs, storage, and helpers
+```
+
+## Development Workflow
+
+For contributor setup, prefer the bootstrap scripts because they install runtime dependencies, helper tools, and locked versions together. If you are working manually, use an editable install with development extras rather than `requirements/dev-lock.txt` by itself.
+
+Typical commands:
+
+```powershell
+python -m pip install -e .[dev]
+python -m ruff check .
+python -m pytest -q
+python scripts/render_api_docs.py
+```
+
+Useful additional commands:
+
+```powershell
+python -m app.cli.main --help
+powershell -ExecutionPolicy Bypass -File scripts\release\verify_repo_readiness.ps1
+powershell -ExecutionPolicy Bypass -File scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
+```
+
+## Testing Notes
+
+The test suite covers API routes, documentation alignment, model-pack validation, gallery behavior, LoRA and wildcard flows, resource-tiering behavior, CLI report generation, and portable helper scripts.
+
+Current validation commands:
+
+- `python -m ruff check .`
+- `python -m pytest -q`
+
+If docs are edited around the API summary/examples, rerun `python scripts/render_api_docs.py` before committing.
 
 ## Troubleshooting
 
-See:
+See the dedicated docs for deeper detail:
 
 - `docs/USAGE.md`
-- `docs/PACKAGING.md`
 - `docs/TROUBLESHOOTING.md`
-- `docs/CLONE_BUILD_CHECKLIST.md`
+- `models/packs/README.md`
+- `docs/PACKAGING.md`
+
+Common issues:
+
+- Missing model assets: rerun `RunMeFirst.bat` or `RunMeFirst.sh`, then `python -m app.cli.main validate-models`.
+- Launcher cannot find a usable Python runtime: rerun the setup script or set `JUSTRAYZIST_PYTHON`.
+- Multiple public packs with non-interactive startup: pass `--pack` or set `JUSTRAYZIST_PACK`.
+- Slow generation on low-VRAM or CPU-only systems: expected; the app will fall back to safer offload strategies.
 
 ## Known Limitations
 
-- Windows-first launcher/build flow.
-- No authentication on client-scoped gallery endpoints, so keep LAN use to trusted machines.
-- `/server/kill` is a destructive local control endpoint and should not be exposed beyond trusted networks.
-- Runtime quality/performance depend on local model pack quality and GPU/driver compatibility.
-- With multiple users on LAN or multiple web pages open, requests made in one place will only be picked up in the page when it next refreshes. (no push)
+- Windows packaging is the main supported release flow.
+- macOS support is source-mode only and not guaranteed to be accelerated.
+- Native FP8 inference is not implemented; only derived FP8 storage behavior exists for constrained conditions.
+- Large-model local inference still depends heavily on GPU VRAM and system RAM.
+- The shutdown endpoint is intentionally local-only; remote LAN clients cannot stop the host process.
+
+## Contributing
+
+Keep changes small and behavior-preserving unless fixing a concrete bug. Update tests and docs with the code. Avoid adding new user-facing commands, flags, or configuration that are not implemented in the runtime. For API changes, update `app/api/api_manifest.py` and regenerate the docs blocks.
 
 ## License
 
-This project is licensed under the Apache License 2.0.
-See the [LICENSE](LICENSE) file for full terms.
-
-## Acknowledgements
-
-Default model assets are provided by the following model owners and repositories:
-
-- MutantSparrow (Ray): https://huggingface.co/MutantSparrow/Ray
-- Tongyi-MAI (Z-Image-Turbo): https://huggingface.co/Tongyi-MAI/Z-Image-Turbo
-- ByteDance-Seed (SeedVR2-3B original): https://huggingface.co/ByteDance-Seed/SeedVR2-3B
-- themindstudio (SeedVR2-3B FP8 quantized provider): https://huggingface.co/themindstudio/SeedVR2-3B-FP8-e4m3fn
-- imagepipeline (superresolution/x2 upscaler): https://huggingface.co/imagepipeline/superresolution
-
-Model weights remain under their respective upstream licenses and terms.
-
-
-
-
-
+This repository is licensed under the MIT License. See `LICENSE`.

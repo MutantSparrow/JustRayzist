@@ -953,6 +953,79 @@ def _draw_prompt_grid_bar_panel(
         draw.text((bar_x, chart_y + chart_h + 4), label, fill=subtle, font=small_font)
 
 
+def _build_clarity_compare_contact_sheet(
+    *,
+    entries: list[dict[str, object]],
+    title: str,
+) -> "PILImage":
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+    thumb_size = 220
+    gutter = 18
+    header_h = 54
+    label_h = 78
+    bg = (18, 20, 24)
+    fg = (240, 240, 240)
+    subtle = (170, 175, 184)
+    border = (72, 78, 90)
+    tile_bg = (32, 35, 41)
+    tile_failed = (64, 28, 32)
+    columns = max(1, len(entries))
+    width = gutter + columns * (thumb_size + gutter)
+    height = header_h + gutter + thumb_size + label_h + gutter
+    sheet = Image.new("RGB", (width, height), color=bg)
+    draw = ImageDraw.Draw(sheet)
+    font = ImageFont.load_default()
+    small_font = ImageFont.load_default()
+    draw.text((gutter, 18), title, fill=fg, font=font)
+
+    for index, entry in enumerate(entries):
+        x = gutter + index * (thumb_size + gutter)
+        y = header_h + gutter
+        image = entry.get("image")
+        if image is None:
+            tile = Image.new("RGB", (thumb_size, thumb_size), color=tile_failed)
+            tile_draw = ImageDraw.Draw(tile)
+            tile_draw.text((12, 12), "FAILED", fill=fg, font=font)
+            _draw_wrapped_text(
+                tile_draw,
+                str(entry.get("error") or "unknown error"),
+                x=12,
+                y=32,
+                width=thumb_size - 24,
+                fill=subtle,
+                font=small_font,
+                line_height=12,
+            )
+        else:
+            tile = ImageOps.fit(
+                image.convert("RGB"),
+                (thumb_size, thumb_size),
+                Image.Resampling.LANCZOS,
+            )
+            tile_draw = ImageDraw.Draw(tile)
+            tile_draw.rectangle((0, thumb_size - 24, thumb_size, thumb_size), fill=(0, 0, 0))
+            tile_draw.text((8, thumb_size - 18), str(entry.get("label") or ""), fill=(240, 240, 240), font=font)
+        sheet.paste(tile if image is None else tile, (x, y))
+        draw.rectangle((x - 1, y - 1, x + thumb_size, y + thumb_size), outline=border, width=1)
+        draw.text((x, y + thumb_size + 8), str(entry.get("label") or ""), fill=fg, font=font)
+        subtitle = str(entry.get("subtitle") or "")
+        if subtitle:
+            _draw_wrapped_text(
+                draw,
+                subtitle,
+                x=x,
+                y=y + thumb_size + 24,
+                width=thumb_size,
+                fill=subtle,
+                font=small_font,
+                line_height=12,
+            )
+        else:
+            draw.text((x, y + thumb_size + 24), "source", fill=subtle, font=small_font)
+    return sheet
+
+
 def _build_prompt_grid_dashboard(
     *,
     summary_rows: list[dict[str, object]],
@@ -1247,6 +1320,133 @@ def generate(
             "height": height,
             "output_path": str(saved_path),
             "model_pack": model_pack.name,
+            **result.telemetry_dict(),
+        },
+    )
+    typer.echo(f"Saved: {saved_path}")
+    if result.prompt_enhanced:
+        typer.echo(f"Prompt enhanced: {result.prompt_effective}")
+    typer.echo(f"Metrics: {metrics_file}")
+
+
+@cli.command("img2img")
+def img2img(
+    input_path: Path = typer.Option(..., "--input"),
+    prompt: str = typer.Option(..., "--prompt"),
+    pack: str = typer.Option(..., "--pack", help="Model pack name or folder name"),
+    similarity: float = typer.Option(0.80, "--similarity", min=0.0, max=1.0),
+    seed: Optional[int] = typer.Option(None, "--seed"),
+    enhance_prompt: bool = typer.Option(
+        False,
+        "--enhance-prompt/--no-enhance-prompt",
+        help="Use loaded text_encoder to rewrite prompt before image generation.",
+    ),
+    output: Optional[Path] = typer.Option(None, "--output"),
+) -> None:
+    from PIL import Image
+
+    from app.core.worker import GenerationRequest, GenerationSession
+    from app.storage import append_generation_metric, save_png_with_metadata
+
+    settings = load_settings()
+    model_pack = _load_pack_or_exit(settings, pack)
+    _assert_supported_backend_or_exit(model_pack)
+    session = GenerationSession(settings=settings, model_pack=model_pack)
+    source_path = _resolve_cli_path(settings.paths.root_dir, input_path)
+    if not source_path.exists():
+        typer.echo(f"Input image not found: {source_path}")
+        raise typer.Exit(code=1)
+
+    try:
+        with Image.open(source_path) as source_file:
+            reference_image = source_file.convert("RGB")
+    except OSError as exc:
+        typer.echo(f"Failed to load input image: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    normalized_image, image_info = InferenceService.normalize_img2img_reference_image(reference_image)
+    refine_strength = InferenceService.similarity_to_refine_strength(similarity)
+
+    try:
+        result = session.refine_image(
+            normalized_image,
+            GenerationRequest(
+                prompt=prompt,
+                width=image_info["normalized_width"],
+                height=image_info["normalized_height"],
+                seed=seed,
+                enhance_prompt=enhance_prompt,
+                refine_strength=refine_strength,
+            ),
+        )
+    except ImportError as exc:
+        typer.echo(
+            f"Missing dependency during img2img generation: {exc}. "
+            + setup_repair_hint(include_manual_bootstrap=True)
+        )
+        raise typer.Exit(code=2) from exc
+    except Exception as exc:
+        typer.echo(f"Img2img generation failed: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    saved_path = save_png_with_metadata(
+        image=result.image,
+        prompt=result.prompt_effective_base or result.prompt_effective,
+        settings=settings,
+        output_path=output,
+        extra_metadata={
+            "mode": "img2img",
+            "prompt_original": result.prompt_original,
+            "prompt_wildcard_resolved": result.prompt_wildcard_resolved or result.prompt_original,
+            "prompt_effective_base": result.prompt_effective_base or result.prompt_effective,
+            "prompt_effective": result.prompt_effective,
+            "prompt_enhanced": result.prompt_enhanced,
+            "width": result.image.width,
+            "height": result.image.height,
+            "steps": result.steps,
+            "guidance_scale": result.guidance_scale,
+            "backend": result.backend,
+            "device": result.device,
+            "model_pack": model_pack.name,
+            "duration_ms": result.duration_ms,
+            "runtime_profile": result.runtime_profile,
+            "execution_mode": result.execution_mode,
+            "seed": result.seed,
+            "scheduler_mode": result.scheduler_mode,
+            "similarity": float(similarity),
+            "refine_strength": result.refine_strength,
+            "source_filename": source_path.name,
+            "source_width": image_info["normalized_width"],
+            "source_height": image_info["normalized_height"],
+            "source_original_width": image_info["source_width"],
+            "source_original_height": image_info["source_height"],
+            "wildcards_json": json.dumps(result.wildcards),
+            "wildcard_count": result.wildcard_count,
+            "loras_json": json.dumps(result.loras),
+            "lora_count": result.lora_count,
+            **result.telemetry_dict(),
+        },
+    )
+    metrics_file = append_generation_metric(
+        settings=settings,
+        payload={
+            "mode": "cli_img2img",
+            "prompt": result.prompt_effective,
+            "prompt_original": result.prompt_original,
+            "prompt_wildcard_resolved": result.prompt_wildcard_resolved or result.prompt_original,
+            "prompt_effective_base": result.prompt_effective_base or result.prompt_effective,
+            "prompt_effective": result.prompt_effective,
+            "prompt_enhanced": result.prompt_enhanced,
+            "width": result.image.width,
+            "height": result.image.height,
+            "output_path": str(saved_path),
+            "model_pack": model_pack.name,
+            "source_filename": source_path.name,
+            "source_width": image_info["normalized_width"],
+            "source_height": image_info["normalized_height"],
+            "source_original_width": image_info["source_width"],
+            "source_original_height": image_info["source_height"],
+            "similarity": float(similarity),
             **result.telemetry_dict(),
         },
     )
@@ -1650,6 +1850,183 @@ def prompt_grid_benchmark(
     typer.echo(f"Report CSV: {report_csv}")
     typer.echo(f"Report JSONL: {report_jsonl}")
     typer.echo(f"Manifest: {manifest_path}")
+
+
+@cli.command("clarity-compare")
+def clarity_compare(
+    input: Path = typer.Option(..., "--input", help="Source image path to benchmark."),
+    output_dir: Optional[Path] = typer.Option(
+        None,
+        "--output-dir",
+        help="Destination directory for clarity compare outputs. Defaults to outputs/clarity_compare/<timestamp>/.",
+    ),
+    profile: Optional[str] = typer.Option(
+        None,
+        "--profile",
+        help="Runtime profile override. Defaults to the current configured profile.",
+    ),
+) -> None:
+    from PIL import Image
+
+    from app.core import clarity as clarity_core
+    from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
+
+    settings = load_settings(profile_name=profile)
+    root = settings.paths.root_dir
+    input_path = _resolve_cli_path(root, input)
+    if not input_path.exists() or not input_path.is_file():
+        typer.echo(f"Input image not found: {input_path}")
+        raise typer.Exit(code=1)
+
+    suite_key = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    destination_root = (
+        _resolve_cli_path(root, output_dir)
+        if output_dir is not None
+        else settings.paths.outputs_dir / "clarity_compare" / suite_key
+    )
+    destination_root.mkdir(parents=True, exist_ok=True)
+    report_csv = settings.paths.data_dir / f"clarity_compare_{suite_key}.csv"
+    report_jsonl = settings.paths.data_dir / f"clarity_compare_{suite_key}.jsonl"
+    report_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    with Image.open(input_path) as source_file:
+        source_image = source_file.convert("RGB")
+
+    rows: list[dict[str, object]] = []
+    entries: list[dict[str, object]] = [
+        {
+            "label": "original",
+            "image": source_image.copy(),
+            "subtitle": f"{source_image.width}x{source_image.height}",
+        }
+    ]
+    output_paths: dict[str, str] = {}
+    had_errors = False
+
+    typer.echo(
+        f"Clarity compare: source={input_path.name}, variants={len(clarity_core.CLARITY_BENCHMARK_VARIANTS)}, "
+        f"profile={settings.runtime_profile.name}"
+    )
+
+    for variant_key in clarity_core.CLARITY_BENCHMARK_VARIANTS:
+        row: dict[str, object] = {
+            "suite_id": suite_key,
+            "variant": variant_key,
+            "status": "pending",
+            "profile": settings.runtime_profile.name,
+            "source_path": str(input_path),
+            "source_width": source_image.width,
+            "source_height": source_image.height,
+            "working_width": None,
+            "working_height": None,
+            "duration_ms": None,
+            "output_path": "",
+            "error": "",
+        }
+        try:
+            result = clarity_core.run_clarity_pipeline(
+                image=source_image,
+                variant=variant_key,
+            )
+            saved_path = save_png_with_metadata(
+                image=result.image,
+                prompt=f"clarity compare | {input_path.name} | {variant_key}",
+                settings=settings,
+                output_path=build_output_path(destination_root, prefix=f"clarity_{variant_key}"),
+                extra_metadata={
+                    "mode": "clarity_compare",
+                    "suite_id": suite_key,
+                    "source_path": str(input_path),
+                    "variant": variant_key,
+                    **result.telemetry_dict(),
+                },
+            )
+            row.update(
+                {
+                    "status": "success",
+                    "working_width": result.working_width,
+                    "working_height": result.working_height,
+                    "duration_ms": result.duration_ms,
+                    "output_path": str(saved_path),
+                    **result.step_timings_ms,
+                }
+            )
+            output_paths[variant_key] = str(saved_path)
+            entries.append(
+                {
+                    "label": variant_key,
+                    "image": result.image.copy(),
+                    "subtitle": f"{result.duration_ms} ms | work {result.working_width}x{result.working_height}",
+                }
+            )
+            append_generation_metric(
+                settings=settings,
+                payload={
+                    "mode": "clarity_compare_variant",
+                    "suite_id": suite_key,
+                    "profile": settings.runtime_profile.name,
+                    "source_path": str(input_path),
+                    "variant": variant_key,
+                    "output_path": str(saved_path),
+                    **result.telemetry_dict(),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            had_errors = True
+            row["status"] = "error"
+            row["error"] = str(exc)
+            entries.append(
+                {
+                    "label": variant_key,
+                    "image": None,
+                    "subtitle": "failed",
+                    "error": str(exc),
+                }
+            )
+        rows.append(row)
+        typer.echo(f"  {variant_key}: {row['status']} {row['duration_ms'] or ''} {row['error'] or ''}".rstrip())
+
+    contact_sheet = _build_clarity_compare_contact_sheet(
+        entries=entries,
+        title=f"Clarity Compare | {input_path.name}",
+    )
+    contact_sheet_path = destination_root / "clarity_compare_contact_sheet.png"
+    contact_sheet.save(contact_sheet_path, format="PNG")
+
+    fieldnames = sorted({key for row in rows for key in row.keys()})
+    with report_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: _csv_safe_value(row.get(key)) for key in fieldnames})
+    with report_jsonl.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+    manifest_path = destination_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "suite_id": suite_key,
+                "source_path": str(input_path),
+                "profile": settings.runtime_profile.name,
+                "variants": list(clarity_core.CLARITY_BENCHMARK_VARIANTS),
+                "outputs": output_paths,
+                "contact_sheet": str(contact_sheet_path),
+                "report_csv": str(report_csv),
+                "report_jsonl": str(report_jsonl),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    typer.echo(f"Contact sheet: {contact_sheet_path}")
+    typer.echo(f"Report CSV: {report_csv}")
+    typer.echo(f"Report JSONL: {report_jsonl}")
+    typer.echo(f"Manifest: {manifest_path}")
+    if had_errors:
+        raise typer.Exit(code=1)
 
 
 @cli.command("pack-compare")

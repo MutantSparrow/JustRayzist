@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import random
 from datetime import datetime, timezone
@@ -15,6 +16,17 @@ from PIL import Image
 from app.config.profiles import RuntimeProfile
 from app.config.settings import AppSettings
 from app.core.cancellation import GenerationCancelledError
+from app.core.clarity import (
+    CLARITY_ENGINE_NAME,
+    CLARITY_FS_INTENSITY,
+    CLARITY_FS_METHOD,
+    CLARITY_FS_TYPE,
+    CLARITY_FINAL_UNSHARP_PERCENT,
+    CLARITY_FINAL_UNSHARP_RADIUS,
+    CLARITY_FINAL_UNSHARP_THRESHOLD,
+    CLARITY_UNSHARP_STAGE,
+    run_clarity_pipeline,
+)
 from app.core.backends import SUPPORTED_BACKENDS
 from app.core.model_registry import (
     ModelComponent,
@@ -76,8 +88,12 @@ _DONOR_PACK_NAME = "Rayzist_bf16"
 _DERIVED_FP8_STORAGE_NAME = "fp8_storage"
 _DERIVED_FP8_STORAGE_SUFFIX = "__auto_fp8_storage"
 _LORA_CAPABLE_BACKENDS = {"diffusers", "diffusers_zimage", "fp8_zimage"}
-
-
+_IMG2IMG_MAX_PIXELS = 1_500_000
+_IMG2IMG_DIM_MULTIPLE = 32
+_IMG2IMG_MIN_DIM = 64
+_IMG2IMG_MIN_STRENGTH = 0.05
+_IMG2IMG_MAX_STRENGTH = 0.95
+_IMG2IMG_DEFAULT_SIMILARITY = 0.80
 def _assert_supported_backend(model_pack: ModelPack) -> None:
     backends = [
         str(name).strip().lower()
@@ -133,6 +149,75 @@ class InferenceService:
             return int(text)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def normalize_img2img_similarity(similarity: float | int | str | None) -> float:
+        if similarity is None:
+            return _IMG2IMG_DEFAULT_SIMILARITY
+        try:
+            value = float(similarity)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("similarity must be a number between 0.0 and 1.0.") from exc
+        if value < 0.0 or value > 1.0:
+            raise ValueError("similarity must be between 0.0 and 1.0.")
+        return value
+
+    @classmethod
+    def similarity_to_refine_strength(cls, similarity: float | int | str | None) -> float:
+        normalized = cls.normalize_img2img_similarity(similarity)
+        strength = 1.0 - normalized
+        return max(_IMG2IMG_MIN_STRENGTH, min(_IMG2IMG_MAX_STRENGTH, strength))
+
+    @staticmethod
+    def _normalized_img2img_dimensions(width: int, height: int) -> tuple[int, int]:
+        safe_width = max(1, int(width))
+        safe_height = max(1, int(height))
+        pixel_count = safe_width * safe_height
+        scale = 1.0
+        if pixel_count > _IMG2IMG_MAX_PIXELS:
+            scale = math.sqrt(_IMG2IMG_MAX_PIXELS / float(pixel_count))
+        scaled_width = max(1, int(round(safe_width * scale)))
+        scaled_height = max(1, int(round(safe_height * scale)))
+
+        def _snap(value: int) -> int:
+            if value <= _IMG2IMG_MIN_DIM:
+                return _IMG2IMG_MIN_DIM
+            snapped = value - (value % _IMG2IMG_DIM_MULTIPLE)
+            if snapped < _IMG2IMG_MIN_DIM:
+                return _IMG2IMG_MIN_DIM
+            return snapped
+
+        scaled_width = _snap(scaled_width)
+        scaled_height = _snap(scaled_height)
+
+        while scaled_width * scaled_height > _IMG2IMG_MAX_PIXELS:
+            if scaled_width >= scaled_height and scaled_width > _IMG2IMG_MIN_DIM:
+                scaled_width = _snap(max(_IMG2IMG_MIN_DIM, scaled_width - _IMG2IMG_DIM_MULTIPLE))
+                continue
+            if scaled_height > _IMG2IMG_MIN_DIM:
+                scaled_height = _snap(max(_IMG2IMG_MIN_DIM, scaled_height - _IMG2IMG_DIM_MULTIPLE))
+                continue
+            break
+        return scaled_width, scaled_height
+
+    @classmethod
+    def normalize_img2img_reference_image(
+        cls,
+        image: Image.Image,
+    ) -> tuple[Image.Image, dict[str, int]]:
+        if not isinstance(image, Image.Image):
+            raise ValueError("reference image must be a PIL.Image.Image instance.")
+        source_width, source_height = image.size
+        target_width, target_height = cls._normalized_img2img_dimensions(source_width, source_height)
+        normalized = image.convert("RGB")
+        if normalized.size != (target_width, target_height):
+            normalized = normalized.resize((target_width, target_height), Image.Resampling.LANCZOS)
+        return normalized, {
+            "source_width": int(source_width),
+            "source_height": int(source_height),
+            "normalized_width": int(target_width),
+            "normalized_height": int(target_height),
+        }
 
     def owner_output_dir(self, owner_id: str) -> Path:
         safe_owner = self.sanitize_owner_id(owner_id)
@@ -565,7 +650,7 @@ class InferenceService:
             cancel_event = self._client_cancel_events.get(safe_owner_id)
             if cancel_event is not None:
                 cancel_event.set()
-            if active_job.get("kind") == "generate" and self._active_session is not None:
+            if active_job.get("kind") in {"generate", "img2img"} and self._active_session is not None:
                 session_to_cancel = self._active_session
         if session_to_cancel is not None:
             session_to_cancel.cancel_active()
@@ -1069,6 +1154,241 @@ class InferenceService:
                 deferred_cleanup_ids = self._release_generation_loras_locked(retained_lora_ids)
             self._finalize_deferred_lora_cleanup(deferred_cleanup_ids)
 
+    def img2img(
+        self,
+        owner_id: str,
+        prompt: str,
+        image: Image.Image,
+        image_filename: str | None = None,
+        pack_name: str | None = None,
+        seed: int | None = None,
+        scheduler_mode: str | None = None,
+        enhance_prompt: bool = False,
+        similarity: float | int | str | None = None,
+        loras: list[dict[str, Any]] | None = None,
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_similarity = self.normalize_img2img_similarity(similarity)
+        refine_strength = self.similarity_to_refine_strength(normalized_similarity)
+        normalized_image, image_info = self.normalize_img2img_reference_image(image)
+        reference_filename = Path(str(image_filename or "reference.png")).name.strip() or "reference.png"
+        resolved_loras: tuple[LoraSelection, ...] = ()
+        retained_lora_ids: tuple[str, ...] = ()
+        safe_owner_id = self.sanitize_owner_id(owner_id)
+        cancel_event = Event()
+
+        with self._state_lock:
+            resolved_loras = self._resolve_generation_loras(loras, pack_name=pack_name)
+            base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name)
+            session = self._session_for_pack(effective_pack, resource_tier)
+            effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
+            retained_lora_ids = self._retain_generation_loras_locked(resolved_loras)
+            LOGGER.info(
+                "Img2img request: owner=%s pack=%s effective_pack=%s tier=%s ref=%s size=%dx%d seed=%s similarity=%.2f",
+                safe_owner_id,
+                base_pack.name,
+                effective_pack.name,
+                resource_tier.name,
+                reference_filename,
+                image_info["normalized_width"],
+                image_info["normalized_height"],
+                effective_seed,
+                normalized_similarity,
+            )
+            self._set_active_client_job_locked(
+                safe_owner_id,
+                {
+                    "job_id": job_id,
+                    "kind": "img2img",
+                    "status": "generating",
+                    "prompt": prompt,
+                    "width": image_info["normalized_width"],
+                    "height": image_info["normalized_height"],
+                    "pack": base_pack.name,
+                    "seed": effective_seed,
+                    "enhance_prompt": enhance_prompt,
+                    "similarity": normalized_similarity,
+                    "source_filename": reference_filename,
+                    "lora_count": len(resolved_loras),
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            self._client_cancel_events[safe_owner_id] = cancel_event
+
+        output_path = build_output_path(self.owner_output_dir(safe_owner_id))
+        try:
+            with self._generation_lock:
+                if cancel_event.is_set():
+                    raise GenerationCancelledError("Img2img cancelled.")
+                result = session.refine_image(
+                    normalized_image,
+                    GenerationRequest(
+                        prompt=prompt,
+                        width=image_info["normalized_width"],
+                        height=image_info["normalized_height"],
+                        seed=effective_seed,
+                        scheduler_mode=scheduler_mode,
+                        enhance_prompt=enhance_prompt,
+                        procedural_creativity=0,
+                        refine_strength=refine_strength,
+                        loras=resolved_loras,
+                    ),
+                )
+                if cancel_event.is_set():
+                    raise GenerationCancelledError("Img2img cancelled.")
+                with self._state_lock:
+                    self._active_backend_name = result.backend
+
+                final_width, final_height = result.image.size
+                saved_path = save_png_with_metadata(
+                    image=result.image,
+                    prompt=result.prompt_effective_base or result.prompt_effective,
+                    settings=self._settings,
+                    output_path=output_path,
+                    extra_metadata={
+                        "owner_id": safe_owner_id,
+                        "prompt_original": result.prompt_original,
+                        "prompt_wildcard_resolved": result.prompt_wildcard_resolved or result.prompt_original,
+                        "prompt_effective_base": result.prompt_effective_base or result.prompt_effective,
+                        "prompt_effective": result.prompt_effective,
+                        "prompt_enhanced": result.prompt_enhanced,
+                        "width": final_width,
+                        "height": final_height,
+                        "steps": result.steps,
+                        "guidance_scale": result.guidance_scale,
+                        "backend": result.backend,
+                        "device": result.device,
+                        "model_pack": base_pack.name,
+                        "selected_pack": base_pack.name,
+                        "effective_pack": effective_pack.name,
+                        "derived_strategy": effective_pack.derived_strategy,
+                        "fp8_checkpoint": result.fp8_checkpoint,
+                        "fp8_fallback_used": result.fp8_fallback_used,
+                        "fp8_fallback_reason": result.fp8_fallback_reason,
+                        "fp8_runtime_mode": result.fp8_runtime_mode,
+                        "fp8_normalized_tensor_count": result.fp8_normalized_tensor_count,
+                        "fp8_storage_preserved_tensor_count": result.fp8_storage_preserved_tensor_count,
+                        "fp8_promoted_tensor_count": result.fp8_promoted_tensor_count,
+                        "duration_ms": result.duration_ms,
+                        "seed": result.seed,
+                        "scheduler_mode": result.scheduler_mode,
+                        "runtime_profile": result.runtime_profile,
+                        "resource_tier": result.resource_tier,
+                        "execution_mode": result.execution_mode,
+                        "mode": "img2img",
+                        "refine_strength": result.refine_strength,
+                        "refine_pass_count": result.refine_pass_count,
+                        "refine_pass1_steps": result.refine_pass1_steps,
+                        "refine_pass2_steps": result.refine_pass2_steps,
+                        "refine_pass2_strength": result.refine_pass2_strength,
+                        "similarity": normalized_similarity,
+                        "source_filename": reference_filename,
+                        "source_width": image_info["normalized_width"],
+                        "source_height": image_info["normalized_height"],
+                        "source_original_width": image_info["source_width"],
+                        "source_original_height": image_info["source_height"],
+                        "wildcards_json": json.dumps(result.wildcards),
+                        "wildcard_count": result.wildcard_count,
+                        "loras_json": json.dumps(result.loras),
+                        "lora_count": result.lora_count,
+                    },
+                )
+                if cancel_event.is_set():
+                    try:
+                        saved_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    raise GenerationCancelledError("Img2img cancelled.")
+
+                append_generation_metric(
+                    settings=self._settings,
+                    payload={
+                        "mode": "api_img2img",
+                        "prompt": result.prompt_effective,
+                        "prompt_original": result.prompt_original,
+                        "prompt_wildcard_resolved": result.prompt_wildcard_resolved or result.prompt_original,
+                        "prompt_effective_base": result.prompt_effective_base or result.prompt_effective,
+                        "prompt_effective": result.prompt_effective,
+                        "prompt_enhanced": result.prompt_enhanced,
+                        "width": final_width,
+                        "height": final_height,
+                        "output_path": str(saved_path),
+                        "owner_id": safe_owner_id,
+                        "model_pack": base_pack.name,
+                        "selected_pack": base_pack.name,
+                        "effective_pack": effective_pack.name,
+                        "derived_strategy": effective_pack.derived_strategy,
+                        "resource_tier": result.resource_tier,
+                        "source_filename": reference_filename,
+                        "source_width": image_info["normalized_width"],
+                        "source_height": image_info["normalized_height"],
+                        "source_original_width": image_info["source_width"],
+                        "source_original_height": image_info["source_height"],
+                        "similarity": normalized_similarity,
+                        "wildcards": [dict(item) for item in result.wildcards],
+                        "wildcard_count": result.wildcard_count,
+                        "loras": [dict(item) for item in result.loras],
+                        "lora_count": result.lora_count,
+                        **result.telemetry_dict(),
+                    },
+                )
+                image_row = index_image(self._settings, saved_path, owner_id=safe_owner_id)
+                image_row["url"] = f"/images/{image_row['filename']}"
+                image_row["pack"] = base_pack.name
+                image_row["selected_pack"] = base_pack.name
+                image_row["effective_pack"] = effective_pack.name
+                image_row["derived_strategy"] = effective_pack.derived_strategy
+                image_row["duration_ms"] = result.duration_ms
+                image_row["seed"] = result.seed
+                image_row["scheduler_mode"] = result.scheduler_mode
+                image_row["prompt_original"] = result.prompt_original
+                image_row["prompt_wildcard_resolved"] = result.prompt_wildcard_resolved or result.prompt_original
+                image_row["prompt_effective_base"] = result.prompt_effective_base or result.prompt_effective
+                image_row["prompt_effective"] = result.prompt_effective
+                image_row["prompt_enhanced"] = result.prompt_enhanced
+                image_row["runtime_profile"] = result.runtime_profile
+                image_row["resource_tier"] = result.resource_tier
+                image_row["execution_mode"] = result.execution_mode
+                image_row["backend"] = result.backend
+                image_row["fp8_fallback_used"] = result.fp8_fallback_used
+                image_row["fp8_fallback_reason"] = result.fp8_fallback_reason
+                image_row["fp8_runtime_mode"] = result.fp8_runtime_mode
+                image_row["refine_pass_count"] = result.refine_pass_count
+                image_row["refine_pass1_steps"] = result.refine_pass1_steps
+                image_row["refine_pass2_steps"] = result.refine_pass2_steps
+                image_row["refine_pass2_strength"] = result.refine_pass2_strength
+                image_row["similarity"] = normalized_similarity
+                image_row["mode"] = "img2img"
+                image_row["source_filename"] = reference_filename
+                image_row["source_width"] = image_info["normalized_width"]
+                image_row["source_height"] = image_info["normalized_height"]
+                image_row["wildcards"] = [dict(item) for item in result.wildcards]
+                image_row["wildcards_json"] = json.dumps(result.wildcards)
+                image_row["wildcard_count"] = result.wildcard_count
+                image_row["loras"] = [dict(item) for item in result.loras]
+                image_row["lora_count"] = result.lora_count
+                image_row["job_id"] = job_id
+                LOGGER.info(
+                    "Image refined: owner=%s file=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s duration_ms=%s similarity=%.2f",
+                    safe_owner_id,
+                    image_row["filename"],
+                    base_pack.name,
+                    effective_pack.name,
+                    result.resource_tier,
+                    final_width,
+                    final_height,
+                    result.seed,
+                    result.duration_ms,
+                    normalized_similarity,
+                )
+                return image_row
+        finally:
+            deferred_cleanup_ids: list[str] = []
+            with self._state_lock:
+                self._clear_active_client_job_locked(safe_owner_id, job_id=job_id)
+                deferred_cleanup_ids = self._release_generation_loras_locked(retained_lora_ids)
+            self._finalize_deferred_lora_cleanup(deferred_cleanup_ids)
+
     def upscale(
         self,
         owner_id: str,
@@ -1261,6 +1581,214 @@ class InferenceService:
                 )
                 with self._state_lock:
                     self._active_backend_name = effective_engine
+                return image_row
+        finally:
+            with self._state_lock:
+                self._clear_active_client_job_locked(safe_owner_id, job_id=job_id)
+
+    def clarity(
+        self,
+        owner_id: str,
+        filename: str,
+        pack_name: str | None = None,
+        seed: int | None = None,
+        scheduler_mode: str | None = None,
+        enhance_prompt: bool = False,
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
+        safe_owner_id = self.sanitize_owner_id(owner_id)
+        safe_filename = self.sanitize_filename(filename)
+        cancel_event = Event()
+        with self._state_lock:
+            source_row = get_image(self._settings, safe_filename, owner_id=safe_owner_id)
+            if source_row is None:
+                raise ValueError("Image not found.")
+
+            source_output = source_row.get("output_path")
+            if not source_output:
+                raise ValueError("Image source path is missing.")
+            source_path = self.resolve_output_path(str(source_output))
+            if not source_path.exists():
+                raise ValueError("Image file not found on disk.")
+
+            source_prompt = str(source_row.get("prompt") or "").strip() or "(missing prompt metadata)"
+            source_generation_seed = self._optional_int(source_row.get("seed"))
+            preferred_pack = str(source_row.get("model_pack") or "").strip() or None
+            model_pack_name = str(pack_name or preferred_pack or "unknown").strip() or "unknown"
+            resource_tier = self.current_resource_tier(refresh=True)
+            effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
+            LOGGER.info(
+                "Clarity request: owner=%s source=%s engine=%s pack=%s tier=%s seed=%s",
+                safe_owner_id,
+                safe_filename,
+                CLARITY_ENGINE_NAME,
+                model_pack_name,
+                resource_tier.name,
+                effective_seed,
+            )
+            self._set_active_client_job_locked(
+                safe_owner_id,
+                {
+                    "job_id": job_id,
+                    "kind": "clarity",
+                    "status": "clarifying",
+                    "filename": safe_filename,
+                    "source_filename": safe_filename,
+                    "width": source_row.get("width", source_row.get("source_width", 0)) or 0,
+                    "height": source_row.get("height", source_row.get("source_height", 0)) or 0,
+                    "pack": model_pack_name,
+                    "seed": effective_seed,
+                    "enhance_prompt": bool(enhance_prompt),
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            self._client_cancel_events[safe_owner_id] = cancel_event
+
+        try:
+            with self._generation_lock:
+                if cancel_event.is_set():
+                    raise GenerationCancelledError("Clarity cancelled.")
+                with Image.open(source_path) as source_file:
+                    source_image = source_file.convert("RGB")
+                source_width, source_height = source_image.size
+                if cancel_event.is_set():
+                    raise GenerationCancelledError("Clarity cancelled.")
+                clarity_result = run_clarity_pipeline(
+                    image=source_image,
+                )
+                if cancel_event.is_set():
+                    raise GenerationCancelledError("Clarity cancelled.")
+
+                final_image = clarity_result.image
+                final_width, final_height = final_image.size
+                prompt_effective = source_prompt
+                prompt_enhanced = False
+                duration_ms = int(clarity_result.duration_ms)
+                clarity_telemetry = clarity_result.telemetry_dict()
+                metadata_payload = {
+                    "owner_id": safe_owner_id,
+                    "mode": "api_clarity",
+                    "prompt_original": source_prompt,
+                    "prompt_effective": source_prompt,
+                    "prompt_enhanced": False,
+                    "source_image": str(source_path),
+                    "source_filename": safe_filename,
+                    "source_width": source_width,
+                    "source_height": source_height,
+                    "source_generation_seed": source_generation_seed,
+                    "working_width": clarity_result.working_width,
+                    "working_height": clarity_result.working_height,
+                    "width": final_width,
+                    "height": final_height,
+                    "steps": 0,
+                    "guidance_scale": 0.0,
+                    "backend": clarity_result.engine_name,
+                    "device": clarity_result.device,
+                    "model_pack": model_pack_name,
+                    "duration_ms": duration_ms,
+                    "seed": effective_seed,
+                    "scheduler_mode": scheduler_mode or "euler",
+                    "runtime_profile": self._settings.runtime_profile.name,
+                    "resource_tier": resource_tier.name,
+                    "execution_mode": clarity_result.engine_name,
+                    "clarity_engine": clarity_result.engine_name,
+                    "request_enhance_prompt": bool(enhance_prompt),
+                    "clarity_fs_method": CLARITY_FS_METHOD,
+                    "clarity_fs_type": CLARITY_FS_TYPE,
+                    "clarity_fs_intensity": CLARITY_FS_INTENSITY,
+                    "clarity_unsharp_stage": CLARITY_UNSHARP_STAGE,
+                    "clarity_unsharp_radius": CLARITY_FINAL_UNSHARP_RADIUS,
+                    "clarity_unsharp_percent": CLARITY_FINAL_UNSHARP_PERCENT,
+                    "clarity_unsharp_threshold": CLARITY_FINAL_UNSHARP_THRESHOLD,
+                    **clarity_telemetry,
+                }
+                metrics_payload = {
+                    "mode": "api_clarity",
+                    "prompt": source_prompt,
+                    "prompt_original": source_prompt,
+                    "prompt_effective": source_prompt,
+                    "prompt_enhanced": False,
+                    "source_filename": safe_filename,
+                    "source_width": source_width,
+                    "source_height": source_height,
+                    "source_generation_seed": source_generation_seed,
+                    "working_width": clarity_result.working_width,
+                    "working_height": clarity_result.working_height,
+                    "width": final_width,
+                    "height": final_height,
+                    "model_pack": model_pack_name,
+                    "backend": clarity_result.engine_name,
+                    "seed": effective_seed,
+                    "scheduler_mode": scheduler_mode or "euler",
+                    "resource_tier": resource_tier.name,
+                    "clarity_engine": clarity_result.engine_name,
+                    "request_enhance_prompt": bool(enhance_prompt),
+                    "clarity_fs_method": CLARITY_FS_METHOD,
+                    "clarity_fs_type": CLARITY_FS_TYPE,
+                    "clarity_fs_intensity": CLARITY_FS_INTENSITY,
+                    "clarity_unsharp_stage": CLARITY_UNSHARP_STAGE,
+                    "clarity_unsharp_radius": CLARITY_FINAL_UNSHARP_RADIUS,
+                    "clarity_unsharp_percent": CLARITY_FINAL_UNSHARP_PERCENT,
+                    "clarity_unsharp_threshold": CLARITY_FINAL_UNSHARP_THRESHOLD,
+                    **clarity_telemetry,
+                }
+
+                output_path = build_output_path(self.owner_output_dir(safe_owner_id))
+                saved_path = save_png_with_metadata(
+                    image=final_image,
+                    prompt=prompt_effective,
+                    settings=self._settings,
+                    output_path=output_path,
+                    extra_metadata=metadata_payload,
+                )
+                if cancel_event.is_set():
+                    try:
+                        saved_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    raise GenerationCancelledError("Clarity cancelled.")
+
+                append_generation_metric(
+                    settings=self._settings,
+                    payload={
+                        **metrics_payload,
+                        "output_path": str(saved_path),
+                    },
+                )
+                image_row = index_image(self._settings, saved_path, owner_id=safe_owner_id)
+                image_row["url"] = f"/images/{image_row['filename']}"
+                image_row["pack"] = model_pack_name
+                image_row["duration_ms"] = duration_ms
+                image_row["seed"] = effective_seed
+                image_row["scheduler_mode"] = scheduler_mode or "euler"
+                image_row["prompt_original"] = source_prompt
+                image_row["prompt_effective"] = prompt_effective
+                image_row["prompt_enhanced"] = prompt_enhanced
+                image_row["runtime_profile"] = self._settings.runtime_profile.name
+                image_row["resource_tier"] = resource_tier.name
+                image_row["execution_mode"] = clarity_result.engine_name
+                image_row["clarity_engine"] = clarity_result.engine_name
+                image_row["mode"] = "api_clarity"
+                image_row["source_filename"] = safe_filename
+                image_row["source_width"] = source_width
+                image_row["source_height"] = source_height
+                image_row["working_width"] = clarity_result.working_width
+                image_row["working_height"] = clarity_result.working_height
+                image_row["job_id"] = job_id
+                image_row.update(clarity_telemetry)
+                LOGGER.info(
+                    "Image clarified: owner=%s source=%s engine=%s file=%s size=%dx%d seed=%s duration_ms=%s",
+                    safe_owner_id,
+                    safe_filename,
+                    CLARITY_ENGINE_NAME,
+                    image_row["filename"],
+                    final_width,
+                    final_height,
+                    effective_seed,
+                    duration_ms,
+                )
+                with self._state_lock:
+                    self._active_backend_name = CLARITY_ENGINE_NAME
                 return image_row
         finally:
             with self._state_lock:

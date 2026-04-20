@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import os
 import threading
 import time
 import zipfile
 from contextlib import asynccontextmanager
+from email import policy
+from email.parser import BytesFeedParser
 from pathlib import Path
+from tempfile import SpooledTemporaryFile
 from typing import Any, Literal
 
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from PIL import Image
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.datastructures import FormData, Headers, UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
 
@@ -34,11 +39,13 @@ inference = InferenceService(settings=settings)
 _MULTIPART_TEXT_LIMIT_BYTES = 256 * 1024
 _LORA_UPLOAD_LIMIT_BYTES = 10 * 1024 * 1024 * 1024
 _LORA_THUMBNAIL_LIMIT_BYTES = 10 * 1024 * 1024
+_IMG2IMG_UPLOAD_LIMIT_BYTES = 32 * 1024 * 1024
 _NO_STORE_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
     "Pragma": "no-cache",
     "Expires": "0",
 }
+_LOCALHOST_CLIENT_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 
 
 class _RevisionBroadcaster:
@@ -151,6 +158,38 @@ class UpscaleRequest(BaseModel):
     seed: int | None = Field(default=None)
     scheduler_mode: Literal["euler", "dpm"] | None = Field(default=None)
     enhance_prompt: bool = Field(default=False)
+
+
+class ClarityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1, max_length=255)
+    pack: str | None = Field(default=None)
+    job_id: str | None = Field(default=None, max_length=255)
+    seed: int | None = Field(default=None)
+    scheduler_mode: Literal["euler", "dpm"] | None = Field(default=None)
+    enhance_prompt: bool = Field(default=False)
+
+
+class Img2ImgRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1, max_length=4000)
+    pack: str | None = Field(default=None)
+    job_id: str | None = Field(default=None, max_length=255)
+    seed: int | None = Field(default=None)
+    scheduler_mode: Literal["euler", "dpm"] | None = Field(default=None)
+    enhance_prompt: bool = Field(default=False)
+    similarity: float = Field(default=0.80, ge=0.0, le=1.0)
+    loras: list[LoraSelectionRequest] = Field(default_factory=list, max_length=DEFAULT_MAX_ACTIVE_LORAS)
+
+    @field_validator("loras")
+    @classmethod
+    def _validate_unique_loras(cls, value: list[LoraSelectionRequest]) -> list[LoraSelectionRequest]:
+        ids = [str(item.id).strip().lower() for item in value]
+        if len(ids) != len(set(ids)):
+            raise ValueError("LoRA ids must be unique within a request.")
+        return value
 
 
 class DeleteConfirmRequest(BaseModel):
@@ -280,14 +319,134 @@ async def _parse_multipart_form(
             max_fields=max_fields,
             max_text_part_size=_MULTIPART_TEXT_LIMIT_BYTES,
         )
-    except AssertionError as exc:
-        raise ImportError("python-multipart") from exc
+    except AssertionError:
+        return await _parse_multipart_form_fallback(
+            request,
+            file_limits=file_limits,
+            max_fields=max_fields,
+        )
     try:
         return await parser.parse()
     except _MultipartSizeLimitExceeded as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
     except MultiPartException as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _fallback_body_limit(file_limits: dict[str, int], *, max_fields: int) -> int:
+    file_budget = sum(max(0, int(limit)) for limit in file_limits.values())
+    text_budget = max(0, int(max_fields)) * _MULTIPART_TEXT_LIMIT_BYTES
+    overhead_budget = (max(1, len(file_limits)) + max(0, int(max_fields))) * 64 * 1024
+    return file_budget + text_budget + overhead_budget + 64 * 1024
+
+
+def _decode_form_text(payload: bytes, charset: str | None) -> str:
+    encoding = str(charset or "utf-8").strip() or "utf-8"
+    try:
+        return payload.decode(encoding)
+    except (LookupError, UnicodeDecodeError):
+        return payload.decode("latin-1")
+
+
+async def _parse_multipart_form_fallback(
+    request: Request,
+    *,
+    file_limits: dict[str, int],
+    max_fields: int,
+) -> FormData:
+    content_type = str(request.headers.get("content-type") or "").strip()
+    parser = BytesFeedParser(policy=policy.default)
+    parser.feed(f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8"))
+    body_limit = _fallback_body_limit(file_limits, max_fields=max_fields)
+    body_stream = SpooledTemporaryFile(max_size=min(body_limit, 1024 * 1024))
+    total_bytes = 0
+    try:
+        async for chunk in request.stream():
+            if not chunk:
+                continue
+            total_bytes += len(chunk)
+            if total_bytes > body_limit:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Multipart request exceeded the fallback parser size limit.",
+                )
+            body_stream.write(chunk)
+        body_stream.seek(0)
+        while True:
+            chunk = body_stream.read(64 * 1024)
+            if not chunk:
+                break
+            parser.feed(chunk)
+    finally:
+        body_stream.close()
+
+    message = parser.close()
+    if not message.is_multipart():
+        raise HTTPException(status_code=400, detail="Malformed multipart payload.")
+
+    items: list[tuple[str, str | UploadFile]] = []
+    file_count = 0
+    field_count = 0
+    max_files = max(1, len(file_limits))
+    for part in message.iter_parts():
+        field_name = str(part.get_param("name", header="content-disposition") or "").strip()
+        if not field_name:
+            raise HTTPException(
+                status_code=400,
+                detail='The Content-Disposition header field "name" must be provided.',
+            )
+        payload = part.get_payload(decode=True) or b""
+        filename = part.get_filename()
+        if filename is None:
+            field_count += 1
+            if field_count > max_fields:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Too many fields. Maximum number of fields is {max_fields}.",
+                )
+            if len(payload) > _MULTIPART_TEXT_LIMIT_BYTES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Part exceeded maximum size of {int(_MULTIPART_TEXT_LIMIT_BYTES / 1024)}KB.",
+                )
+            items.append((field_name, _decode_form_text(payload, part.get_content_charset())))
+            continue
+
+        file_count += 1
+        if file_count > max_files:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Too many files. Maximum number of files is {max_files}.",
+            )
+        current_file_limit = file_limits.get(field_name)
+        if current_file_limit is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unexpected multipart file field '{field_name}'.",
+            )
+        if len(payload) > current_file_limit:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Multipart file field '{field_name}' exceeded the maximum size of "
+                    f"{_format_upload_limit(current_file_limit)}."
+                ),
+            )
+        upload_buffer = SpooledTemporaryFile(max_size=min(max(current_file_limit, 1), 1024 * 1024))
+        upload_buffer.write(payload)
+        upload_buffer.seek(0)
+        items.append(
+            (
+                field_name,
+                UploadFile(
+                    file=upload_buffer,
+                    size=len(payload),
+                    filename=filename,
+                    headers=Headers({"content-type": part.get_content_type()}),
+                ),
+            )
+        )
+    return FormData(items)
 
 
 def _multipart_file_value(form: FormData, field_name: str, *, required: bool = False) -> UploadFile | None:
@@ -310,6 +469,58 @@ def _multipart_text_value(form: FormData, field_name: str, *, required: bool = F
     if isinstance(value, UploadFile):
         raise ValueError(f"Multipart field '{field_name}' must be text.")
     return str(value)
+
+
+def _multipart_optional_text(form: FormData, field_name: str) -> str | None:
+    value = _multipart_text_value(form, field_name)
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _parse_form_bool(raw_value: str | None, field_name: str, *, default: bool = False) -> bool:
+    if raw_value is None:
+        return default
+    normalized = str(raw_value).strip().lower()
+    if not normalized:
+        return default
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Field '{field_name}' must be a boolean.")
+
+
+def _parse_form_int(raw_value: str | None, field_name: str) -> int | None:
+    if raw_value is None:
+        return None
+    normalized = str(raw_value).strip()
+    if not normalized:
+        return None
+    try:
+        return int(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Field '{field_name}' must be an integer.") from exc
+
+
+def _parse_form_json(raw_value: str | None, field_name: str) -> Any:
+    if raw_value is None:
+        return None
+    normalized = str(raw_value).strip()
+    if not normalized:
+        return None
+    try:
+        return json.loads(normalized)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Field '{field_name}' must be valid JSON.") from exc
+
+
+def _is_local_request(request: Request) -> bool:
+    client = request.client
+    if client is None:
+        return False
+    return str(client.host or "").strip().lower() in _LOCALHOST_CLIENT_HOSTS
 
 
 @app.get("/health")
@@ -681,6 +892,81 @@ def generate(
     return result
 
 
+@app.post("/img2img")
+async def img2img(
+    request: Request,
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> dict:
+    form: FormData | None = None
+    try:
+        owner_id = _resolve_owner_id(x_justrayzist_client)
+        form = await _parse_multipart_form(
+            request,
+            file_limits={"image": _IMG2IMG_UPLOAD_LIMIT_BYTES},
+            max_fields=12,
+        )
+        upload = _multipart_file_value(form, "image", required=True)
+        payload = Img2ImgRequest.model_validate(
+            {
+                "prompt": _multipart_text_value(form, "prompt", required=True),
+                "pack": _multipart_optional_text(form, "pack"),
+                "job_id": _multipart_optional_text(form, "job_id"),
+                "seed": _parse_form_int(_multipart_optional_text(form, "seed"), "seed"),
+                "scheduler_mode": _multipart_optional_text(form, "scheduler_mode"),
+                "enhance_prompt": _parse_form_bool(
+                    _multipart_optional_text(form, "enhance_prompt"),
+                    "enhance_prompt",
+                    default=False,
+                ),
+                "similarity": (
+                    _multipart_optional_text(form, "similarity")
+                    if _multipart_optional_text(form, "similarity") is not None
+                    else 0.80
+                ),
+                "loras": _parse_form_json(_multipart_optional_text(form, "loras"), "loras") or [],
+            }
+        )
+        image_bytes = await upload.read()
+        if not image_bytes:
+            raise ValueError("Multipart field 'image' is empty.")
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as source_file:
+                source_image = source_file.convert("RGB")
+        except OSError as exc:
+            raise ValueError("Multipart field 'image' must be a supported image file.") from exc
+        img2img_kwargs = {
+            "owner_id": owner_id,
+            "prompt": payload.prompt,
+            "image": source_image,
+            "image_filename": upload.filename,
+            "pack_name": payload.pack,
+            "job_id": payload.job_id,
+            "seed": payload.seed,
+            "scheduler_mode": payload.scheduler_mode,
+            "enhance_prompt": payload.enhance_prompt,
+            "similarity": payload.similarity,
+        }
+        if payload.loras:
+            img2img_kwargs["loras"] = [item.model_dump() for item in payload.loras]
+        result = inference.img2img(**img2img_kwargs)
+    except HTTPException:
+        raise
+    except GenerationCancelledError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ModelPackValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"Missing dependency: {exc}") from exc
+    except Exception as exc:
+        LOGGER.exception("Unhandled img2img error.")
+        raise HTTPException(status_code=500, detail="Img2img failed.") from exc
+    return result
+
+
 @app.post("/upscale")
 def upscale(
     payload: UpscaleRequest,
@@ -711,6 +997,39 @@ def upscale(
     except Exception as exc:
         LOGGER.exception("Unhandled upscale error.")
         raise HTTPException(status_code=500, detail="Upscale failed.") from exc
+    return result
+
+
+@app.post("/clarity")
+def clarity(
+    payload: ClarityRequest,
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> dict:
+    try:
+        owner_id = _resolve_owner_id(x_justrayzist_client)
+        clarity_kwargs: dict[str, object] = {
+            "owner_id": owner_id,
+            "filename": payload.filename,
+            "pack_name": payload.pack,
+            "job_id": payload.job_id,
+            "seed": payload.seed,
+            "scheduler_mode": payload.scheduler_mode,
+            "enhance_prompt": payload.enhance_prompt,
+        }
+        result = inference.clarity(**clarity_kwargs)
+    except HTTPException:
+        raise
+    except GenerationCancelledError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ModelPackValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"Missing dependency: {exc}") from exc
+    except Exception as exc:
+        LOGGER.exception("Unhandled clarity error.")
+        raise HTTPException(status_code=500, detail="Clarity failed.") from exc
     return result
 
 
@@ -898,7 +1217,9 @@ def gallery_import(
 
 
 @app.post("/server/kill")
-def server_kill(background_tasks: BackgroundTasks) -> dict:
+def server_kill(request: Request, background_tasks: BackgroundTasks) -> dict:
+    if not _is_local_request(request):
+        raise HTTPException(status_code=403, detail="Server shutdown is allowed from the local machine only.")
     background_tasks.add_task(_shutdown_server_process)
     return {"status": "ok", "message": "Server shutdown initiated."}
 

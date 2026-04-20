@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -9,6 +10,12 @@ from app.api import main as api_main
 from app.core.cancellation import GenerationCancelledError
 
 CLIENT_HEADER = {"X-JustRayzist-Client": "Example-Client"}
+
+
+def _png_bytes(size: tuple[int, int] = (32, 32)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color=(24, 48, 96)).save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def test_generate_route_requires_client_header() -> None:
@@ -202,6 +209,176 @@ def test_upscale_route_rejects_legacy_mode_and_scale_fields() -> None:
         },
     )
     assert response.status_code == 422
+
+
+def test_clarity_route_forwards_job_id(monkeypatch) -> None:
+    def fake_clarity(**kwargs):
+        assert kwargs == {
+            "owner_id": "example-client",
+            "filename": "source.png",
+            "pack_name": "Rayzist_bf16",
+            "job_id": "pending_clarity_123",
+            "seed": 654,
+            "scheduler_mode": "euler",
+            "enhance_prompt": False,
+        }
+        return {
+            "filename": "clarified.png",
+            "output_path": "S:/STABLEDIFFUSION/JustRayzist/outputs/example-client/clarified.png",
+            "source_filename": "source.png",
+            "duration_ms": 3456,
+            "url": "/images/clarified.png",
+        }
+
+    monkeypatch.setattr(api_main.inference, "clarity", fake_clarity)
+
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/clarity",
+        headers=CLIENT_HEADER,
+        json={
+            "filename": "source.png",
+            "pack": "Rayzist_bf16",
+            "job_id": "pending_clarity_123",
+            "seed": 654,
+            "scheduler_mode": "euler",
+            "enhance_prompt": False,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["filename"] == "clarified.png"
+
+
+def test_clarity_route_maps_cancellation_to_409(monkeypatch) -> None:
+    def fake_clarity(**_kwargs):
+        raise GenerationCancelledError("Clarity cancelled.")
+
+    monkeypatch.setattr(api_main.inference, "clarity", fake_clarity)
+
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/clarity",
+        headers=CLIENT_HEADER,
+        json={"filename": "source.png"},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Clarity cancelled."
+
+
+def test_clarity_route_rejects_unknown_fields() -> None:
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/clarity",
+        headers=CLIENT_HEADER,
+        json={
+            "filename": "source.png",
+            "upscale_mode": "hq",
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_img2img_route_requires_client_header() -> None:
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/img2img",
+        data={"prompt": "hello world", "similarity": "0.8"},
+        files={"image": ("reference.png", _png_bytes(), "image/png")},
+    )
+    assert response.status_code == 400
+    assert "Missing client id" in response.json()["detail"]
+
+
+def test_img2img_route_forwards_current_payload(monkeypatch) -> None:
+    def fake_img2img(**kwargs):
+        assert kwargs["owner_id"] == "example-client"
+        assert kwargs["prompt"] == "hello world"
+        assert kwargs["image_filename"] == "reference.png"
+        assert kwargs["pack_name"] == "Rayzist_bf16"
+        assert kwargs["job_id"] == "pending_img2img_123"
+        assert kwargs["seed"] == 123
+        assert kwargs["scheduler_mode"] == "dpm"
+        assert kwargs["enhance_prompt"] is True
+        assert kwargs["similarity"] == 0.75
+        assert kwargs["loras"] == [{"id": "cinematic-style", "weight": 1.0}]
+        assert kwargs["image"].size == (48, 32)
+        return {
+            "filename": "generated.png",
+            "output_path": "S:/STABLEDIFFUSION/JustRayzist/outputs/example-client/generated.png",
+            "prompt": "hello world",
+            "mode": "img2img",
+            "source_filename": "reference.png",
+            "similarity": 0.75,
+            "width": 48,
+            "height": 32,
+            "duration_ms": 1234,
+            "url": "/images/generated.png",
+            "prompt_enhanced": True,
+            "scheduler_mode": "dpm",
+        }
+
+    monkeypatch.setattr(api_main.inference, "img2img", fake_img2img)
+
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/img2img",
+        headers=CLIENT_HEADER,
+        data={
+            "prompt": "hello world",
+            "pack": "Rayzist_bf16",
+            "job_id": "pending_img2img_123",
+            "seed": "123",
+            "scheduler_mode": "dpm",
+            "enhance_prompt": "true",
+            "similarity": "0.75",
+            "loras": '[{"id":"cinematic-style","weight":1.0}]',
+        },
+        files={"image": ("reference.png", _png_bytes((48, 32)), "image/png")},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["filename"] == "generated.png"
+    assert payload["mode"] == "img2img"
+
+
+def test_img2img_route_rejects_invalid_similarity() -> None:
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/img2img",
+        headers=CLIENT_HEADER,
+        data={"prompt": "hello world", "similarity": "1.2"},
+        files={"image": ("reference.png", _png_bytes(), "image/png")},
+    )
+    assert response.status_code == 422
+
+
+def test_img2img_route_rejects_invalid_loras_json() -> None:
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/img2img",
+        headers=CLIENT_HEADER,
+        data={"prompt": "hello world", "loras": "not-json"},
+        files={"image": ("reference.png", _png_bytes(), "image/png")},
+    )
+    assert response.status_code == 400
+    assert "loras" in response.json()["detail"]
+
+
+def test_img2img_route_maps_cancellation_to_409(monkeypatch) -> None:
+    def fake_img2img(**_kwargs):
+        raise GenerationCancelledError("Img2img cancelled.")
+
+    monkeypatch.setattr(api_main.inference, "img2img", fake_img2img)
+
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/img2img",
+        headers=CLIENT_HEADER,
+        data={"prompt": "hello world"},
+        files={"image": ("reference.png", _png_bytes(), "image/png")},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Img2img cancelled."
 
 
 def test_client_jobs_route_requires_client_header() -> None:
@@ -467,8 +644,6 @@ def test_server_kill_route_schedules_shutdown(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["message"] == "Server shutdown initiated."
     assert called["count"] == 1
-
-
 
 
 

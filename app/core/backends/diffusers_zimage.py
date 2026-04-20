@@ -68,6 +68,10 @@ class GenerationResult:
     upscale_duration_ms: int | None = None
     refine_duration_ms: int | None = None
     refine_strength: float | None = None
+    refine_pass_count: int = 1
+    refine_pass1_steps: int | None = None
+    refine_pass2_steps: int | None = None
+    refine_pass2_strength: float | None = None
     refine_tile_size: int | None = None
     refine_tile_overlap: int | None = None
     refine_tile_size_requested: int | None = None
@@ -141,6 +145,10 @@ class GenerationResult:
             "upscale_duration_ms": self.upscale_duration_ms,
             "refine_duration_ms": self.refine_duration_ms,
             "refine_strength": self.refine_strength,
+            "refine_pass_count": self.refine_pass_count,
+            "refine_pass1_steps": self.refine_pass1_steps,
+            "refine_pass2_steps": self.refine_pass2_steps,
+            "refine_pass2_strength": self.refine_pass2_strength,
             "refine_tile_size": self.refine_tile_size,
             "refine_tile_overlap": self.refine_tile_overlap,
             "refine_tile_size_requested": self.refine_tile_size_requested,
@@ -229,7 +237,14 @@ class DiffusersZImageBackend:
         "balanced": 1024,
         "constrained": 896,
     }
+    # Img2img inputs are capped to ~1.5MP upstream; prefer a full-frame attempt here to avoid
+    # visible seams from tiled refinement, and let the OOM fallback step down only when needed.
+    _REFINE_FULL_FRAME_MAX_PIXELS = 1_500_000
     _REFINE_HIGH_FULL_FRAME_MAX_DIM = 1024
+    _IMG2IMG_GUIDANCE_SCALE_DEFAULT = 1.0
+    _REFINE_POLISH_STEPS = 6
+    _REFINE_MIN_STRENGTH = 0.05
+    _REFINE_POLISH_MAX_STRENGTH = 0.10
     _REFINE_FALLBACK_MIN_TILE_BY_PROFILE: dict[str, int] = {
         "high": 512,
         "balanced": 640,
@@ -2371,30 +2386,38 @@ class DiffusersZImageBackend:
         generate_kwargs: dict[str, Any],
         generation_seed: int | None = None,
     ) -> str:
-        output_ids = None
-        if hasattr(text_encoder, "generate"):
+        try:
+            with self._seeded_rng_context(torch_module, generation_seed):
+                output_ids = self._generate_with_base_model(
+                    text_encoder=text_encoder,
+                    encoded=encoded,
+                    max_new_tokens=int(generate_kwargs.get("max_new_tokens", 192)),
+                    eos_token_id=generate_kwargs.get("eos_token_id"),
+                    torch_module=torch_module,
+                    do_sample=bool(generate_kwargs.get("do_sample", True)),
+                    temperature=float(generate_kwargs.get("temperature", 0.85)),
+                    top_p=float(generate_kwargs.get("top_p", 0.92)),
+                    repetition_penalty=float(generate_kwargs.get("repetition_penalty", 1.08)),
+                )
+        except Exception as decode_exc:
+            if not hasattr(text_encoder, "generate"):
+                raise
+            LOGGER.debug(
+                "Wildcard suggestion base-model decode unavailable; falling back to text_encoder.generate(). %s",
+                decode_exc,
+            )
             try:
                 with self._seeded_rng_context(torch_module, generation_seed):
                     with torch_module.inference_mode():
                         output_ids = text_encoder.generate(**encoded, **generate_kwargs)
             except Exception as exc:
                 LOGGER.warning(
-                    "Wildcard suggestion generate() failed; falling back to base-model decode. %s",
+                    "Wildcard suggestion base-model decode failed and text_encoder.generate() fallback also failed. "
+                    "base_model=%s generate=%s",
+                    decode_exc,
                     exc,
                 )
-
-        if output_ids is None:
-            output_ids = self._generate_with_base_model(
-                text_encoder=text_encoder,
-                encoded=encoded,
-                max_new_tokens=int(generate_kwargs.get("max_new_tokens", 192)),
-                eos_token_id=generate_kwargs.get("eos_token_id"),
-                torch_module=torch_module,
-                do_sample=bool(generate_kwargs.get("do_sample", True)),
-                temperature=float(generate_kwargs.get("temperature", 0.85)),
-                top_p=float(generate_kwargs.get("top_p", 0.92)),
-                repetition_penalty=float(generate_kwargs.get("repetition_penalty", 1.08)),
-            )
+                raise
 
         full_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
         input_text = tokenizer.decode(encoded["input_ids"][0], skip_special_tokens=True)
@@ -3114,6 +3137,8 @@ class DiffusersZImageBackend:
         if request.refine_tile_size is not None:
             tile_size = max(0, int(request.refine_tile_size))
             return tile_size, overlap
+        if width > 0 and height > 0 and (width * height) <= self._REFINE_FULL_FRAME_MAX_PIXELS:
+            return 0, overlap
 
         profile_name = self._resource_profile().name
         max_dim = max(width, height)
@@ -3138,34 +3163,38 @@ class DiffusersZImageBackend:
         generate_kwargs: dict[str, Any],
         enhancement_seed: int | None = None,
     ) -> tuple[str, str]:
-        output_ids = None
-        if hasattr(text_encoder, "generate"):
+        try:
+            with self._seeded_rng_context(torch_module, enhancement_seed):
+                output_ids = self._generate_with_base_model(
+                    text_encoder=text_encoder,
+                    encoded=encoded,
+                    max_new_tokens=int(generate_kwargs.get("max_new_tokens", 72)),
+                    eos_token_id=generate_kwargs.get("eos_token_id"),
+                    torch_module=torch_module,
+                    do_sample=bool(generate_kwargs.get("do_sample", False)),
+                    temperature=float(generate_kwargs.get("temperature", 1.0)),
+                    top_p=float(generate_kwargs.get("top_p", 1.0)),
+                    repetition_penalty=float(generate_kwargs.get("repetition_penalty", 1.08)),
+                )
+        except Exception as decode_exc:
+            if not hasattr(text_encoder, "generate"):
+                LOGGER.warning("Prompt enhancement base-model decode failed; using original prompt. %s", decode_exc)
+                return prompt, "decode_failure"
+            LOGGER.debug(
+                "Prompt enhancement base-model decode unavailable; falling back to text_encoder.generate(). %s",
+                decode_exc,
+            )
             try:
                 with self._seeded_rng_context(torch_module, enhancement_seed):
                     with torch_module.inference_mode():
                         output_ids = text_encoder.generate(**encoded, **generate_kwargs)
             except Exception as exc:
                 LOGGER.warning(
-                    "Prompt enhancement generate() failed; falling back to base-model decode. %s",
+                    "Prompt enhancement base-model decode failed and text_encoder.generate() fallback also failed. "
+                    "base_model=%s generate=%s",
+                    decode_exc,
                     exc,
                 )
-
-        if output_ids is None:
-            try:
-                with self._seeded_rng_context(torch_module, enhancement_seed):
-                    output_ids = self._generate_with_base_model(
-                        text_encoder=text_encoder,
-                        encoded=encoded,
-                        max_new_tokens=int(generate_kwargs.get("max_new_tokens", 72)),
-                        eos_token_id=generate_kwargs.get("eos_token_id"),
-                        torch_module=torch_module,
-                        do_sample=bool(generate_kwargs.get("do_sample", False)),
-                        temperature=float(generate_kwargs.get("temperature", 1.0)),
-                        top_p=float(generate_kwargs.get("top_p", 1.0)),
-                        repetition_penalty=float(generate_kwargs.get("repetition_penalty", 1.08)),
-                    )
-            except Exception as exc:
-                LOGGER.warning("Prompt enhancement base-model decode failed; using original prompt. %s", exc)
                 return prompt, "decode_failure"
 
         try:
@@ -3344,7 +3373,6 @@ class DiffusersZImageBackend:
             )
 
         canvas = Image.new("RGB", (width, height))
-        tile_index = 0
         for y in range(0, height, tile_size):
             for x in range(0, width, tile_size):
                 tile_height = min(tile_size, height - y)
@@ -3356,11 +3384,10 @@ class DiffusersZImageBackend:
                 in_x1 = min(x + tile_width + tile_overlap, width)
 
                 tile_input = image.crop((in_x0, in_y0, in_x1, in_y1))
-                tile_seed = (seed + tile_index) if seed is not None else None
                 generator = self._build_generator(
                     torch_module,
                     "cuda" if torch_module.cuda.is_available() else "cpu",
-                    tile_seed,
+                    seed,
                 )
                 tile_output = self._run_img2img_once(
                     pipe=pipe,
@@ -3379,7 +3406,6 @@ class DiffusersZImageBackend:
                 crop_y1 = crop_y0 + tile_height
                 core = tile_output.crop((crop_x0, crop_y0, crop_x1, crop_y1))
                 canvas.paste(core, (x, y))
-                tile_index += 1
         return canvas
 
     def _run_refine_with_oom_fallback(
@@ -3738,23 +3764,45 @@ class DiffusersZImageBackend:
 
         import torch
 
-        refine_steps = request.refine_steps or 6
+        refine_steps = request.refine_steps or self._settings.runtime_profile.steps_default
         refine_strength = request.refine_strength if request.refine_strength is not None else 0.20
         if refine_strength <= 0.0 or refine_strength >= 1.0:
             raise ValueError("refine_strength must be between 0 and 1.")
 
-        guidance_scale = (
-            request.guidance_scale
-            if request.guidance_scale is not None
-            else self._settings.runtime_profile.guidance_scale_default
+        if request.guidance_scale is not None:
+            guidance_scale = request.guidance_scale
+        elif mode == "img2img_refine":
+            guidance_scale = self._IMG2IMG_GUIDANCE_SCALE_DEFAULT
+        else:
+            guidance_scale = self._settings.runtime_profile.guidance_scale_default
+        prompt_original = request.prompt
+        prompt_wildcard_resolved, wildcard_occurrences = expand_prompt_wildcards(
+            self._settings,
+            prompt_original,
+            seed=request.seed,
         )
-        prompt_original, prompt_effective, prompt_enhanced = self._resolve_effective_prompt(
+        _, prompt_effective_base, prompt_enhanced = self._resolve_effective_prompt(
             pipe=txt_pipe,
-            prompt=request.prompt,
+            prompt=prompt_wildcard_resolved,
             enhance_prompt=request.enhance_prompt,
             seed=request.seed,
             torch_module=torch,
         )
+        prompt_effective, lora_trigger_words = self._append_lora_triggers(
+            prompt_effective_base,
+            request.loras,
+        )
+        active_lora_ids = [lora.id for lora in request.loras]
+        lora_payload = tuple(
+            {
+                "id": lora.id,
+                "name": lora.name or lora.id,
+                "weight": float(lora.weight),
+                "trigger_words": list(lora.trigger_words),
+            }
+            for lora in request.loras
+        )
+        wildcard_payload = tuple(item.to_dict() for item in wildcard_occurrences)
 
         pre_mem = cuda_memory_snapshot(torch)
         pre_proc_mem = process_memory_snapshot()
@@ -3771,18 +3819,60 @@ class DiffusersZImageBackend:
             effective_tile_size,
             effective_tile_overlap,
             fallback_attempt_count,
-        ) = self._run_refine_with_oom_fallback(
-            pipe=img_pipe,
-            prompt=prompt_effective,
-            image=refine_input_image,
-            strength=refine_strength,
-            steps=refine_steps,
-            guidance_scale=guidance_scale,
-            seed=request.seed,
-            tile_size=tile_size_requested,
-            tile_overlap=tile_overlap_requested,
-            torch_module=torch,
-        )
+        ) = (None, 0, 0, 0)
+        refine_pass_count = 1
+        refine_pass1_steps = refine_steps
+        refine_pass2_steps: int | None = None
+        refine_pass2_strength: float | None = None
+        try:
+            if request.loras:
+                self._load_lora_adapters(img_pipe, request.loras)
+            (
+                refined_image,
+                effective_tile_size,
+                effective_tile_overlap,
+                fallback_attempt_count,
+            ) = self._run_refine_with_oom_fallback(
+                pipe=img_pipe,
+                prompt=prompt_effective,
+                image=refine_input_image,
+                strength=refine_strength,
+                steps=refine_steps,
+                guidance_scale=guidance_scale,
+                seed=request.seed,
+                tile_size=tile_size_requested,
+                tile_overlap=tile_overlap_requested,
+                torch_module=torch,
+            )
+            if mode == "img2img_refine":
+                polish_tile_size_requested, polish_tile_overlap_requested = self._resolve_refine_tiling(
+                    request,
+                    refined_image.width,
+                    refined_image.height,
+                )
+                refine_pass2_steps = self._REFINE_POLISH_STEPS
+                refine_pass2_strength = max(
+                    self._REFINE_MIN_STRENGTH,
+                    min(refine_strength * 0.5, self._REFINE_POLISH_MAX_STRENGTH),
+                )
+                polished_image, _, _, polish_fallback_attempt_count = self._run_refine_with_oom_fallback(
+                    pipe=img_pipe,
+                    prompt=prompt_effective,
+                    image=refined_image,
+                    strength=refine_pass2_strength,
+                    steps=refine_pass2_steps,
+                    guidance_scale=guidance_scale,
+                    seed=request.seed,
+                    tile_size=polish_tile_size_requested,
+                    tile_overlap=polish_tile_overlap_requested,
+                    torch_module=torch,
+                )
+                refined_image = polished_image
+                fallback_attempt_count += polish_fallback_attempt_count
+                refine_pass_count = 2
+        finally:
+            if active_lora_ids:
+                self._clear_lora_adapters(img_pipe, adapter_names=active_lora_ids)
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         refine_duration_ms = int((now_perf() - refine_started) * 1000)
@@ -3802,12 +3892,18 @@ class DiffusersZImageBackend:
             device=loaded.device,
             duration_ms=duration_ms,
             prompt_original=prompt_original,
+            prompt_wildcard_resolved=prompt_wildcard_resolved,
             prompt_effective=prompt_effective,
             prompt_enhanced=prompt_enhanced,
+            prompt_effective_base=prompt_effective_base,
             mode=mode,
             upscale_duration_ms=int(upscale_duration_ms),
             refine_duration_ms=refine_duration_ms,
             refine_strength=refine_strength,
+            refine_pass_count=refine_pass_count,
+            refine_pass1_steps=refine_pass1_steps,
+            refine_pass2_steps=refine_pass2_steps,
+            refine_pass2_strength=refine_pass2_strength,
             refine_tile_size=effective_tile_size,
             refine_tile_overlap=effective_tile_overlap,
             refine_tile_size_requested=tile_size_requested,
@@ -3836,4 +3932,9 @@ class DiffusersZImageBackend:
             fp8_storage_preserved_tensor_count=self._fp8_storage_preserved_tensor_count,
             fp8_promoted_tensor_count=self._fp8_promoted_tensor_count,
             fp8_normalized_tensor_names=self._fp8_normalized_tensor_names,
+            wildcards=wildcard_payload,
+            wildcard_count=len(wildcard_payload),
+            loras=lora_payload,
+            lora_count=len(lora_payload),
+            lora_trigger_words=lora_trigger_words,
         )

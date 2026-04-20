@@ -21,7 +21,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=37717)
     args = parser.parse_args()
     _ensure_root_for_frozen()
-    serve(host=args.host, port=args.port, profile=None)
+    serve(host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

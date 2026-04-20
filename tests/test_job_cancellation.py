@@ -79,6 +79,47 @@ def test_request_cancel_client_job_marks_generate_and_interrupts_session(temp_ap
     assert fake_session.cancelled_count == 1
 
 
+def test_request_cancel_client_job_marks_img2img_and_interrupts_session(temp_app_paths, make_app_settings) -> None:
+    settings = make_app_settings(paths=temp_app_paths)
+    service = InferenceService(settings)
+    service._client_active_jobs["example-client"] = {
+        "job_id": "pending_img2img_123",
+        "kind": "img2img",
+        "status": "generating",
+    }
+    cancel_event = threading.Event()
+    service._client_cancel_events["example-client"] = cancel_event
+    fake_session = _FakeUpscaleSession()
+    service._active_session = fake_session
+
+    payload = service.request_cancel_client_job("example-client", job_id="pending_img2img_123")
+
+    assert payload["status"] == "ok"
+    assert payload["cancel_requested"] is True
+    assert cancel_event.is_set() is True
+    assert service._client_active_jobs["example-client"]["status"] == "cancelling"
+    assert fake_session.cancelled_count == 1
+
+
+def test_request_cancel_client_job_marks_clarity(temp_app_paths, make_app_settings) -> None:
+    settings = make_app_settings(paths=temp_app_paths)
+    service = InferenceService(settings)
+    service._client_active_jobs["example-client"] = {
+        "job_id": "pending_clarity_123",
+        "kind": "clarity",
+        "status": "clarifying",
+    }
+    cancel_event = threading.Event()
+    service._client_cancel_events["example-client"] = cancel_event
+
+    payload = service.request_cancel_client_job("example-client", job_id="pending_clarity_123")
+
+    assert payload["status"] == "ok"
+    assert payload["cancel_requested"] is True
+    assert cancel_event.is_set() is True
+    assert service._client_active_jobs["example-client"]["status"] == "cancelling"
+
+
 def test_generate_cancellation_stops_before_save(monkeypatch, temp_app_paths, make_app_settings) -> None:
     settings = make_app_settings(paths=temp_app_paths)
     service = InferenceService(settings)

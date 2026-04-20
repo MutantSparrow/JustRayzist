@@ -10,14 +10,24 @@ const settingsSummaryEl = document.getElementById("settings-summary");
 const resolutionSelectEl = document.getElementById("resolution-select");
 const orientationToggleEl = document.getElementById("orientation-toggle");
 const freezeSeedButtonEl = document.getElementById("freeze-seed-button");
+const proceduralLatentSettingEl = document.getElementById("procedural-latent-setting");
 const proceduralLatentSliderEl = document.getElementById("procedural-latent-slider");
 const proceduralLatentValueEl = document.getElementById("procedural-latent-value");
 const promptEnhanceButtonEl = document.getElementById("prompt-enhance-button");
+const topbarReferenceThumbWrapEl = document.getElementById("topbar-reference-thumb-wrap");
+const topbarReferenceThumbEl = document.getElementById("topbar-reference-thumb");
+const referenceImageInputEl = document.getElementById("reference-image-input");
+const referenceImageControlsEl = document.getElementById("reference-image-controls");
+const referenceImageAddEl = document.getElementById("reference-image-add");
+const referenceImageActiveEl = document.getElementById("reference-image-active");
+const referenceImageThumbWrapEl = document.getElementById("reference-image-thumb-wrap");
+const referenceImageThumbEl = document.getElementById("reference-image-thumb");
+const referenceImageRemoveEl = document.getElementById("reference-image-remove");
+const referenceSimilaritySliderEl = document.getElementById("reference-similarity-slider");
+const referenceSimilarityValueEl = document.getElementById("reference-similarity-value");
 const upscaleModeToggleEl = document.getElementById("upscale-mode-toggle");
 const upscaleScaleToggleEl = document.getElementById("upscale-scale-toggle");
 const upscaleSettingsHintEl = document.getElementById("upscale-settings-hint");
-const deleteGalleryButtonEl = document.getElementById("delete-gallery-button");
-const killServerButtonEl = document.getElementById("kill-server-button");
 const filterInputEl = document.getElementById("filter-input");
 const reverseOrderButtonEl = document.getElementById("reverse-order-button");
 const galleryColorFiltersEl = document.getElementById("gallery-color-filters");
@@ -38,6 +48,7 @@ const loraDrawerEl = document.getElementById("lora-drawer");
 const loraDrawerCloseEl = document.getElementById("lora-drawer-close");
 const loraDrawerCapabilityEl = document.getElementById("lora-drawer-capability");
 const loraFilterInputEl = document.getElementById("lora-filter-input");
+const loraActiveFilterButtonEl = document.getElementById("lora-active-filter");
 const loraUploadInputEl = document.getElementById("lora-upload-input");
 const loraDrawerEmptyEl = document.getElementById("lora-drawer-empty");
 const loraListEl = document.getElementById("lora-list");
@@ -91,6 +102,7 @@ const viewerDeleteButtonEl = document.getElementById("viewer-delete-button");
 const viewerUsePromptButtonEl = document.getElementById("viewer-use-prompt-button");
 const viewerCopyPromptButtonEl = document.getElementById("viewer-copy-prompt-button");
 const viewerUpscaleButtonEl = document.getElementById("viewer-upscale-button");
+const viewerClarityButtonEl = document.getElementById("viewer-clarity-button");
 const viewerFavoriteButtonEl = document.getElementById("viewer-favorite-button");
 const viewerPrevButtonEl = document.getElementById("viewer-prev-button");
 const viewerNextButtonEl = document.getElementById("viewer-next-button");
@@ -116,11 +128,21 @@ const requiredUi = [
   ["resolution-select", resolutionSelectEl],
   ["orientation-toggle", orientationToggleEl],
   ["freeze-seed-button", freezeSeedButtonEl],
+  ["procedural-latent-setting", proceduralLatentSettingEl],
   ["procedural-latent-slider", proceduralLatentSliderEl],
   ["procedural-latent-value", proceduralLatentValueEl],
   ["prompt-enhance-button", promptEnhanceButtonEl],
-  ["delete-gallery-button", deleteGalleryButtonEl],
-  ["kill-server-button", killServerButtonEl],
+  ["topbar-reference-thumb-wrap", topbarReferenceThumbWrapEl],
+  ["topbar-reference-thumb", topbarReferenceThumbEl],
+  ["reference-image-input", referenceImageInputEl],
+  ["reference-image-controls", referenceImageControlsEl],
+  ["reference-image-add", referenceImageAddEl],
+  ["reference-image-active", referenceImageActiveEl],
+  ["reference-image-thumb-wrap", referenceImageThumbWrapEl],
+  ["reference-image-thumb", referenceImageThumbEl],
+  ["reference-image-remove", referenceImageRemoveEl],
+  ["reference-similarity-slider", referenceSimilaritySliderEl],
+  ["reference-similarity-value", referenceSimilarityValueEl],
   ["filter-input", filterInputEl],
   ["reverse-order-button", reverseOrderButtonEl],
   ["gallery-color-filters", galleryColorFiltersEl],
@@ -141,6 +163,7 @@ const requiredUi = [
   ["lora-drawer-close", loraDrawerCloseEl],
   ["lora-drawer-capability", loraDrawerCapabilityEl],
   ["lora-filter-input", loraFilterInputEl],
+  ["lora-active-filter", loraActiveFilterButtonEl],
   ["lora-upload-input", loraUploadInputEl],
   ["lora-drawer-empty", loraDrawerEmptyEl],
   ["lora-list", loraListEl],
@@ -194,6 +217,7 @@ const requiredUi = [
   ["viewer-use-prompt-button", viewerUsePromptButtonEl],
   ["viewer-copy-prompt-button", viewerCopyPromptButtonEl],
   ["viewer-upscale-button", viewerUpscaleButtonEl],
+  ["viewer-clarity-button", viewerClarityButtonEl],
   ["viewer-favorite-button", viewerFavoriteButtonEl],
   ["viewer-prev-button", viewerPrevButtonEl],
   ["viewer-next-button", viewerNextButtonEl],
@@ -216,8 +240,15 @@ const CLIENT_ID_STORAGE_KEY = "justrayzist.client_id";
 const GALLERY_COLUMNS_STORAGE_KEY = "justrayzist.gallery_columns";
 const CLIENT_QUEUE_STORAGE_KEY = "justrayzist.client_queue";
 const LORA_APPLIED_STORAGE_KEY = "justrayzist.lora_applied";
+const IMG2IMG_REFERENCE_DB_NAME = "justrayzist_img2img";
+const IMG2IMG_REFERENCE_STORE_NAME = "queued_references";
+const IMG2IMG_REFERENCE_DB_VERSION = 1;
+const IMG2IMG_MAX_PIXELS = 1500000;
+const IMG2IMG_DIM_MULTIPLE = 32;
+const IMG2IMG_MIN_DIM = 64;
+const IMG2IMG_DEFAULT_SIMILARITY = 80;
 const CLIENT_JOB_POLL_INTERVAL_MS = 1500;
-const CLIENT_QUEUE_STORAGE_VERSION = 2;
+const CLIENT_QUEUE_STORAGE_VERSION = 3;
 const GALLERY_COLOR_FILTERS = ["black", "white", "red", "yellow", "blue", "green"];
 const GALLERY_COLOR_CACHE_STATUS_MESSAGE = "Updating gallery color cache...";
 const GALLERY_COLOR_CACHE_POLL_INTERVAL_MS = 2500;
@@ -319,6 +350,7 @@ const state = {
   orientation: "portrait",
   freezeSeed: false,
   proceduralCreativity: 0,
+  savedProceduralCreativityBeforeReference: null,
   promptEnhance: true,
   upscaleMode: "fast",
   upscaleScale: 2,
@@ -342,6 +374,8 @@ const state = {
   wildcardLibraryLoadRequestSeq: 0,
   wildcardLibrarySignature: "",
   zoom: 1.0,
+  referenceImage: null,
+  referenceBlobDbPromise: null,
   panX: 0,
   panY: 0,
   dragging: false,
@@ -373,6 +407,7 @@ const state = {
   loraDrawerOpen: false,
   loraLibrary: [],
   loraFilter: "",
+  loraActiveOnlyFilter: false,
   loraLibraryMasonryFrame: null,
   loraLibraryPollTimer: null,
   loraLibraryEventSource: null,
@@ -436,6 +471,182 @@ const state = {
   wildcardSuggestionMessage: "",
   wildcardSuggestionMessageIsError: false,
 };
+
+function hasReferenceImage() {
+  return Boolean(state.referenceImage && state.referenceImage.blob instanceof Blob);
+}
+
+function normalizeSimilarityPercent(rawValue) {
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) return IMG2IMG_DEFAULT_SIMILARITY;
+  return Math.max(0, Math.min(100, value));
+}
+
+function normalizedImg2ImgDimensions(width, height) {
+  const safeWidth = Math.max(1, Number(width) || 1);
+  const safeHeight = Math.max(1, Number(height) || 1);
+  const pixels = safeWidth * safeHeight;
+  const scale = pixels > IMG2IMG_MAX_PIXELS ? Math.sqrt(IMG2IMG_MAX_PIXELS / pixels) : 1;
+  let nextWidth = Math.max(1, Math.round(safeWidth * scale));
+  let nextHeight = Math.max(1, Math.round(safeHeight * scale));
+  const snap = (value) => {
+    if (value <= IMG2IMG_MIN_DIM) return IMG2IMG_MIN_DIM;
+    const snapped = value - (value % IMG2IMG_DIM_MULTIPLE);
+    return Math.max(IMG2IMG_MIN_DIM, snapped);
+  };
+  nextWidth = snap(nextWidth);
+  nextHeight = snap(nextHeight);
+  while (nextWidth * nextHeight > IMG2IMG_MAX_PIXELS) {
+    if (nextWidth >= nextHeight && nextWidth > IMG2IMG_MIN_DIM) {
+      nextWidth = snap(nextWidth - IMG2IMG_DIM_MULTIPLE);
+      continue;
+    }
+    if (nextHeight > IMG2IMG_MIN_DIM) {
+      nextHeight = snap(nextHeight - IMG2IMG_DIM_MULTIPLE);
+      continue;
+    }
+    break;
+  }
+  return {
+    width: nextWidth,
+    height: nextHeight,
+  };
+}
+
+async function resizeReferenceImageFile(file) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("Failed to load reference image."));
+      element.src = objectUrl;
+    });
+    const originalWidth = Number(image.naturalWidth || image.width) || 1;
+    const originalHeight = Number(image.naturalHeight || image.height) || 1;
+    const target = normalizedImg2ImgDimensions(originalWidth, originalHeight);
+    const canvas = document.createElement("canvas");
+    canvas.width = target.width;
+    canvas.height = target.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Canvas is unavailable in this browser.");
+    }
+    context.drawImage(image, 0, 0, target.width, target.height);
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob((result) => {
+        if (result) {
+          resolve(result);
+        } else {
+          reject(new Error("Failed to resize reference image."));
+        }
+      }, "image/png");
+    });
+    return {
+      blob,
+      previewUrl: URL.createObjectURL(blob),
+      filename: String(file.name || "reference.png").trim() || "reference.png",
+      width: target.width,
+      height: target.height,
+      originalWidth,
+      originalHeight,
+    };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function revokeReferencePreview(reference) {
+  const previewUrl = String(reference?.previewUrl || "").trim();
+  if (!previewUrl) return;
+  try {
+    URL.revokeObjectURL(previewUrl);
+  } catch (_) {
+  }
+}
+
+function openReferenceBlobDb() {
+  if (!("indexedDB" in window)) {
+    return Promise.resolve(null);
+  }
+  if (state.referenceBlobDbPromise) {
+    return state.referenceBlobDbPromise;
+  }
+  state.referenceBlobDbPromise = new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(IMG2IMG_REFERENCE_DB_NAME, IMG2IMG_REFERENCE_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(IMG2IMG_REFERENCE_STORE_NAME)) {
+        db.createObjectStore(IMG2IMG_REFERENCE_STORE_NAME, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Failed to open the img2img reference store."));
+  }).catch((error) => {
+    state.referenceBlobDbPromise = null;
+    throw error;
+  });
+  return state.referenceBlobDbPromise;
+}
+
+async function storeQueuedReferenceBlob(reference) {
+  const db = await openReferenceBlobDb();
+  if (!db) {
+    throw new Error("This browser does not support persistent queued img2img references.");
+  }
+  const id = `img2img_ref_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction(IMG2IMG_REFERENCE_STORE_NAME, "readwrite");
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error("Failed to save the queued img2img reference."));
+    transaction.objectStore(IMG2IMG_REFERENCE_STORE_NAME).put({
+      id,
+      blob: reference.blob,
+      filename: reference.filename,
+      width: reference.width,
+      height: reference.height,
+      originalWidth: reference.originalWidth,
+      originalHeight: reference.originalHeight,
+      createdAt: Date.now(),
+    });
+  });
+  return id;
+}
+
+async function loadQueuedReferenceBlob(blobKey) {
+  const targetKey = String(blobKey || "").trim();
+  if (!targetKey) return null;
+  const db = await openReferenceBlobDb();
+  if (!db) return null;
+  return await new Promise((resolve, reject) => {
+    const transaction = db.transaction(IMG2IMG_REFERENCE_STORE_NAME, "readonly");
+    const request = transaction.objectStore(IMG2IMG_REFERENCE_STORE_NAME).get(targetKey);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error("Failed to load the queued img2img reference."));
+  });
+}
+
+async function deleteQueuedReferenceBlob(blobKey) {
+  const targetKey = String(blobKey || "").trim();
+  if (!targetKey) return;
+  const db = await openReferenceBlobDb();
+  if (!db) return;
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction(IMG2IMG_REFERENCE_STORE_NAME, "readwrite");
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error("Failed to delete the queued img2img reference."));
+    transaction.objectStore(IMG2IMG_REFERENCE_STORE_NAME).delete(targetKey);
+  });
+}
+
+async function releaseQueuedReferenceForJob(job) {
+  const blobKey = String(job?.reference_blob_key || "").trim();
+  if (!blobKey) return;
+  try {
+    await deleteQueuedReferenceBlob(blobKey);
+  } catch (_) {
+  }
+}
 
 function randomSeed() {
   return Math.floor(Math.random() * 2_147_483_646) + 1;
@@ -844,6 +1055,16 @@ function pendingLoraCount() {
 
 function loraSelectionsDirty() {
   return !loraSelectionsEqual(state.loraPendingSelections, state.loraAppliedSelections);
+}
+
+function updateLoraActiveFilterButton() {
+  loraActiveFilterButtonEl.classList.toggle("active", state.loraActiveOnlyFilter);
+  loraActiveFilterButtonEl.setAttribute("aria-pressed", String(state.loraActiveOnlyFilter));
+  loraActiveFilterButtonEl.setAttribute(
+    "aria-label",
+    state.loraActiveOnlyFilter ? "Showing active LoRAs only" : "Show active LoRAs only"
+  );
+  loraActiveFilterButtonEl.title = state.loraActiveOnlyFilter ? "Show all LoRAs" : "Show active LoRAs only";
 }
 
 function setLoraDrawerOpen(open) {
@@ -1453,8 +1674,11 @@ function setPendingLoraWeight(loraId, rawValue, options = {}) {
 
 function renderLoraLibrary() {
   try {
+    updateLoraActiveFilterButton();
     const filterValue = String(state.loraFilter || "").trim().toLowerCase();
+    const activeLoraIds = new Set(state.loraPendingSelections.map((selection) => selection.id));
     const filteredItems = state.loraLibrary.filter((item) => {
+      if (state.loraActiveOnlyFilter && !activeLoraIds.has(item.id)) return false;
       if (!filterValue) return true;
       const haystack = `${item.display_name || ""} ${item.source_filename || ""}`.toLowerCase();
       return haystack.includes(filterValue);
@@ -1465,8 +1689,13 @@ function renderLoraLibrary() {
     items.push(addTile);
     if (filteredItems.length === 0) {
       loraDrawerEmptyEl.classList.remove("hidden");
-      loraDrawerEmptyEl.textContent =
-        state.loraLibrary.length === 0 ? "No LoRAs installed yet." : "No LoRAs match the current filter.";
+      if (state.loraLibrary.length === 0) {
+        loraDrawerEmptyEl.textContent = "No LoRAs installed yet.";
+      } else if (state.loraActiveOnlyFilter && state.loraPendingSelections.length === 0) {
+        loraDrawerEmptyEl.textContent = "No active LoRAs.";
+      } else {
+        loraDrawerEmptyEl.textContent = "No LoRAs match the current filter.";
+      }
     } else {
       loraDrawerEmptyEl.classList.add("hidden");
     }
@@ -2919,6 +3148,7 @@ function sanitizeJobStatus(rawValue, kind = "generate") {
   const value = String(rawValue || "").trim().toLowerCase();
   if (value === "queued") return "queued";
   if (value === "cancelling") return "cancelling";
+  if (value === "clarifying") return kind === "clarity" ? "clarifying" : "generating";
   if (value === "upscaling") return kind === "upscale" ? "upscaling" : "generating";
   return "generating";
 }
@@ -2936,7 +3166,10 @@ function normalizeJobTimestamp(rawValue) {
 }
 
 function sanitizeJobKind(rawValue) {
-  return rawValue === "upscale" ? "upscale" : "generate";
+  if (rawValue === "upscale") return "upscale";
+  if (rawValue === "clarity") return "clarity";
+  if (rawValue === "img2img") return "img2img";
+  return "generate";
 }
 
 function normalizeStoredJob(rawJob, overrides = {}) {
@@ -2951,10 +3184,16 @@ function normalizeStoredJob(rawJob, overrides = {}) {
   return {
     kind,
     placeholderId,
-    prompt: kind === "generate" ? String(overrides.prompt ?? rawJob.prompt ?? "").trim() : "",
-    filename: kind === "upscale" ? String(overrides.filename ?? rawJob.filename ?? "").trim() : "",
+    prompt:
+      kind === "upscale" || kind === "clarity"
+        ? ""
+        : String(overrides.prompt ?? rawJob.prompt ?? "").trim(),
+    filename:
+      kind === "upscale" || kind === "clarity"
+        ? String(overrides.filename ?? rawJob.filename ?? "").trim()
+        : "",
     source_filename:
-      kind === "upscale"
+      kind === "upscale" || kind === "clarity" || kind === "img2img"
         ? String(overrides.source_filename ?? rawJob.source_filename ?? rawJob.filename ?? "").trim()
         : "",
     width,
@@ -2962,8 +3201,31 @@ function normalizeStoredJob(rawJob, overrides = {}) {
     pack: rawJob.pack ?? null,
     seed: rawJob.seed ?? null,
     enhance_prompt: Boolean(overrides.enhance_prompt ?? rawJob.enhance_prompt),
-    procedural_creativity: Number(overrides.procedural_creativity ?? rawJob.procedural_creativity ?? 0),
+    procedural_creativity:
+      kind === "generate"
+        ? Number(overrides.procedural_creativity ?? rawJob.procedural_creativity ?? 0)
+        : 0,
+    similarity:
+      kind === "img2img"
+        ? normalizeSimilarityPercent(overrides.similarity ?? rawJob.similarity ?? IMG2IMG_DEFAULT_SIMILARITY)
+        : IMG2IMG_DEFAULT_SIMILARITY,
     loras: cloneLoraSelections(overrides.loras ?? rawJob.loras),
+    reference_blob_key:
+      kind === "img2img"
+        ? String(overrides.reference_blob_key ?? rawJob.reference_blob_key ?? "").trim()
+        : "",
+    reference_filename:
+      kind === "img2img"
+        ? String(overrides.reference_filename ?? rawJob.reference_filename ?? rawJob.source_filename ?? "").trim()
+        : "",
+    reference_original_width:
+      kind === "img2img"
+        ? Math.max(0, Number(overrides.reference_original_width ?? rawJob.reference_original_width) || 0)
+        : 0,
+    reference_original_height:
+      kind === "img2img"
+        ? Math.max(0, Number(overrides.reference_original_height ?? rawJob.reference_original_height) || 0)
+        : 0,
     status: sanitizeJobStatus(overrides.status || rawJob.status || "queued", kind),
     enqueuedAt: normalizeJobTimestamp(overrides.enqueuedAt ?? rawJob.enqueuedAt ?? rawJob.enqueued_at),
     queueIndex: Number(overrides.queueIndex ?? rawJob.queueIndex ?? 0),
@@ -2984,7 +3246,15 @@ function serializeQueuedJob(job) {
     seed: job.seed ?? null,
     enhance_prompt: Boolean(job.enhance_prompt),
     procedural_creativity: Number(job.procedural_creativity || 0),
+    similarity:
+      sanitizeJobKind(job.kind) === "img2img"
+        ? normalizeSimilarityPercent(job.similarity)
+        : IMG2IMG_DEFAULT_SIMILARITY,
     loras: cloneLoraSelections(job.loras),
+    reference_blob_key: String(job.reference_blob_key || ""),
+    reference_filename: String(job.reference_filename || ""),
+    reference_original_width: Math.max(0, Number(job.reference_original_width) || 0),
+    reference_original_height: Math.max(0, Number(job.reference_original_height) || 0),
     status: sanitizeJobStatus(job.status, sanitizeJobKind(job.kind)),
     enqueuedAt: normalizeJobTimestamp(job.enqueuedAt),
     remoteInFlight: Boolean(job.remoteInFlight),
@@ -3062,7 +3332,7 @@ function pendingJobsFromStoredPayload(payload) {
   return legacyJobs;
 }
 
-function restoreClientQueueState() {
+async function restoreClientQueueState() {
   state.queue = [];
   state.activeJob = null;
   syncPendingJobsFromQueueState();
@@ -3080,9 +3350,35 @@ function restoreClientQueueState() {
         })
       )
       .filter(Boolean);
-    const activeJobs = normalizedPendingJobs.filter((job) => isActiveJobStatus(job.status));
+    const hydratedPendingJobs = [];
+    let droppedImg2ImgCount = 0;
+    for (const job of normalizedPendingJobs) {
+      if (job.kind !== "img2img") {
+        hydratedPendingJobs.push(job);
+        continue;
+      }
+      if (job.remoteInFlight) {
+        hydratedPendingJobs.push(job);
+        continue;
+      }
+      const storedReference = await loadQueuedReferenceBlob(job.reference_blob_key);
+      if (!storedReference || !(storedReference.blob instanceof Blob)) {
+        droppedImg2ImgCount += 1;
+        continue;
+      }
+      hydratedPendingJobs.push({
+        ...job,
+        reference_filename: String(storedReference.filename || job.reference_filename || job.source_filename || "").trim(),
+        source_filename: String(storedReference.filename || job.reference_filename || job.source_filename || "").trim(),
+        width: Math.max(1, Number(storedReference.width) || job.width || 1),
+        height: Math.max(1, Number(storedReference.height) || job.height || 1),
+        reference_original_width: Math.max(0, Number(storedReference.originalWidth) || job.reference_original_width || 0),
+        reference_original_height: Math.max(0, Number(storedReference.originalHeight) || job.reference_original_height || 0),
+      });
+    }
+    const activeJobs = hydratedPendingJobs.filter((job) => isActiveJobStatus(job.status));
     state.activeJob = activeJobs.length > 0 ? activeJobs[0] : null;
-    state.queue = normalizedPendingJobs
+    state.queue = hydratedPendingJobs
       .filter((job) => !isActiveJobStatus(job.status))
       .sort((left, right) => {
         const leftIndex = Number(left.queueIndex ?? Number.MAX_SAFE_INTEGER);
@@ -3098,6 +3394,13 @@ function restoreClientQueueState() {
         remoteInFlight: false,
       }));
     syncPendingJobsFromQueueState();
+    persistClientQueueState();
+    if (droppedImg2ImgCount > 0) {
+      setStatus(
+        `Dropped ${droppedImg2ImgCount} queued img2img job${droppedImg2ImgCount === 1 ? "" : "s"} because the stored reference image was unavailable.`,
+        true,
+      );
+    }
   } catch (_) {
     state.queue = [];
     state.activeJob = null;
@@ -3181,6 +3484,9 @@ async function refreshClientJobState(options = {}) {
 
   stopClientJobPolling();
   if (state.activeJob && state.activeJob.remoteInFlight) {
+    if (state.activeJob.kind === "img2img") {
+      await releaseQueuedReferenceForJob(state.activeJob);
+    }
     state.activeJob = null;
     persistClientQueueState();
     renderGallery();
@@ -3625,11 +3931,27 @@ function resolveSourceFilename(item) {
 function isUpscaledItem(item) {
   if (!item) return false;
   const mode = String(item.mode || "").toLowerCase();
-  return Boolean(resolveSourceFilename(item) || mode.includes("upscale"));
+  return mode.includes("upscale") || (!mode && Boolean(resolveSourceFilename(item)));
+}
+
+function isClarityItem(item) {
+  if (!item) return false;
+  const mode = String(item.mode || "").toLowerCase();
+  return mode.includes("clarity");
+}
+
+function isImg2ImgItem(item) {
+  if (!item) return false;
+  const mode = String(item.mode || "").toLowerCase();
+  return mode === "img2img";
 }
 
 function canUpscaleItem(item) {
   return !isUpscaledItem(item);
+}
+
+function canClarityItem(item) {
+  return Boolean(item?.filename);
 }
 
 function getEffectiveUpscaleScale() {
@@ -3660,16 +3982,21 @@ function setUpscaleScale(scale) {
 
 function updateSettingsSummary() {
   const dimensions = parseResolution(resolutionSelectEl.value);
-  const pieces = [
-    `Resolution <span class="summary-value">${dimensions.width}x${dimensions.height}</span>`,
-    `Enhancer <span class="summary-value">${state.promptEnhance ? "ON" : "OFF"}</span>`,
-    `Upscale <span class="summary-value">SEED X2</span>`,
-  ];
+  const pieces = [];
+  if (hasReferenceImage()) {
+    pieces.push(`Reference <span class="summary-value">${escapeHtml(state.referenceImage.filename)}</span>`);
+    pieces.push(
+      `Similarity <span class="summary-value">${normalizeSimilarityPercent(state.referenceImage.similarity)}%</span>`,
+    );
+  } else {
+    pieces.push(`Resolution <span class="summary-value">${dimensions.width}x${dimensions.height}</span>`);
+  }
+  pieces.push(`Enhancer <span class="summary-value">${state.promptEnhance ? "ON" : "OFF"}</span>`);
 
   if (state.freezeSeed && state.currentSeed !== null) {
     pieces.push(`Seed <span class="summary-value">${state.currentSeed}</span>`);
   }
-  if (state.proceduralCreativity > 0) {
+  if (!hasReferenceImage() && state.proceduralCreativity > 0) {
     pieces.push(
       `Creative Mode <span class="summary-value">${describeProceduralCreativity(state.proceduralCreativity)}</span>`,
     );
@@ -3733,6 +4060,86 @@ async function toggleFavoriteFilter() {
   await loadImages();
 }
 
+function updateReferenceImageUi() {
+  const reference = state.referenceImage;
+  const active = hasReferenceImage();
+  referenceImageAddEl.classList.toggle("hidden", active);
+  referenceImageActiveEl.classList.toggle("hidden", !active);
+  referenceImageControlsEl.classList.toggle("has-reference", active);
+  promptInputEl.parentElement?.classList.toggle("has-topbar-reference", active);
+  topbarReferenceThumbWrapEl.classList.toggle("hidden", !active);
+  topbarReferenceThumbWrapEl.setAttribute("aria-hidden", String(!active));
+  resolutionSelectEl.disabled = active;
+  orientationToggleEl.classList.toggle("disabled", active);
+  for (const button of orientationToggleEl.querySelectorAll(".toggle-option")) {
+    button.disabled = active;
+  }
+  if (!active) {
+    referenceImageThumbEl.removeAttribute("src");
+    topbarReferenceThumbEl.removeAttribute("src");
+    return;
+  }
+  referenceImageThumbEl.src = reference.previewUrl;
+  referenceImageThumbEl.alt = reference.filename || "Reference image preview";
+  topbarReferenceThumbEl.src = reference.previewUrl;
+  topbarReferenceThumbEl.alt = reference.filename || "Reference image locked in";
+  referenceSimilaritySliderEl.value = String(normalizeSimilarityPercent(reference.similarity ?? IMG2IMG_DEFAULT_SIMILARITY));
+  referenceSimilarityValueEl.textContent = `${referenceSimilaritySliderEl.value}%`;
+  updateTopbarOffset();
+}
+
+function setReferenceImage(reference) {
+  if (hasReferenceImage() && state.referenceImage) {
+    revokeReferencePreview(state.referenceImage);
+  }
+  if (!state.referenceImage) {
+    state.savedProceduralCreativityBeforeReference = state.proceduralCreativity;
+  }
+  state.referenceImage = {
+    ...reference,
+    similarity: normalizeSimilarityPercent(reference.similarity ?? IMG2IMG_DEFAULT_SIMILARITY),
+  };
+  state.proceduralCreativity = 0;
+  updateReferenceImageUi();
+  updateProceduralLatentControls();
+  updateSettingsSummary();
+  updateGenerateButtonState();
+}
+
+function clearReferenceImage() {
+  if (hasReferenceImage() && state.referenceImage) {
+    revokeReferencePreview(state.referenceImage);
+  }
+  state.referenceImage = null;
+  if (state.savedProceduralCreativityBeforeReference !== null) {
+    state.proceduralCreativity = Number(state.savedProceduralCreativityBeforeReference) || 0;
+    state.savedProceduralCreativityBeforeReference = null;
+  }
+  updateReferenceImageUi();
+  updateProceduralLatentControls();
+  updateSettingsSummary();
+  updateGenerateButtonState();
+}
+
+async function applyReferenceFile(file) {
+  if (!(file instanceof File)) return false;
+  const reference = await resizeReferenceImageFile(file);
+  setReferenceImage(reference);
+  setStatus(
+    `Loaded reference image ${reference.width}x${reference.height} (from ${reference.originalWidth}x${reference.originalHeight}).`
+  );
+  return true;
+}
+
+async function applyReferenceFiles(fileList) {
+  const [file] = Array.from(fileList || []);
+  if (!file) return false;
+  if (!String(file.type || "").startsWith("image/")) {
+    throw new Error("Reference image must be an image file.");
+  }
+  return applyReferenceFile(file);
+}
+
 function updateFreezeSeedButton() {
   if (state.freezeSeed) {
     freezeSeedButtonEl.textContent = `FREEZE SEED: ON (${state.currentSeed})`;
@@ -3751,11 +4158,18 @@ function describeProceduralCreativity(level) {
 }
 
 function updateProceduralLatentControls() {
-  proceduralLatentSliderEl.value = String(state.proceduralCreativity);
-  proceduralLatentValueEl.textContent =
-    `CREATIVE MODE: ${describeProceduralCreativity(state.proceduralCreativity)}`;
-  proceduralLatentValueEl.classList.toggle("active", state.proceduralCreativity > 0);
-  if (state.proceduralCreativity > 0) {
+  const creativeLocked = hasReferenceImage();
+  const effectiveLevel = creativeLocked ? 0 : state.proceduralCreativity;
+  proceduralLatentSliderEl.value = String(effectiveLevel);
+  proceduralLatentSliderEl.disabled = creativeLocked;
+  proceduralLatentSettingEl.classList.toggle("disabled", creativeLocked);
+  proceduralLatentValueEl.textContent = creativeLocked
+    ? "CREATIVE MODE: LOCKED OFF"
+    : `CREATIVE MODE: ${describeProceduralCreativity(state.proceduralCreativity)}`;
+  proceduralLatentValueEl.classList.toggle("active", !creativeLocked && state.proceduralCreativity > 0);
+  if (creativeLocked) {
+    proceduralLatentValueEl.style.color = "var(--magenta)";
+  } else if (state.proceduralCreativity > 0) {
     proceduralLatentValueEl.style.color = "var(--lime)";
   } else {
     proceduralLatentValueEl.style.color = "#d8d8d8";
@@ -3840,22 +4254,27 @@ function updateViewerNavState() {
 function applyViewerItemMeta(item) {
   const resolution = item.width && item.height ? `${item.width}x${item.height}` : "unknown";
   const upscaled = isUpscaledItem(item);
+  const clarity = isClarityItem(item);
+  const img2img = isImg2ImgItem(item);
   const favorite = isFavoriteItem(item);
   viewerUpscaleButtonEl.classList.toggle("hidden", upscaled);
   viewerUpscaleButtonEl.disabled = upscaled;
+  viewerClarityButtonEl.classList.toggle("hidden", !canClarityItem(item));
+  viewerClarityButtonEl.disabled = !canClarityItem(item);
   viewerFavoriteButtonEl.classList.remove("tone-light", "tone-dark");
   viewerFavoriteButtonEl.classList.toggle("active", favorite);
   viewerFavoriteButtonEl.setAttribute("aria-pressed", String(favorite));
   viewerFavoriteButtonEl.setAttribute("aria-label", favorite ? "Unfavorite image" : "Favorite image");
   viewerFavoriteButtonEl.title = favorite ? "Unfavorite" : "Favorite";
   applyFavoriteButtonTone(viewerFavoriteButtonEl, viewerImageEl, item.filename);
-  if (upscaled) {
+  if (upscaled || clarity) {
     const sourceFilename = resolveSourceFilename(item);
     const compareAvailable = Boolean(sourceFilename);
+    const label = upscaled ? "Upscaled from" : "Clarity from";
     viewerMetaEl.classList.remove("expanded");
     viewerMetaEl.innerHTML = [
       '<div class="viewer-meta-main-row">',
-      `<span class="viewer-meta-source">Upscaled from ${escapeHtml(sourceFilename || "unknown image")}</span>`,
+      `<span class="viewer-meta-source">${label} ${escapeHtml(sourceFilename || "unknown image")}</span>`,
       '<span class="viewer-meta-sep">|</span>',
       `<button type="button" class="viewer-compare-hold" title="Hold to compare original"${
         compareAvailable ? "" : " disabled"
@@ -3864,6 +4283,36 @@ function applyViewerItemMeta(item) {
       `<span>${escapeHtml(resolution)}</span>`,
       "</div>",
     ].join("");
+  } else if (img2img) {
+    const sourceFilename = resolveSourceFilename(item) || "reference image";
+    const timestamp = item.timestamp || item.created_at;
+    const pack = item.model_pack || "n/a";
+    const similarity = Math.max(0, Math.min(1, Number(item.similarity) || 0)) * 100;
+    const promptText = String(item.prompt || item.prompt_effective || "").trim() || "(empty prompt)";
+    const promptDisplay = state.viewerPromptExpanded ? promptText : shortPrompt(promptText, 140);
+    const promptTitle = state.viewerPromptExpanded ? "Click to collapse prompt" : "Click to expand prompt";
+    const wildcards = parseImageWildcards(item);
+    const wildcardDetails = state.viewerPromptExpanded ? buildViewerWildcardDetailsHtml(wildcards) : "";
+    viewerMetaEl.classList.toggle("expanded", state.viewerPromptExpanded);
+    const parts = [
+      '<div class="viewer-meta-main-row">',
+      `<span class="viewer-meta-timestamp">${escapeHtml(formatTimestamp(timestamp))}</span>`,
+      '<span class="viewer-meta-sep">|</span>',
+      `<button type="button" class="viewer-meta-prompt${state.viewerPromptExpanded ? " expanded" : ""}" title="${promptTitle}">${escapeHtml(promptDisplay)}</button>`,
+      '<span class="viewer-meta-sep">|</span>',
+      `<span class="viewer-meta-source">Reference ${escapeHtml(sourceFilename)}</span>`,
+      '<span class="viewer-meta-sep">|</span>',
+      `<span>${escapeHtml(resolution)}</span>`,
+      '<span class="viewer-meta-sep">|</span>',
+      `<span>${Math.round(similarity)}% similarity</span>`,
+      '<span class="viewer-meta-sep">|</span>',
+      `<span>${escapeHtml(pack)}</span>`,
+      "</div>",
+    ];
+    if (wildcardDetails) {
+      parts.push(wildcardDetails);
+    }
+    viewerMetaEl.innerHTML = parts.join("");
   } else {
     const timestamp = item.timestamp || item.created_at;
     const pack = item.model_pack || "n/a";
@@ -4111,6 +4560,14 @@ function onViewerUpscale() {
   }
 }
 
+function onViewerClarity() {
+  const item = getActiveViewerItem();
+  if (!item) return;
+  if (enqueueClarityFromItem(item)) {
+    playViewerActionFx("upscale");
+  }
+}
+
 function onViewerDelete() {
   const item = getActiveViewerItem();
   if (!item) return;
@@ -4149,11 +4606,16 @@ function hideConfirmModal() {
 function removeQueuedJob(placeholderId) {
   const target = String(placeholderId || "").trim();
   if (!target) return false;
+  const removedJob = state.queue.find((job) => job.placeholderId === target) || null;
   const previousLength = state.queue.length;
   state.queue = state.queue.filter((job) => job.placeholderId !== target);
   state.pendingUpscaleFxIds.delete(target);
   if (state.queue.length === previousLength) {
     return false;
+  }
+  if (removedJob && removedJob.kind === "img2img") {
+    releaseQueuedReferenceForJob(removedJob).catch(() => {
+    });
   }
   persistClientQueueState();
   renderGallery();
@@ -4219,20 +4681,37 @@ function stopDisconnectEffect() {
 
 function pendingJobLabel(job, queuePosition) {
   const isUpscale = job.kind === "upscale";
+  const isClarity = job.kind === "clarity";
+  const isImg2Img = job.kind === "img2img";
   if (job.status === "cancelling") {
     return "CANCELLING...";
   }
-  if (job.status === "generating") {
-    return isUpscale ? "UPSCALING..." : "GENERATING...";
+  if (job.status === "generating" || job.status === "clarifying") {
+    if (isClarity) return "CLARITY...";
+    if (isUpscale) return "UPSCALING...";
+    if (isImg2Img) return "IMG2IMG...";
+    return "GENERATING...";
   }
   if (job.status === "upscaling") {
     return "UPSCALING...";
   }
   if (queuePosition >= 0) {
-    const prefix = isUpscale ? "UPSCALE QUEUED" : "QUEUED";
+    const prefix = isClarity
+      ? "CLARITY QUEUED"
+      : isUpscale
+        ? "UPSCALE QUEUED"
+        : isImg2Img
+          ? "IMG2IMG QUEUED"
+          : "QUEUED";
     return `${prefix} (${queuePosition + 1})`;
   }
-  return isUpscale ? "UPSCALE QUEUED..." : "QUEUED...";
+  return isClarity
+    ? "CLARITY QUEUED..."
+    : isUpscale
+      ? "UPSCALE QUEUED..."
+      : isImg2Img
+        ? "IMG2IMG QUEUED..."
+        : "QUEUED...";
 }
 
 function createPendingTile(job) {
@@ -4272,6 +4751,7 @@ function updatePendingTile(tile, job) {
   tile.dataset.aspectHeight = String(Math.max(1, Number(job.height) || 1));
   tile.classList.add("pending");
   tile.classList.toggle("upscale-job", job.kind === "upscale");
+  tile.classList.toggle("clarity-job", job.kind === "clarity");
   tile.classList.toggle("generating", isActiveJobStatus(job.status));
   tile.classList.toggle("queued", !isActiveJobStatus(job.status));
   tile.classList.toggle("cancelling", job.status === "cancelling");
@@ -4288,7 +4768,14 @@ function updatePendingTile(tile, job) {
   if (cancelButton instanceof HTMLButtonElement) {
     cancelButton.textContent = job.status === "cancelling" ? "Cancelling" : "Cancel";
     cancelButton.disabled = job.status === "cancelling";
-    cancelButton.setAttribute("aria-label", `Cancel ${job.kind === "upscale" ? "upscale" : "generation"} job`);
+    const kindLabel = job.kind === "upscale"
+      ? "upscale"
+      : job.kind === "clarity"
+        ? "clarity"
+        : job.kind === "img2img"
+          ? "img2img"
+          : "generation";
+    cancelButton.setAttribute("aria-label", `Cancel ${kindLabel} job`);
     cancelButton.title = "Cancel";
   }
 }
@@ -4334,6 +4821,13 @@ function createImageTile(item) {
   upscaleBadge.innerHTML =
     '<svg viewBox="0 0 24 24" focusable="false"><path d="M4 9V4h5v2H6v3H4zm10-5h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 4v-4h2v6h-6v-2h4z"/></svg>';
   badges.append(upscaleBadge);
+  const img2imgBadge = document.createElement("span");
+  img2imgBadge.className = "tile-badge tile-badge-img2img";
+  img2imgBadge.title = "Image-to-image";
+  img2imgBadge.setAttribute("aria-hidden", "true");
+  img2imgBadge.innerHTML =
+    '<svg viewBox="0 0 24 24" focusable="false"><path d="M5 7h6v6H5z"></path><path d="M13 11h6v6h-6z"></path><path d="M10 14l4-4"></path></svg>';
+  badges.append(img2imgBadge);
 
   const selectBadge = document.createElement("span");
   selectBadge.className = "tile-badge tile-select-badge";
@@ -4384,6 +4878,22 @@ function createImageTile(item) {
     }
   });
   primaryActions.append(upscale);
+
+  const clarity = document.createElement("button");
+  clarity.className = "tile-clarity";
+  clarity.type = "button";
+  clarity.title = "Clarity pass";
+  clarity.setAttribute("aria-label", "Clarity pass");
+  clarity.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.2 4.8L19 10l-4.8 2.2L12 17l-2.2-4.8L5 10l4.8-2.2z"></path><path d="M19 4v4"></path><path d="M17 6h4"></path></svg>';
+  clarity.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const liveItem = getGalleryImageItem(tile.dataset.filename);
+    if (liveItem) {
+      enqueueClarityFromItem(liveItem);
+    }
+  });
+  primaryActions.append(clarity);
 
   const usePrompt = document.createElement("button");
   usePrompt.className = "tile-use-prompt";
@@ -4441,6 +4951,8 @@ function updateImageTile(tile, item) {
   cancelScheduledTileRemoval(tile);
   clearTileActionFx(tile, { onlyKind: "delete" });
   const upscaled = isUpscaledItem(item);
+  const clarityItem = isClarityItem(item);
+  const img2img = isImg2ImgItem(item);
   const selected = state.selectedFilenames.has(item.filename);
   const aspectWidth = Math.max(1, Number(item.width) || 1);
   const aspectHeight = Math.max(1, Number(item.height) || 1);
@@ -4469,6 +4981,10 @@ function updateImageTile(tile, item) {
   const upscaleBadge = tile.querySelector(".tile-badge-upscaled");
   if (upscaleBadge) {
     upscaleBadge.style.display = upscaled ? "" : "none";
+  }
+  const img2imgBadge = tile.querySelector(".tile-badge-img2img");
+  if (img2imgBadge) {
+    img2imgBadge.style.display = img2img ? "" : "none";
   }
 
   const selectBadge = tile.querySelector(".tile-select-badge");
@@ -4501,6 +5017,15 @@ function updateImageTile(tile, item) {
   const upscale = tile.querySelector(".tile-upscale");
   if (upscale) {
     upscale.style.display = canUpscaleItem(item) ? "" : "none";
+  }
+  const clarity = tile.querySelector(".tile-clarity");
+  if (clarity) {
+    clarity.style.display = canClarityItem(item) ? "" : "none";
+    clarity.setAttribute(
+      "aria-label",
+      clarityItem ? `Run clarity again on ${item.filename}` : `Run clarity on ${item.filename}`
+    );
+    clarity.title = clarityItem ? "Run clarity again" : "Clarity pass";
   }
 }
 
@@ -4650,11 +5175,11 @@ function updateGenerateButtonState() {
   const outstanding = totalOutstandingJobs();
   const queueFull = outstanding >= state.maxQueuedGenerations;
   generateButtonEl.disabled = queueFull;
-  let label = "GENERATE";
+  let label = hasReferenceImage() ? "IMG2IMG" : "GENERATE";
   if (queueFull) {
     label = "QUEUE FULL";
   } else if (outstanding > 0) {
-    label = `GENERATE (${outstanding}/${state.maxQueuedGenerations})`;
+    label = `${hasReferenceImage() ? "IMG2IMG" : "GENERATE"} (${outstanding}/${state.maxQueuedGenerations})`;
   }
   generateButtonLabelEl.textContent = label;
   generateButtonEl.setAttribute("aria-label", label);
@@ -4903,6 +5428,76 @@ function enqueueGenerationFromPrompt() {
   return true;
 }
 
+async function enqueueImg2ImgFromPrompt() {
+  requestCompletionNotificationPermission();
+  const prompt = String(promptInputEl.value || "").trim();
+  if (!prompt) {
+    setStatus("Prompt is required.", true);
+    return false;
+  }
+  if (!hasReferenceImage()) {
+    setStatus("Reference image is required for img2img.", true);
+    return false;
+  }
+  if (totalOutstandingJobs() >= state.maxQueuedGenerations) {
+    updateGenerateButtonState();
+    setStatus(`Queue is full (${state.maxQueuedGenerations}/${state.maxQueuedGenerations}).`, true);
+    return false;
+  }
+
+  const reference = state.referenceImage;
+  const seed = resolveSeedForGeneration();
+  const placeholderId = `pending_img2img_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  let blobKey = "";
+  try {
+    blobKey = await storeQueuedReferenceBlob(reference);
+  } catch (error) {
+    setStatus(String(error?.message || error), true);
+    return false;
+  }
+
+  const job = {
+    kind: "img2img",
+    placeholderId,
+    prompt,
+    width: reference.width,
+    height: reference.height,
+    seed,
+    pack: null,
+    enhance_prompt: state.promptEnhance,
+    procedural_creativity: 0,
+    similarity: normalizeSimilarityPercent(reference.similarity),
+    loras: Boolean(state.loraCapabilities?.supported)
+      ? cloneLoraSelections(state.loraAppliedSelections)
+      : [],
+    reference_blob_key: blobKey,
+    reference_filename: reference.filename,
+    reference_original_width: reference.originalWidth,
+    reference_original_height: reference.originalHeight,
+    source_filename: reference.filename,
+    enqueuedAt: Date.now(),
+    remoteInFlight: false,
+  };
+
+  state.queue.push(job);
+  persistClientQueueState();
+  renderGallery();
+  updateGenerateButtonState();
+  const outstanding = totalOutstandingJobs();
+  setStatus(
+    `Queued img2img ${reference.width}x${reference.height} at ${job.similarity}% similarity (seed ${seed}). Queue ${outstanding}/${state.maxQueuedGenerations}.`
+  );
+  processGenerationQueue().catch((error) => setStatus(String(error?.message || error), true));
+  return true;
+}
+
+async function enqueuePromptSubmission() {
+  if (hasReferenceImage()) {
+    return enqueueImg2ImgFromPrompt();
+  }
+  return enqueueGenerationFromPrompt();
+}
+
 function enqueueUpscaleFromItem(item) {
   if (!canUpscaleItem(item)) {
     setStatus("Upscale blocked: source image is already upscaled.", true);
@@ -4954,6 +5549,55 @@ function enqueueUpscaleFromItem(item) {
   return true;
 }
 
+function enqueueClarityFromItem(item) {
+  if (!canClarityItem(item)) {
+    setStatus("Clarity failed: invalid source image.", true);
+    return false;
+  }
+  const sourceFilename = String(item?.filename || "").trim();
+  if (!sourceFilename) {
+    setStatus("Clarity failed: invalid source image.", true);
+    return false;
+  }
+
+  if (totalOutstandingJobs() >= state.maxQueuedGenerations) {
+    updateGenerateButtonState();
+    setStatus(`Queue is full (${state.maxQueuedGenerations}/${state.maxQueuedGenerations}).`, true);
+    return false;
+  }
+
+  const sourceWidth = Number(item.width) || 1024;
+  const sourceHeight = Number(item.height) || 1024;
+  const seed = resolveSeedForGeneration();
+  const placeholderId = `pending_clarity_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const preferredPack = String(item.model_pack || item.pack || "").trim() || null;
+
+  const job = {
+    kind: "clarity",
+    placeholderId,
+    filename: sourceFilename,
+    width: sourceWidth,
+    height: sourceHeight,
+    seed,
+    pack: preferredPack,
+    enhance_prompt: state.promptEnhance,
+    source_filename: sourceFilename,
+    enqueuedAt: Date.now(),
+    remoteInFlight: false,
+  };
+
+  state.queue.push(job);
+  persistClientQueueState();
+  renderGallery();
+  updateGenerateButtonState();
+  const outstanding = totalOutstandingJobs();
+  setStatus(
+    `Queued clarity for ${sourceFilename} at ${sourceWidth}x${sourceHeight}. Queue ${outstanding}/${state.maxQueuedGenerations}.`
+  );
+  processGenerationQueue().catch((error) => setStatus(String(error?.message || error), true));
+  return true;
+}
+
 async function processGenerationQueue() {
   if (state.queueWorkerRunning) return;
   state.queueWorkerRunning = true;
@@ -4967,7 +5611,11 @@ async function processGenerationQueue() {
       if (!state.activeJob) {
         state.activeJob = state.queue.shift() || null;
         if (!state.activeJob) break;
-        state.activeJob.status = state.activeJob.kind === "upscale" ? "upscaling" : "generating";
+        state.activeJob.status = state.activeJob.kind === "upscale"
+          ? "upscaling"
+          : state.activeJob.kind === "clarity"
+            ? "clarifying"
+            : "generating";
         state.activeJob.remoteInFlight = false;
         persistClientQueueState();
         renderGallery();
@@ -4979,50 +5627,132 @@ async function processGenerationQueue() {
 
       try {
         const isUpscaleJob = job.kind === "upscale";
+        const isClarityJob = job.kind === "clarity";
+        const isImg2ImgJob = job.kind === "img2img";
         if (isUpscaleJob) {
           setStatus(
             `Upscaling ${job.filename} -> ${job.width}x${job.height} `
             + `(SEED X2, seed ${job.seed})...`
           );
+        } else if (isClarityJob) {
+          setStatus(
+            `Running clarity on ${job.filename} `
+            + `(RealPLKSR + Lucy/FS/HM, seed ${job.seed})...`
+          );
+        } else if (isImg2ImgJob) {
+          setStatus(
+            `Running img2img ${job.width}x${job.height} at ${normalizeSimilarityPercent(job.similarity)}% similarity `
+            + `(seed ${job.seed})...`
+          );
         } else {
           setStatus(`Generating ${job.width}x${job.height} (seed ${job.seed})...`);
         }
-        const endpoint = isUpscaleJob ? "/upscale" : "/generate";
-        const payloadBody = isUpscaleJob
-          ? {
-              job_id: job.placeholderId,
-              filename: job.filename,
-              pack: job.pack,
-              seed: job.seed,
-              enhance_prompt: job.enhance_prompt,
-            }
-          : {
-              job_id: job.placeholderId,
-              prompt: job.prompt,
-              width: job.width,
-              height: job.height,
-              seed: job.seed,
-              enhance_prompt: job.enhance_prompt,
-              procedural_creativity: Number(job.procedural_creativity || 0),
-            };
-        if (!isUpscaleJob && Array.isArray(job.loras) && job.loras.length > 0) {
-          payloadBody.loras = cloneLoraSelections(job.loras);
+        let response;
+        if (isUpscaleJob) {
+          const payloadBody = {
+            job_id: job.placeholderId,
+            filename: job.filename,
+            pack: job.pack,
+            seed: job.seed,
+            enhance_prompt: job.enhance_prompt,
+          };
+          response = await apiFetch("/upscale", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payloadBody),
+          });
+        } else if (isClarityJob) {
+          const payloadBody = {
+            job_id: job.placeholderId,
+            filename: job.filename,
+            pack: job.pack,
+            seed: job.seed,
+            enhance_prompt: job.enhance_prompt,
+          };
+          response = await apiFetch("/clarity", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payloadBody),
+          });
+        } else if (isImg2ImgJob) {
+          const storedReference = await loadQueuedReferenceBlob(job.reference_blob_key);
+          if (!storedReference || !(storedReference.blob instanceof Blob)) {
+            await releaseQueuedReferenceForJob(job);
+            throw new Error("Queued img2img reference image is no longer available.");
+          }
+          const body = new FormData();
+          body.append("image", storedReference.blob, storedReference.filename || job.reference_filename || "reference.png");
+          body.append("job_id", job.placeholderId);
+          body.append("prompt", String(job.prompt || ""));
+          if (job.pack) {
+            body.append("pack", String(job.pack));
+          }
+          if (job.seed !== null && job.seed !== undefined && job.seed !== "") {
+            body.append("seed", String(job.seed));
+          }
+          body.append("enhance_prompt", String(Boolean(job.enhance_prompt)));
+          body.append("similarity", String(normalizeSimilarityPercent(job.similarity) / 100));
+          if (Array.isArray(job.loras) && job.loras.length > 0) {
+            body.append("loras", JSON.stringify(cloneLoraSelections(job.loras)));
+          }
+          response = await apiFetch("/img2img", {
+            method: "POST",
+            body,
+          });
+        } else {
+          const payloadBody = {
+            job_id: job.placeholderId,
+            prompt: job.prompt,
+            width: job.width,
+            height: job.height,
+            seed: job.seed,
+            enhance_prompt: job.enhance_prompt,
+            procedural_creativity: Number(job.procedural_creativity || 0),
+          };
+          if (Array.isArray(job.loras) && job.loras.length > 0) {
+            payloadBody.loras = cloneLoraSelections(job.loras);
+          }
+          response = await apiFetch("/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payloadBody),
+          });
         }
-        const response = await apiFetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payloadBody),
-        });
         const payload = await response.json();
         if (!response.ok) {
           if (response.status === 409) {
-            setStatus(isUpscaleJob ? "Upscale cancelled." : "Generation cancelled.");
+            if (isImg2ImgJob) {
+              await releaseQueuedReferenceForJob(job);
+            }
+            setStatus(
+              isUpscaleJob
+                ? "Upscale cancelled."
+                : isClarityJob
+                  ? "Clarity cancelled."
+                  : isImg2ImgJob
+                    ? "Img2img cancelled."
+                    : "Generation cancelled."
+            );
             state.activeJob = null;
             persistClientQueueState();
             await loadImages();
             continue;
           }
-          throw new Error(formatApiError(payload, isUpscaleJob ? "Upscale failed." : "Generation failed."));
+          if (isImg2ImgJob) {
+            await releaseQueuedReferenceForJob(job);
+          }
+          throw new Error(
+            formatApiError(
+              payload,
+              isUpscaleJob
+                ? "Upscale failed."
+                : isClarityJob
+                  ? "Clarity failed."
+                  : isImg2ImgJob
+                    ? "Img2img failed."
+                    : "Generation failed."
+            )
+          );
         }
         if (isUpscaleJob) {
           const source = String(payload.source_filename || job.filename || "source image");
@@ -5030,6 +5760,20 @@ async function processGenerationQueue() {
             `Upscaled ${source} -> ${payload.filename} `
             + `(SEED X2) in ${payload.duration_ms} ms `
             + `(seed ${payload.seed}).`
+          );
+        } else if (isClarityJob) {
+          const source = String(payload.source_filename || job.filename || "source image");
+          setStatus(
+            `Clarified ${source} -> ${payload.filename} `
+            + `in ${payload.duration_ms} ms `
+            + `(seed ${payload.seed}).`
+          );
+        } else if (isImg2ImgJob) {
+          await releaseQueuedReferenceForJob(job);
+          const source = String(payload.source_filename || job.reference_filename || "reference image");
+          setStatus(
+            `Saved ${payload.filename} from ${source} in ${payload.duration_ms} ms `
+            + `(${normalizeSimilarityPercent(job.similarity)}% similarity, seed ${payload.seed}).`
           );
         } else if (payload.prompt_enhanced) {
           setStatus(`Prompt enhanced, saved ${payload.filename} in ${payload.duration_ms} ms (seed ${payload.seed}).`);
@@ -5041,6 +5785,9 @@ async function processGenerationQueue() {
         persistClientQueueState();
         await loadImages();
       } catch (error) {
+        if (job?.kind === "img2img") {
+          await releaseQueuedReferenceForJob(job);
+        }
         state.activeJob = null;
         persistClientQueueState();
         renderGallery();
@@ -5142,6 +5889,12 @@ function toggleFreezeSeed() {
 }
 
 function setProceduralCreativity(level) {
+  if (hasReferenceImage()) {
+    state.proceduralCreativity = 0;
+    updateProceduralLatentControls();
+    updateSettingsSummary();
+    return;
+  }
   const next = Math.max(0, Math.min(3, Number(level) || 0));
   state.proceduralCreativity = next;
   updateProceduralLatentControls();
@@ -5198,7 +5951,7 @@ function endDrag(event) {
 
 async function bootstrap() {
   try {
-    restoreClientQueueState();
+    await restoreClientQueueState();
     state.loraPendingSelections = cloneLoraSelections(state.loraAppliedSelections);
     setGalleryColumns(state.galleryColumns);
     updateTopbarOffset();
@@ -5206,6 +5959,7 @@ async function bootstrap() {
     updateColorSwatches();
     updateFavoriteFilterButton();
     applyOrientationButtonState();
+    updateReferenceImageUi();
     updateFreezeSeedButton();
     updateProceduralLatentControls();
     updatePromptEnhanceButton();
@@ -5288,6 +6042,10 @@ loraDrawerBackdropEl.addEventListener("click", () => {
 });
 loraFilterInputEl.addEventListener("input", () => {
   state.loraFilter = String(loraFilterInputEl.value || "");
+  renderLoraLibrary();
+});
+loraActiveFilterButtonEl.addEventListener("click", () => {
+  state.loraActiveOnlyFilter = !state.loraActiveOnlyFilter;
   renderLoraLibrary();
 });
 loraUploadInputEl.addEventListener("change", () => {
@@ -5393,13 +6151,49 @@ wildcardSuggestionApplyEl.addEventListener("click", () => {
   applySelectedWildcardSuggestions();
 });
 generateButtonEl.addEventListener("click", () => {
-  enqueueGenerationFromPrompt();
+  enqueuePromptSubmission().catch((error) => setStatus(String(error?.message || error), true));
 });
 freezeSeedButtonEl.addEventListener("click", toggleFreezeSeed);
 proceduralLatentSliderEl.addEventListener("input", () => {
   setProceduralCreativity(proceduralLatentSliderEl.value);
 });
 promptEnhanceButtonEl.addEventListener("click", togglePromptEnhance);
+referenceImageAddEl.addEventListener("click", () => {
+  referenceImageInputEl.click();
+});
+referenceImageInputEl.addEventListener("change", () => {
+  applyReferenceFiles(referenceImageInputEl.files)
+    .catch((error) => setStatus(String(error?.message || error), true))
+    .finally(() => {
+      referenceImageInputEl.value = "";
+    });
+});
+referenceImageRemoveEl.addEventListener("click", () => {
+  clearReferenceImage();
+  setStatus("Reference image removed.");
+});
+referenceSimilaritySliderEl.addEventListener("input", () => {
+  if (!hasReferenceImage()) return;
+  state.referenceImage.similarity = normalizeSimilarityPercent(referenceSimilaritySliderEl.value);
+  updateReferenceImageUi();
+  updateSettingsSummary();
+});
+["dragenter", "dragover"].forEach((eventName) => {
+  referenceImageAddEl.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    referenceImageAddEl.classList.add("drag-active");
+  });
+});
+["dragleave", "dragend", "drop"].forEach((eventName) => {
+  referenceImageAddEl.addEventListener(eventName, () => {
+    referenceImageAddEl.classList.remove("drag-active");
+  });
+});
+referenceImageAddEl.addEventListener("drop", (event) => {
+  event.preventDefault();
+  const files = event.dataTransfer?.files || null;
+  applyReferenceFiles(files).catch((error) => setStatus(String(error?.message || error), true));
+});
 
 document.addEventListener("click", (event) => {
   const target = event.target;
@@ -5410,7 +6204,7 @@ document.addEventListener("click", (event) => {
 });
 
 orientationToggleEl.addEventListener("click", (event) => {
-  const target = event.target;
+  const target = event.target instanceof Element ? event.target.closest("button[data-orientation]") : null;
   if (!(target instanceof HTMLButtonElement)) return;
   const orientation = target.dataset.orientation;
   if (orientation !== "portrait" && orientation !== "landscape") return;
@@ -5426,7 +6220,7 @@ resolutionSelectEl.addEventListener("change", () => {
 promptInputEl.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || event.shiftKey) return;
   event.preventDefault();
-  enqueueGenerationFromPrompt();
+  enqueuePromptSubmission().catch((error) => setStatus(String(error?.message || error), true));
 });
 promptInputEl.addEventListener("input", updateTopbarOffset);
 promptInputEl.addEventListener("mouseup", updateTopbarOffset);
@@ -5482,6 +6276,9 @@ window.addEventListener("beforeunload", () => {
   clearWildcardCopyFeedback();
   stopWildcardLibraryEventStream();
   stopLoraLibraryEventStream();
+  if (state.referenceImage) {
+    revokeReferencePreview(state.referenceImage);
+  }
 });
 window.addEventListener(
   "scroll",
@@ -5542,11 +6339,6 @@ bulkDeleteButtonEl.addEventListener("click", () => {
     "Delete"
   );
 });
-deleteGalleryButtonEl.addEventListener("click", onDeleteGallery);
-killServerButtonEl.addEventListener("click", () => {
-  showConfirmModal("Kill the server now? This will disconnect the web UI.", onKillServer, "Kill Server");
-});
-
 viewerCloseButtonEl.addEventListener("click", hideViewer);
 viewerDeleteButtonEl.addEventListener("click", onViewerDelete);
 viewerUsePromptButtonEl.addEventListener("click", onViewerUsePrompt);
@@ -5554,6 +6346,7 @@ viewerCopyPromptButtonEl.addEventListener("click", () => {
   onViewerCopyPrompt().catch((error) => setStatus(String(error?.message || error), true));
 });
 viewerUpscaleButtonEl.addEventListener("click", onViewerUpscale);
+viewerClarityButtonEl.addEventListener("click", onViewerClarity);
 viewerFavoriteButtonEl.addEventListener("click", onViewerFavoriteToggle);
 viewerPrevButtonEl.addEventListener("pointerdown", (event) => event.stopPropagation());
 viewerNextButtonEl.addEventListener("pointerdown", (event) => event.stopPropagation());

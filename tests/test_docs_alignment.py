@@ -122,6 +122,8 @@ def test_api_tester_uses_manifest_feed() -> None:
     assert "API_MANIFEST_PATH" in api_docs
     assert 'fetch(API_MANIFEST_PATH' in api_docs
     assert "requires_client" in api_docs
+    assert "request_media_type" in api_docs
+    assert "file_fields" in api_docs
 
 
 

@@ -221,7 +221,9 @@ $headers = @{ "X-JustRayzist-Client" = "desktop-client" }
 - `GET /loras/{lora_id}/preview`
 - `DELETE /loras/{lora_id}`
 - `POST /generate`
+- `POST /img2img`
 - `POST /upscale`
+- `POST /clarity`
 - `GET /client-jobs`
 - `POST /client-jobs/cancel`
 - `GET /images?prompt=skyline&color=blue&favorite=true&limit=50&offset=0&newest_first=true`
@@ -247,7 +249,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -278,7 +280,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.7.1",
+  "app_version": "1.7.2",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -767,6 +769,54 @@ Sample response:
 }
 ```
 
+### `POST /img2img`
+
+Generate one variation from a reference image upload plus prompt and similarity.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request fields (`multipart/form-data`):
+
+```json
+{
+  "image": "<binary image upload>",
+  "prompt": "A cinematic skyline at sunrise",
+  "pack": "Rayzist_bf16",
+  "job_id": "pending_img2img_1712345678901_abcd1234",
+  "seed": 123456,
+  "scheduler_mode": "euler",
+  "enhance_prompt": false,
+  "similarity": 0.8,
+  "loras": [
+    {
+      "id": "cinematic-style",
+      "weight": 1.0
+    }
+  ]
+}
+```
+
+Sample response:
+
+```json
+{
+  "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
+  "mode": "img2img",
+  "source_filename": "reference.png",
+  "source_width": 1024,
+  "source_height": 768,
+  "similarity": 0.8,
+  "duration_ms": 12345,
+  "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png",
+  "prompt_enhanced": false,
+  "prompt_effective_base": "A cinematic skyline at sunrise with a chalet in the French Alps",
+  "prompt_effective": "A cinematic skyline at sunrise with a chalet in the French Alps, cinematic style",
+  "scheduler_mode": "euler",
+  "wildcard_count": 1,
+  "lora_count": 1
+}
+```
+
 ### `POST /upscale`
 
 Upscale one gallery image with the fixed SeedVR2 direct x2 faithful path.
@@ -800,9 +850,43 @@ Sample response:
 }
 ```
 
+### `POST /clarity`
+
+Run the fixed FS clarity pipeline on one gallery image and return it at the original size.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "job_id": "pending_clarity_1712345678901_abcd1234",
+  "filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+  "pack": "Rayzist_bf16",
+  "seed": 123456,
+  "scheduler_mode": "euler",
+  "enhance_prompt": false
+}
+```
+
+Sample response:
+
+```json
+{
+  "filename": "justrayzist_YYYYMMDD_hhmmss_002.png",
+  "mode": "api_clarity",
+  "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
+  "clarity_engine": "fs_unsharp_downscale",
+  "working_width": 2048,
+  "working_height": 2048,
+  "duration_ms": 16789,
+  "url": "/images/justrayzist_YYYYMMDD_hhmmss_002.png"
+}
+```
+
 ### `GET /client-jobs`
 
-Return the current active generation or upscale job for the requesting client.
+Return the current active generation, img2img, clarity, or upscale job for the requesting client.
 
 Requires `X-JustRayzist-Client`.
 
@@ -1064,7 +1148,7 @@ Sample response:
 
 ### `POST /server/kill`
 
-Request local server shutdown.
+Request local server shutdown from the same machine that is hosting the app.
 
 Sample request body:
 

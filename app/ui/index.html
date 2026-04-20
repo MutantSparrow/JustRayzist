@@ -6,7 +6,7 @@
   <title>JustRayzist</title>
   <link rel="icon" type="image/x-icon" href="/img/favicon.ico">
   <link rel="shortcut icon" href="/img/favicon.ico">
-  <link rel="stylesheet" href="/ui/styles.css?v=20260408_02">
+  <link rel="stylesheet" href="/ui/styles.css?v=20260413_01">
 </head>
 <body>
   <header class="topbar">
@@ -28,6 +28,9 @@
             </svg>
           </span>
         </button>
+        <div id="topbar-reference-thumb-wrap" class="topbar-reference-thumb-wrap hidden" aria-hidden="true">
+          <img id="topbar-reference-thumb" class="topbar-reference-thumb" alt="Reference image locked in">
+        </div>
         <textarea
           id="prompt-input"
           class="prompt-input"
@@ -67,65 +70,111 @@
   </header>
 
   <aside id="settings-panel" class="settings-panel" aria-hidden="true">
-    <div class="setting-group">
-      <label for="resolution-select">Resolution</label>
-      <select id="resolution-select">
-        <optgroup label="2:3">
-          <option value="832x1248">832x1248</option>
-          <option value="1024x1536">1024x1536</option>
-        </optgroup>
-        <optgroup label="3:4">
-          <option value="864x1152">864x1152</option>
-          <option value="1104x1472">1104x1472</option>
-        </optgroup>
-        <optgroup label="9:16">
-          <option value="720x1280">720x1280</option>
-          <option value="864x1536">864x1536</option>
-        </optgroup>
-        <optgroup label="1:1">
-          <option value="1024x1024" selected>1024x1024 (default)</option>
-          <option value="1280x1280">1280x1280</option>
-          <option value="1536x1536">1536x1536</option>
-        </optgroup>
-      </select>
+    <div class="settings-panel-header">
+      <h2 class="settings-panel-title">GENERATION SETTINGS</h2>
     </div>
+    <div class="settings-panel-body">
+      <div class="settings-row settings-row-resolution">
+        <div class="setting-group setting-group-resolution">
+          <label for="resolution-select">Resolution</label>
+          <select id="resolution-select">
+            <optgroup label="2:3">
+              <option value="832x1248">832x1248</option>
+              <option value="1024x1536">1024x1536</option>
+            </optgroup>
+            <optgroup label="3:4">
+              <option value="864x1152">864x1152</option>
+              <option value="1104x1472">1104x1472</option>
+            </optgroup>
+            <optgroup label="9:16">
+              <option value="720x1280">720x1280</option>
+              <option value="864x1536">864x1536</option>
+            </optgroup>
+            <optgroup label="1:1">
+              <option value="1024x1024" selected>1024x1024 (default)</option>
+              <option value="1280x1280">1280x1280</option>
+              <option value="1536x1536">1536x1536</option>
+            </optgroup>
+          </select>
+        </div>
 
-    <div class="setting-group">
-      <label>Orientation</label>
-      <div class="toggle-row" id="orientation-toggle">
-        <button class="toggle-option active" data-orientation="portrait" type="button">PORTRAIT</button>
-        <button class="toggle-option" data-orientation="landscape" type="button">LANDSCAPE</button>
+        <div class="setting-group setting-group-orientation">
+          <label>Orientation</label>
+          <div class="toggle-row orientation-toggle-row" id="orientation-toggle">
+            <button class="toggle-option active icon-toggle-option" data-orientation="portrait" type="button" aria-label="Portrait" title="Portrait">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="7" y="3.5" width="10" height="17" rx="1.8"></rect>
+                <path d="M10 17.5h4"></path>
+              </svg>
+            </button>
+            <button class="toggle-option icon-toggle-option" data-orientation="landscape" type="button" aria-label="Landscape" title="Landscape">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3.5" y="7" width="17" height="10" rx="1.8"></rect>
+                <path d="M16.5 10v4"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
-    </div>
 
-    <div class="setting-group">
-      <label>Freeze Seed</label>
-      <button id="freeze-seed-button" class="toggle-seed-button" type="button">FREEZE SEED: OFF</button>
-    </div>
-
-    <div class="setting-group">
-      <label for="procedural-latent-slider">Creative Mode</label>
-      <div class="slider-setting">
-        <input id="procedural-latent-slider" class="slider-setting-input" type="range" min="0" max="3" step="1" value="0" />
-        <div id="procedural-latent-value" class="slider-setting-value">OFF</div>
+      <div class="setting-group setting-group-reference">
+        <label>Image Reference</label>
+        <input id="reference-image-input" type="file" accept="image/*" hidden>
+        <div id="reference-image-controls" class="reference-image-controls">
+          <button id="reference-image-add" class="reference-image-add" type="button">
+            <span class="reference-image-add-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false">
+                <path d="M12 5v14"></path>
+                <path d="M5 12h14"></path>
+                <path d="M5 5h5"></path>
+                <path d="M19 19h-5"></path>
+              </svg>
+            </span>
+            <span class="reference-image-add-copy">
+              <span class="reference-image-add-title">ADD IMAGE REFERENCE</span>
+              <span class="reference-image-add-hint">Click or drag and drop one image</span>
+            </span>
+          </button>
+          <div id="reference-image-active" class="reference-image-active hidden">
+            <div id="reference-image-thumb-wrap" class="reference-image-thumb-wrap" aria-label="Reference image preview">
+              <img id="reference-image-thumb" class="reference-image-thumb" alt="Reference image preview">
+              <button id="reference-image-remove" class="reference-image-remove" type="button" aria-label="Remove reference image" title="Remove reference image">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12"></path>
+                  <path d="M18 6L6 18"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="reference-image-similarity">
+              <div class="reference-image-similarity-header">
+                <span>Similarity</span>
+                <span id="reference-similarity-value" class="reference-image-similarity-value">80%</span>
+              </div>
+              <input id="reference-similarity-slider" class="slider-setting-input" type="range" min="0" max="100" step="1" value="80">
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
 
-    <div class="setting-group">
-      <label>Prompt Enhancer</label>
-      <button id="prompt-enhance-button" class="toggle-seed-button" type="button">
-        PROMPT ENHANCER: OFF
-      </button>
-    </div>
+      <div class="setting-group">
+        <label>Freeze Seed</label>
+        <button id="freeze-seed-button" class="toggle-seed-button" type="button">FREEZE SEED: OFF</button>
+      </div>
 
-    <div class="setting-group">
-      <label>Upscale</label>
-      <p id="upscale-settings-hint" class="setting-hint">Upscale uses SeedVR2 direct x2 faithful mode.</p>
-    </div>
+      <div class="setting-group">
+        <label for="procedural-latent-slider">Creative Mode</label>
+        <div id="procedural-latent-setting" class="slider-setting">
+          <input id="procedural-latent-slider" class="slider-setting-input" type="range" min="0" max="3" step="1" value="0" />
+          <div id="procedural-latent-value" class="slider-setting-value">OFF</div>
+        </div>
+      </div>
 
-    <div class="setting-group setting-actions-row">
-      <button id="delete-gallery-button" class="danger-button" type="button">DELETE GALLERY</button>
-      <button id="kill-server-button" class="danger-button kill-server-button" type="button">KILL SERVER</button>
+      <div class="setting-group">
+        <label>Prompt Enhancer</label>
+        <button id="prompt-enhance-button" class="toggle-seed-button" type="button">
+          PROMPT ENHANCER: OFF
+        </button>
+      </div>
     </div>
   </aside>
 
@@ -136,6 +185,12 @@
     </div>
     <div class="lora-drawer-tools">
       <input id="lora-filter-input" type="text" placeholder="Filter LoRAs by name">
+      <button
+        id="lora-active-filter"
+        class="lora-active-filter-button"
+        type="button"
+        aria-pressed="false"
+      >Active only</button>
     </div>
     <button id="lora-drawer-close" class="btn btn-hfill lora-drawer-save" type="button">Save</button>
     <div id="lora-drawer-capability" class="lora-drawer-capability" aria-live="polite"></div>
@@ -229,6 +284,9 @@
         </button>
         <button id="viewer-upscale-button" class="viewer-action-button viewer-action-magenta" type="button" aria-label="Upscale image" title="Upscale image">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 16L16 8"></path><path d="M10 8h6v6"></path><path d="M4 20h6v-2H6v-4H4z"></path><path d="M20 4h-6v2h4v4h2z"></path></svg>
+        </button>
+        <button id="viewer-clarity-button" class="viewer-action-button viewer-action-cyan" type="button" aria-label="Clarity pass" title="Clarity pass">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.2 4.8L19 10l-4.8 2.2L12 17l-2.2-4.8L5 10l4.8-2.2z"></path><path d="M19 4v4"></path><path d="M17 6h4"></path></svg>
         </button>
         <a id="viewer-download" class="viewer-action-button viewer-action-lime" href="#" download aria-label="Download image" title="Download image">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10"></path><path d="M8 10l4 4 4-4"></path><path d="M5 18h14"></path></svg>
@@ -393,6 +451,6 @@
     <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
   </section>
 
-  <script src="/ui/app.js?v=20260408_02"></script>
+  <script src="/ui/app.js?v=20260413_01"></script>
 </body>
 </html>

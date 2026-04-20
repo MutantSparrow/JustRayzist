@@ -144,6 +144,92 @@
       color: var(--muted);
       font-size: 0.92rem;
     }
+    .hidden { display: none; }
+    .maintenance-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .danger-btn {
+      border-color: var(--danger);
+      color: var(--danger);
+      cursor: pointer;
+    }
+    .danger-btn:hover {
+      background: rgba(255, 74, 74, 0.12);
+    }
+    .disconnect-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1200;
+      display: grid;
+      place-items: center;
+      background: rgba(0, 0, 0, 0);
+      pointer-events: none;
+      overflow: hidden;
+    }
+    .disconnect-overlay.active {
+      pointer-events: auto;
+      animation: disconnectBackdrop 900ms ease forwards;
+    }
+    .disconnect-crt {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      background:
+        radial-gradient(circle at center, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 32%, rgba(0,0,0,0.96) 72%),
+        repeating-linear-gradient(180deg, rgba(255,255,255,0.06) 0 1px, rgba(0,0,0,0) 1px 4px);
+      transform: scaleY(1);
+    }
+    .disconnect-overlay.active .disconnect-crt {
+      animation: disconnectCrt 860ms cubic-bezier(0.22, 0.9, 0.28, 1) forwards;
+    }
+    .disconnect-message {
+      position: relative;
+      z-index: 1;
+      margin: 0;
+      padding: 14px 18px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(0, 0, 0, 0.72);
+      color: #f3f3f3;
+      font-size: 0.95rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    .disconnect-overlay.active .disconnect-message {
+      animation: disconnectMessageIn 500ms ease forwards;
+    }
+    @keyframes disconnectBackdrop {
+      0% { background: rgba(0, 0, 0, 0); }
+      100% { background: rgba(0, 0, 0, 0.92); }
+    }
+    @keyframes disconnectCrt {
+      0% {
+        opacity: 0;
+        transform: scaleY(1);
+      }
+      35% {
+        opacity: 1;
+        transform: scaleY(1);
+      }
+      100% {
+        opacity: 1;
+        transform: scaleY(0.02);
+      }
+    }
+    @keyframes disconnectMessageIn {
+      0% {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
   </style>
 </head>
 <body>
@@ -169,6 +255,7 @@
           <select id="tester-method">
             <option value="GET" selected>GET</option>
             <option value="POST">POST</option>
+            <option value="PATCH">PATCH</option>
             <option value="DELETE">DELETE</option>
           </select>
         </label>
@@ -181,8 +268,16 @@
           <input id="tester-client-id" type="text" value="" spellcheck="false" placeholder="browser-or-user-id">
         </label>
         <label class="row">
+          <span>Body Type</span>
+          <input id="tester-body-type" type="text" value="application/json" readonly>
+        </label>
+        <label class="row">
           <span>JSON Body</span>
           <textarea id="tester-body" spellcheck="false">{}</textarea>
+        </label>
+        <label id="tester-file-row" class="row hidden">
+          <span id="tester-file-label">Upload File</span>
+          <input id="tester-file-input" type="file" accept="image/*">
         </label>
         <div class="actions">
           <button id="tester-send" class="send-btn" type="button">Send Request</button>
@@ -194,12 +289,26 @@
     </section>
 
     <section class="panel">
+      <h2>Maintenance</h2>
+      <p class="subtle">Danger-zone actions for the current client scope and local machine.</p>
+      <div class="maintenance-actions">
+        <button id="maintenance-delete-gallery" class="danger-btn" type="button">Delete Gallery</button>
+        <button id="maintenance-kill-server" class="danger-btn" type="button">Kill Server</button>
+      </div>
+    </section>
+
+    <section class="panel">
       <h2>Endpoints</h2>
       <p class="subtle">Each entry includes a description and sample payload/response.</p>
       <div id="endpoint-list" class="endpoint-list"></div>
     </section>
   </main>
 
-  <script src="/ui/api.js?v=20260305_02"></script>
+  <section id="disconnect-overlay" class="disconnect-overlay hidden" aria-hidden="true">
+    <div class="disconnect-crt" aria-hidden="true"></div>
+    <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
+  </section>
+
+  <script src="/ui/api.js?v=20260413_01"></script>
 </body>
 </html>
