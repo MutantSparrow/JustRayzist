@@ -6,11 +6,11 @@ JustRayzist is a local-first image generation app built around the Rayzist Z-Ima
 
 The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
 
-## New in v1.8.0
+## New in v1.8.1
 
-- Adds `R+` as an alternate staged inference mode across web generation and CLI workflows.
-- Adds web controls for `R+` toggle, vibrance, and bias, with UI-side `20`-step locking for consistent runs.
-- Adds saved inference metadata plus fullscreen tags for `R+` and active Creative Mode.
+- Promotes `baseline_ai_x2 + FS` to the default upscale path across API and web UI flows.
+- Rebuilds default `clarity` around multiband detail transfer, original chroma recovery, edge-aware sharpening, FS sharpen, and final downscale.
+- Cleans release-facing docs and UI helper text so shipped behavior, examples, and metadata match the new image defaults.
 
 ![Wildcard library preview](readme_images/wildcards_preview.png)
 
@@ -26,7 +26,7 @@ The project is designed to run offline after setup. Normal user flows stay on a 
 - Gallery indexing with favorites, dominant-color filters, bulk download, rebuild, and import-from-source support.
 - Prompt enhancement and Creative Mode (`procedural_creativity` values `0-3`).
 - `R+` alternate staged inference mode with vibrance and bias controls.
-- SeedVR2 direct x2 upscaling as the default upscale path.
+- Baseline AI x2 plus FS sharpen as the default upscale path.
 - Source-mode launchers for Windows, Linux, and macOS.
 - Windows packaging and in-place packaged update flow.
 
@@ -237,7 +237,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -268,7 +268,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.0",
+  "app_version": "1.8.1",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -807,7 +807,7 @@ Sample response:
 
 ### `POST /upscale`
 
-Upscale one gallery image with the fixed SeedVR2 direct x2 faithful path.
+Upscale one gallery image with the baseline AI x2 plus FS sharpen path.
 
 Requires `X-JustRayzist-Client`.
 
@@ -831,8 +831,8 @@ Sample response:
   "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
   "mode": "api_upscale",
   "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-  "upscale_engine": "seedvr2_direct_x2_faithful",
-  "execution_mode": "seedvr2_direct_x2_faithful",
+  "upscale_engine": "baseline_ai_x2_fs",
+  "execution_mode": "baseline_ai_x2_fs",
   "duration_ms": 23456,
   "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png"
 }
@@ -840,7 +840,7 @@ Sample response:
 
 ### `POST /clarity`
 
-Run the fixed FS clarity pipeline on one gallery image and return it at the original size.
+Run the multiband clarity pipeline on one gallery image and return it at the original size.
 
 Requires `X-JustRayzist-Client`.
 
@@ -864,7 +864,7 @@ Sample response:
   "filename": "justrayzist_YYYYMMDD_hhmmss_002.png",
   "mode": "api_clarity",
   "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-  "clarity_engine": "fs_unsharp_downscale",
+  "clarity_engine": "multiband_chroma_edgeaware_fs_unsharp_downscale",
   "working_width": 2048,
   "working_height": 2048,
   "duration_ms": 16789,

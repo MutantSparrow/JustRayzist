@@ -269,7 +269,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -300,7 +300,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.0",
+  "app_version": "1.8.1",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -839,7 +839,7 @@ Sample response:
 
 ### `POST /upscale`
 
-Upscale one gallery image with the fixed SeedVR2 direct x2 faithful path.
+Upscale one gallery image with the baseline AI x2 plus FS sharpen path.
 
 Requires `X-JustRayzist-Client`.
 
@@ -863,8 +863,8 @@ Sample response:
   "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
   "mode": "api_upscale",
   "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-  "upscale_engine": "seedvr2_direct_x2_faithful",
-  "execution_mode": "seedvr2_direct_x2_faithful",
+  "upscale_engine": "baseline_ai_x2_fs",
+  "execution_mode": "baseline_ai_x2_fs",
   "duration_ms": 23456,
   "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png"
 }
@@ -872,7 +872,7 @@ Sample response:
 
 ### `POST /clarity`
 
-Run the fixed FS clarity pipeline on one gallery image and return it at the original size.
+Run the multiband clarity pipeline on one gallery image and return it at the original size.
 
 Requires `X-JustRayzist-Client`.
 
@@ -896,7 +896,7 @@ Sample response:
   "filename": "justrayzist_YYYYMMDD_hhmmss_002.png",
   "mode": "api_clarity",
   "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-  "clarity_engine": "fs_unsharp_downscale",
+  "clarity_engine": "multiband_chroma_edgeaware_fs_unsharp_downscale",
   "working_width": 2048,
   "working_height": 2048,
   "duration_ms": 16789,

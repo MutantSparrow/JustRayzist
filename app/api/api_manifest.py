@@ -483,7 +483,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ApiExample(
         method="POST",
         path="/upscale",
-        description="Upscale one gallery image with the fixed SeedVR2 direct x2 faithful path.",
+        description="Upscale one gallery image with the baseline AI x2 plus FS sharpen path.",
         requires_client=True,
         request={
             "job_id": "pending_upscale_1712345678901_abcd1234",
@@ -497,8 +497,8 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
             "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
             "mode": "api_upscale",
             "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-            "upscale_engine": "seedvr2_direct_x2_faithful",
-            "execution_mode": "seedvr2_direct_x2_faithful",
+            "upscale_engine": "baseline_ai_x2_fs",
+            "execution_mode": "baseline_ai_x2_fs",
             "duration_ms": 23456,
             "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png",
         },
@@ -506,7 +506,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ApiExample(
         method="POST",
         path="/clarity",
-        description="Run the fixed FS clarity pipeline on one gallery image and return it at the original size.",
+        description="Run the multiband clarity pipeline on one gallery image and return it at the original size.",
         requires_client=True,
         request={
             "job_id": "pending_clarity_1712345678901_abcd1234",
@@ -520,7 +520,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
             "filename": "justrayzist_YYYYMMDD_hhmmss_002.png",
             "mode": "api_clarity",
             "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-            "clarity_engine": "fs_unsharp_downscale",
+            "clarity_engine": "multiband_chroma_edgeaware_fs_unsharp_downscale",
             "working_width": 2048,
             "working_height": 2048,
             "duration_ms": 16789,

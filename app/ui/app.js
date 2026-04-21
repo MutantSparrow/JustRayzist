@@ -4016,7 +4016,7 @@ function updateUpscaleControls() {
   state.upscaleMode = "fast";
   state.upscaleScale = 2;
   if (upscaleSettingsHintEl) {
-    upscaleSettingsHintEl.textContent = "Upscale uses SeedVR2 direct x2 faithful mode.";
+    upscaleSettingsHintEl.textContent = "Upscale uses baseline AI x2 plus FS sharpen.";
   }
 }
 
@@ -5655,7 +5655,7 @@ function enqueueUpscaleFromItem(item) {
   playTileActionFx(sourceFilename, "upscale-source");
   updateGenerateButtonState();
   const outstanding = totalOutstandingJobs();
-    setStatus(`Queued SEED x2 upscale for ${sourceFilename} -> ${targetWidth}x${targetHeight}. Queue ${outstanding}/${state.maxQueuedGenerations}.`);
+    setStatus(`Queued baseline AI x2 + FS upscale for ${sourceFilename} -> ${targetWidth}x${targetHeight}. Queue ${outstanding}/${state.maxQueuedGenerations}.`);
   processGenerationQueue().catch((error) => setStatus(String(error?.message || error), true));
   return true;
 }
@@ -5743,12 +5743,12 @@ async function processGenerationQueue() {
         if (isUpscaleJob) {
           setStatus(
             `Upscaling ${job.filename} -> ${job.width}x${job.height} `
-            + `(SEED X2, seed ${job.seed})...`
+            + `(baseline AI x2 + FS, seed ${job.seed})...`
           );
         } else if (isClarityJob) {
           setStatus(
             `Running clarity on ${job.filename} `
-            + `(RealPLKSR + Lucy/FS/HM, seed ${job.seed})...`
+            + `(multiband/chroma/edge-aware + FS + unsharp, seed ${job.seed})...`
           );
         } else if (isImg2ImgJob) {
           setStatus(
@@ -5875,7 +5875,7 @@ async function processGenerationQueue() {
           const source = String(payload.source_filename || job.filename || "source image");
           setStatus(
             `Upscaled ${source} -> ${payload.filename} `
-            + `(SEED X2) in ${payload.duration_ms} ms `
+            + `(baseline AI x2 + FS) in ${payload.duration_ms} ms `
             + `(seed ${payload.seed}).`
           );
         } else if (isClarityJob) {

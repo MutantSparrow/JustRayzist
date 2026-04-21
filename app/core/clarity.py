@@ -120,6 +120,25 @@ def final_unsharp(image: Image.Image) -> Image.Image:
     )
 
 
+def apply_clarity_sharpen_core(image: Image.Image) -> tuple[Image.Image, dict[str, int]]:
+    fs_started = perf_counter()
+    working_image = fs_sharpen(
+        image.convert("RGB"),
+        method=CLARITY_FS_METHOD,
+        blur_type=CLARITY_FS_TYPE,
+        intensity=CLARITY_FS_INTENSITY,
+    )
+    fs_ms = _measure_ms(fs_started)
+
+    pre_downscale_unsharp_started = perf_counter()
+    working_image = final_unsharp(working_image)
+    pre_downscale_unsharp_ms = _measure_ms(pre_downscale_unsharp_started)
+    return working_image, {
+        "clarity_fs_ms": fs_ms,
+        "clarity_pre_downscale_unsharp_ms": pre_downscale_unsharp_ms,
+    }
+
+
 def run_clarity_pipeline(
     *,
     image: Image.Image,
@@ -136,20 +155,22 @@ def run_clarity_pipeline(
     resized_image = source_image.resize((working_width, working_height), Image.Resampling.LANCZOS)
     resize_ms = _measure_ms(resize_started)
 
-    fs_started = perf_counter()
-    working_image = fs_sharpen(
-        resized_image,
-        method=CLARITY_FS_METHOD,
-        blur_type=CLARITY_FS_TYPE,
-        intensity=CLARITY_FS_INTENSITY,
-    )
-    fs_ms = _measure_ms(fs_started)
-
+    working_image = resized_image
+    fs_ms = 0
     pre_downscale_unsharp_ms = 0
     if selected_variant.pre_downscale_unsharp:
-        pre_downscale_unsharp_started = perf_counter()
-        working_image = final_unsharp(working_image)
-        pre_downscale_unsharp_ms = _measure_ms(pre_downscale_unsharp_started)
+        working_image, sharpen_telemetry = apply_clarity_sharpen_core(resized_image)
+        fs_ms = int(sharpen_telemetry["clarity_fs_ms"])
+        pre_downscale_unsharp_ms = int(sharpen_telemetry["clarity_pre_downscale_unsharp_ms"])
+    else:
+        fs_started = perf_counter()
+        working_image = fs_sharpen(
+            resized_image,
+            method=CLARITY_FS_METHOD,
+            blur_type=CLARITY_FS_TYPE,
+            intensity=CLARITY_FS_INTENSITY,
+        )
+        fs_ms = _measure_ms(fs_started)
 
     downscale_started = perf_counter()
     final_image = working_image.resize((source_width, source_height), Image.Resampling.LANCZOS)

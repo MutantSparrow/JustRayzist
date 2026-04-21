@@ -17,7 +17,6 @@ from app.config.profiles import RuntimeProfile
 from app.config.settings import AppSettings
 from app.core.cancellation import GenerationCancelledError
 from app.core.clarity import (
-    CLARITY_ENGINE_NAME,
     CLARITY_FS_INTENSITY,
     CLARITY_FS_METHOD,
     CLARITY_FS_TYPE,
@@ -25,9 +24,14 @@ from app.core.clarity import (
     CLARITY_FINAL_UNSHARP_RADIUS,
     CLARITY_FINAL_UNSHARP_THRESHOLD,
     CLARITY_UNSHARP_STAGE,
-    run_clarity_pipeline,
 )
 from app.core.backends import SUPPORTED_BACKENDS
+from app.core.deblur import (
+    DEFAULT_CLARITY_ENGINE_NAME,
+    DEFAULT_UPSCALE_ENGINE_NAME,
+    run_default_clarity_pipeline,
+    run_default_upscale_pipeline,
+)
 from app.core.model_registry import (
     ModelComponent,
     ModelPack,
@@ -38,8 +42,6 @@ from app.core.model_registry import (
 )
 from app.core.worker import GenerationRequest, GenerationSession
 from app.core.worker.types import LoraSelection, resolve_inference_process, resolve_procedural_creativity
-from app.core.seedvr2 import SeedVR2StillImageConfig, upscale_with_seedvr2_direct_x2
-from app.core.upscale_hq import FAST_UPSCALE_ENGINE_NAME
 from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
 from app.storage.lora_library import (
     DEFAULT_MAX_ACTIVE_LORAS,
@@ -1435,14 +1437,15 @@ class InferenceService:
             source_prompt = str(source_row.get("prompt") or "").strip() or "(missing prompt metadata)"
             source_generation_seed = self._optional_int(source_row.get("seed"))
             preferred_pack = str(source_row.get("model_pack") or "").strip() or None
-            model_pack_name = str(pack_name or preferred_pack or "unknown").strip() or "unknown"
-            resource_tier = self.current_resource_tier(refresh=True)
+            base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name or preferred_pack)
+            session = self._session_for_pack(effective_pack, resource_tier)
+            model_pack_name = base_pack.name
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
             LOGGER.info(
                 "Upscale request: owner=%s source=%s engine=%s scale=2 pack=%s tier=%s seed=%s",
                 safe_owner_id,
                 safe_filename,
-                FAST_UPSCALE_ENGINE_NAME,
+                DEFAULT_UPSCALE_ENGINE_NAME,
                 model_pack_name,
                 resource_tier.name,
                 effective_seed,
@@ -1481,21 +1484,17 @@ class InferenceService:
                         active_job["height"] = target_height
                 if cancel_event.is_set():
                     raise GenerationCancelledError("Upscale cancelled.")
-                result = upscale_with_seedvr2_direct_x2(
+                result = run_default_upscale_pipeline(
                     image=source_image,
                     settings=self._settings,
-                    runtime_profile=self._settings.runtime_profile.name,
+                    session=session,
+                    profile_name=self._settings.runtime_profile.name,
                     seed=effective_seed,
-                    is_cancel_requested=cancel_event.is_set,
-                    still_image_config=SeedVR2StillImageConfig(
-                        input_noise_scale=0.0,
-                        latent_noise_scale=0.0,
-                        color_correction="lab",
-                    ),
+                    scheduler_mode=scheduler_mode,
                 )
                 final_image = result.image
-                final_width, final_height = int(result.output_width), int(result.output_height)
-                effective_engine = FAST_UPSCALE_ENGINE_NAME
+                final_width, final_height = final_image.size
+                effective_engine = result.engine_name
                 prompt_effective = source_prompt
                 prompt_enhanced = False
                 duration_ms = int(result.duration_ms)
@@ -1632,14 +1631,15 @@ class InferenceService:
             source_prompt = str(source_row.get("prompt") or "").strip() or "(missing prompt metadata)"
             source_generation_seed = self._optional_int(source_row.get("seed"))
             preferred_pack = str(source_row.get("model_pack") or "").strip() or None
-            model_pack_name = str(pack_name or preferred_pack or "unknown").strip() or "unknown"
-            resource_tier = self.current_resource_tier(refresh=True)
+            base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name or preferred_pack)
+            session = self._session_for_pack(effective_pack, resource_tier)
+            model_pack_name = base_pack.name
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
             LOGGER.info(
                 "Clarity request: owner=%s source=%s engine=%s pack=%s tier=%s seed=%s",
                 safe_owner_id,
                 safe_filename,
-                CLARITY_ENGINE_NAME,
+                DEFAULT_CLARITY_ENGINE_NAME,
                 model_pack_name,
                 resource_tier.name,
                 effective_seed,
@@ -1671,8 +1671,13 @@ class InferenceService:
                 source_width, source_height = source_image.size
                 if cancel_event.is_set():
                     raise GenerationCancelledError("Clarity cancelled.")
-                clarity_result = run_clarity_pipeline(
+                clarity_result = run_default_clarity_pipeline(
                     image=source_image,
+                    settings=self._settings,
+                    session=session,
+                    profile_name=self._settings.runtime_profile.name,
+                    seed=effective_seed,
+                    scheduler_mode=scheduler_mode,
                 )
                 if cancel_event.is_set():
                     raise GenerationCancelledError("Clarity cancelled.")
@@ -1798,7 +1803,7 @@ class InferenceService:
                     "Image clarified: owner=%s source=%s engine=%s file=%s size=%dx%d seed=%s duration_ms=%s",
                     safe_owner_id,
                     safe_filename,
-                    CLARITY_ENGINE_NAME,
+                    DEFAULT_CLARITY_ENGINE_NAME,
                     image_row["filename"],
                     final_width,
                     final_height,
@@ -1806,7 +1811,7 @@ class InferenceService:
                     duration_ms,
                 )
                 with self._state_lock:
-                    self._active_backend_name = CLARITY_ENGINE_NAME
+                    self._active_backend_name = DEFAULT_CLARITY_ENGINE_NAME
                 return image_row
         finally:
             with self._state_lock:
