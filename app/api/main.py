@@ -111,12 +111,16 @@ class GenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     width: int = Field(default=1024, ge=64, le=2048)
     height: int = Field(default=1024, ge=64, le=2048)
+    steps: int | None = Field(default=None)
     pack: str | None = Field(default=None)
     job_id: str | None = Field(default=None, max_length=255)
     seed: int | None = Field(default=None)
     scheduler_mode: Literal["euler", "dpm"] | None = Field(default=None)
+    inference_process: Literal["standard", "rplus"] = Field(default="standard")
     enhance_prompt: bool = Field(default=False)
     procedural_creativity: int = Field(default=0, ge=0, le=3)
+    rplus_vibrance: float = Field(default=0.0)
+    rplus_initial_bias_level: float = Field(default=0.0)
     loras: list[LoraSelectionRequest] = Field(default_factory=list, max_length=DEFAULT_MAX_ACTIVE_LORAS)
 
     @field_validator("width", "height")
@@ -864,12 +868,16 @@ def generate(
             "prompt": payload.prompt,
             "width": payload.width,
             "height": payload.height,
+            "steps": payload.steps,
             "pack_name": payload.pack,
             "job_id": payload.job_id,
             "seed": payload.seed,
             "scheduler_mode": payload.scheduler_mode,
+            "inference_process": payload.inference_process,
             "enhance_prompt": payload.enhance_prompt,
             "procedural_creativity": payload.procedural_creativity,
+            "rplus_vibrance": payload.rplus_vibrance,
+            "rplus_initial_bias_level": payload.rplus_initial_bias_level,
         }
         if payload.loras:
             generate_kwargs["loras"] = [item.model_dump() for item in payload.loras]

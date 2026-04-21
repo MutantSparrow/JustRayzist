@@ -5,6 +5,7 @@ import logging
 import os
 import csv
 import math
+import random
 import re
 import statistics
 from datetime import datetime, timezone
@@ -275,6 +276,12 @@ def _run_pack_compare_generation(
     run_label: str,
     pair_id: str,
     role: str,
+    inference_process: str = "standard",
+    rplus_vibrance: float = 0.0,
+    rplus_initial_bias_level: float = 0.0,
+    rplus_initial_sample_size: int | str | None = None,
+    output_prefix: str = "packcompare",
+    comparison_mode: str = "pack_compare",
     recycle_before: bool = False,
     recycle_after: bool = False,
     record_metric: bool = True,
@@ -293,6 +300,8 @@ def _run_pack_compare_generation(
         "role": role,
         "pack": model_pack.name,
         "seed": seed,
+        "inference_process": inference_process,
+        "process_label": "R+" if inference_process == "rplus" else "Standard",
         "status": "pending",
         "duration_ms": None,
         "reserved_bytes": None,
@@ -313,6 +322,10 @@ def _run_pack_compare_generation(
                 guidance_scale=guidance_scale,
                 seed=seed,
                 enhance_prompt=enhance_prompt,
+                inference_process=inference_process,
+                rplus_vibrance=rplus_vibrance,
+                rplus_initial_bias_level=rplus_initial_bias_level,
+                rplus_initial_sample_size=rplus_initial_sample_size,
             )
         )
         saved_path = save_png_with_metadata(
@@ -321,13 +334,15 @@ def _run_pack_compare_generation(
             settings=settings,
             output_path=build_output_path(
                 output_dir,
-                prefix=f"packcompare_{role}_{run_label}_{pair_id}",
+                prefix=f"{output_prefix}_{role}_{run_label}_{pair_id}",
             ),
             extra_metadata={
-                "mode": "pack_compare",
+                "mode": comparison_mode,
                 "compare_pair_id": pair_id,
                 "compare_run_label": run_label,
                 "compare_role": role,
+                "inference_process": inference_process,
+                "compare_process_label": record["process_label"],
                 "model_pack": model_pack.name,
                 "duration_ms": result.duration_ms,
                 "seed": seed,
@@ -346,7 +361,7 @@ def _run_pack_compare_generation(
             append_generation_metric(
                 settings=settings,
                 payload={
-                    "mode": "pack_compare_run",
+                    "mode": f"{comparison_mode}_run",
                     "compare_pair_id": pair_id,
                     "compare_run_label": run_label,
                     "compare_role": role,
@@ -419,6 +434,58 @@ def _build_pack_compare_pair_row(
     }
 
 
+def _build_rplus_compare_row(
+    *,
+    pair_id: str,
+    run_label: str,
+    profile_name: str,
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int | None,
+    pack_name: str,
+    standard_record: dict[str, object],
+    rplus_record: dict[str, object],
+    standard_result,
+    rplus_result,
+) -> dict[str, object]:
+    mse = None
+    psnr = None
+    if standard_result is not None and rplus_result is not None:
+        mse, psnr = _image_mse_psnr(standard_result.image, rplus_result.image)
+
+    return {
+        "pair_id": pair_id,
+        "run_label": run_label,
+        "profile": profile_name,
+        "prompt": prompt,
+        "width": width,
+        "height": height,
+        "seed": seed,
+        "pack": pack_name,
+        "standard_label": "Standard",
+        "rplus_label": "R+",
+        "standard_inference_process": standard_record["inference_process"],
+        "rplus_inference_process": rplus_record["inference_process"],
+        "standard_status": standard_record["status"],
+        "rplus_status": rplus_record["status"],
+        "standard_duration_ms": standard_record["duration_ms"],
+        "rplus_duration_ms": rplus_record["duration_ms"],
+        "standard_reserved_bytes": standard_record["reserved_bytes"],
+        "rplus_reserved_bytes": rplus_record["reserved_bytes"],
+        "standard_max_reserved_bytes": standard_record["max_reserved_bytes"],
+        "rplus_max_reserved_bytes": rplus_record["max_reserved_bytes"],
+        "standard_execution_mode": standard_record["execution_mode"],
+        "rplus_execution_mode": rplus_record["execution_mode"],
+        "standard_output_path": standard_record["output_path"],
+        "rplus_output_path": rplus_record["output_path"],
+        "standard_error": standard_record["error"],
+        "rplus_error": rplus_record["error"],
+        "mse": mse,
+        "psnr_db": psnr,
+    }
+
+
 def _draw_wrapped_text(draw, text: str, *, x: int, y: int, width: int, fill, font, line_height: int) -> int:
     words = text.split()
     if not words:
@@ -466,6 +533,12 @@ def _csv_safe_value(value: object) -> object:
     if isinstance(value, (str, int, float, bool)):
         return value
     return json.dumps(value, ensure_ascii=True, sort_keys=True)
+
+
+def _resolve_rplus_guidance_scale(guidance_scale: float | None) -> tuple[float, bool]:
+    if guidance_scale is None:
+        return 1.0, False
+    return 1.0, not math.isclose(float(guidance_scale), 1.0, rel_tol=0.0, abs_tol=1e-6)
 
 
 def _summarize_suite_pack(rows: list[dict[str, object]], pack_name: str) -> dict[str, float | int | None]:
@@ -968,7 +1041,6 @@ def _build_clarity_compare_contact_sheet(
     fg = (240, 240, 240)
     subtle = (170, 175, 184)
     border = (72, 78, 90)
-    tile_bg = (32, 35, 41)
     tile_failed = (64, 28, 32)
     columns = max(1, len(entries))
     width = gutter + columns * (thumb_size + gutter)
@@ -1250,6 +1322,10 @@ def generate(
     steps: Optional[int] = typer.Option(None, "--steps"),
     guidance_scale: Optional[float] = typer.Option(None, "--guidance-scale"),
     seed: Optional[int] = typer.Option(None, "--seed"),
+    inference_process: str = typer.Option("standard", "--inference-process"),
+    rplus_vibrance: float = typer.Option(0.0, "--rplus-vibrance"),
+    rplus_initial_bias_level: float = typer.Option(0.0, "--rplus-initial-bias-level"),
+    rplus_initial_sample_size: Optional[str] = typer.Option(None, "--rplus-initial-sample-size"),
     enhance_prompt: bool = typer.Option(
         False,
         "--enhance-prompt/--no-enhance-prompt",
@@ -1264,6 +1340,12 @@ def generate(
     model_pack = _load_pack_or_exit(settings, pack)
     _assert_supported_backend_or_exit(model_pack)
     session = GenerationSession(settings=settings, model_pack=model_pack)
+    normalized_inference_process = str(inference_process).strip().lower() or "standard"
+    effective_guidance_scale = guidance_scale
+    if normalized_inference_process == "rplus":
+        effective_guidance_scale, guidance_overridden = _resolve_rplus_guidance_scale(guidance_scale)
+        if guidance_overridden:
+            typer.echo("Rplus overrides guidance_scale to 1.0.")
 
     try:
         result = session.generate(
@@ -1272,9 +1354,13 @@ def generate(
                 width=width,
                 height=height,
                 steps=steps,
-                guidance_scale=guidance_scale,
+                guidance_scale=effective_guidance_scale,
                 seed=seed,
+                inference_process=normalized_inference_process,
                 enhance_prompt=enhance_prompt,
+                rplus_vibrance=rplus_vibrance,
+                rplus_initial_bias_level=rplus_initial_bias_level,
+                rplus_initial_sample_size=rplus_initial_sample_size,
             )
         )
     except ImportError as exc:
@@ -2324,6 +2410,176 @@ def pack_compare(
     typer.echo(
         f"quality   avg_mse={round(sum(mse_values) / len(mse_values), 4) if mse_values else 'n/a'} "
         f"avg_psnr_db={round(sum(psnr_values) / len(psnr_values), 4) if psnr_values else 'n/a'}"
+    )
+    typer.echo(f"Report CSV: {report_csv}")
+    typer.echo(f"Report JSONL: {report_jsonl}")
+
+
+@cli.command("rplus-compare")
+def rplus_compare(
+    prompt: str = typer.Option(..., "--prompt"),
+    pack: str = typer.Option(..., "--pack", help="Model pack name or folder name"),
+    width: int = typer.Option(1024, "--width"),
+    height: int = typer.Option(1024, "--height"),
+    steps: Optional[int] = typer.Option(None, "--steps"),
+    guidance_scale: Optional[float] = typer.Option(None, "--guidance-scale"),
+    seed: Optional[int] = typer.Option(None, "--seed"),
+    enhance_prompt: bool = typer.Option(
+        False,
+        "--enhance-prompt/--no-enhance-prompt",
+        help="Use loaded text_encoder to rewrite prompt before image generation.",
+    ),
+    rplus_vibrance: float = typer.Option(0.0, "--rplus-vibrance"),
+    rplus_initial_bias_level: float = typer.Option(0.0, "--rplus-initial-bias-level"),
+    rplus_initial_sample_size: Optional[str] = typer.Option(None, "--rplus-initial-sample-size"),
+    output_dir: Optional[Path] = typer.Option(
+        None,
+        "--output-dir",
+        help="Destination directory for paired comparison outputs. Defaults to outputs/.",
+    ),
+    profile: Optional[str] = typer.Option(
+        None,
+        "--profile",
+        help="Engineering-only runtime override for controlled benchmark comparisons.",
+    ),
+) -> None:
+    from app.core.worker import GenerationSession
+    from app.storage import append_generation_metric
+
+    settings = load_settings(profile_name=profile)
+    model_pack = _load_runtime_pack_or_exit(settings, pack)
+    _assert_supported_backend_or_exit(model_pack)
+
+    destination_dir = (
+        _resolve_cli_path(settings.paths.root_dir, output_dir)
+        if output_dir is not None
+        else settings.paths.outputs_dir
+    )
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    pair_seed = seed if seed is not None else random.randint(0, 2**31 - 1)
+    rplus_guidance_scale, guidance_overridden = _resolve_rplus_guidance_scale(guidance_scale)
+    if guidance_overridden:
+        typer.echo("Rplus overrides guidance_scale to 1.0.")
+
+    report_key = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    report_csv = settings.paths.data_dir / f"rplus_compare_{report_key}.csv"
+    report_jsonl = settings.paths.data_dir / f"rplus_compare_{report_key}.jsonl"
+    report_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    typer.echo(
+        f"Rplus compare: pack={model_pack.name}, runtime_profile={settings.runtime_profile.name}, seed={pair_seed}"
+    )
+
+    session = GenerationSession(settings=settings, model_pack=model_pack)
+    pair_id = uuid4().hex[:10]
+    run_label = "single"
+
+    standard_record, standard_result = _run_pack_compare_generation(
+        session=session,
+        settings=settings,
+        model_pack=model_pack,
+        prompt=prompt,
+        width=width,
+        height=height,
+        steps=steps,
+        guidance_scale=guidance_scale,
+        seed=pair_seed,
+        enhance_prompt=enhance_prompt,
+        output_dir=destination_dir,
+        run_label=run_label,
+        pair_id=pair_id,
+        role="standard",
+        inference_process="standard",
+        output_prefix="rpluscompare",
+        comparison_mode="rplus_compare",
+    )
+    rplus_record, rplus_result = _run_pack_compare_generation(
+        session=session,
+        settings=settings,
+        model_pack=model_pack,
+        prompt=prompt,
+        width=width,
+        height=height,
+        steps=steps,
+        guidance_scale=rplus_guidance_scale,
+        seed=pair_seed,
+        enhance_prompt=enhance_prompt,
+        output_dir=destination_dir,
+        run_label=run_label,
+        pair_id=pair_id,
+        role="rplus",
+        inference_process="rplus",
+        rplus_vibrance=rplus_vibrance,
+        rplus_initial_bias_level=rplus_initial_bias_level,
+        rplus_initial_sample_size=rplus_initial_sample_size,
+        output_prefix="rpluscompare",
+        comparison_mode="rplus_compare",
+    )
+
+    row = _build_rplus_compare_row(
+        pair_id=pair_id,
+        run_label=run_label,
+        profile_name=settings.runtime_profile.name,
+        prompt=prompt,
+        width=width,
+        height=height,
+        seed=pair_seed,
+        pack_name=model_pack.name,
+        standard_record=standard_record,
+        rplus_record=rplus_record,
+        standard_result=standard_result,
+        rplus_result=rplus_result,
+    )
+    append_generation_metric(
+        settings=settings,
+        payload={
+            "mode": "rplus_compare_pair",
+            **row,
+        },
+    )
+
+    fieldnames = [
+        "pair_id",
+        "run_label",
+        "profile",
+        "prompt",
+        "width",
+        "height",
+        "seed",
+        "pack",
+        "standard_label",
+        "rplus_label",
+        "standard_inference_process",
+        "rplus_inference_process",
+        "standard_status",
+        "rplus_status",
+        "standard_duration_ms",
+        "rplus_duration_ms",
+        "standard_reserved_bytes",
+        "rplus_reserved_bytes",
+        "standard_max_reserved_bytes",
+        "rplus_max_reserved_bytes",
+        "standard_execution_mode",
+        "rplus_execution_mode",
+        "standard_output_path",
+        "rplus_output_path",
+        "standard_error",
+        "rplus_error",
+        "mse",
+        "psnr_db",
+    ]
+    with report_csv.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow({key: row.get(key) for key in fieldnames})
+
+    with report_jsonl.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+    typer.echo(
+        f"Standard={row['standard_duration_ms']} ms R+={row['rplus_duration_ms']} ms "
+        f"mse={row['mse']} psnr={row['psnr_db']}"
     )
     typer.echo(f"Report CSV: {report_csv}")
     typer.echo(f"Report JSONL: {report_jsonl}")

@@ -6,11 +6,11 @@ JustRayzist is a local-first image generation app built around the Rayzist Z-Ima
 
 The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
 
-## New in v1.7.2
+## New in v1.8.0
 
-- Adds end-to-end `img2img` support across UI, API, and CLI, including source-image lineage metadata and client job cancellation.
-- Adds fixed-FS `clarity` processing plus `clarity-compare` diagnostics for comparing output variants and saved reports.
-- Restricts `POST /server/kill` to local-machine callers and fixes packaged `justrayzist-web` launcher startup.
+- Adds `R+` as an alternate staged inference mode across web generation and CLI workflows.
+- Adds web controls for `R+` toggle, vibrance, and bias, with UI-side `20`-step locking for consistent runs.
+- Adds saved inference metadata plus fullscreen tags for `R+` and active Creative Mode.
 
 ![Wildcard library preview](readme_images/wildcards_preview.png)
 
@@ -25,6 +25,7 @@ The project is designed to run offline after setup. Normal user flows stay on a 
 - Wildcard library with editable prompt tokens and encoder-assisted suggestion generation.
 - Gallery indexing with favorites, dominant-color filters, bulk download, rebuild, and import-from-source support.
 - Prompt enhancement and Creative Mode (`procedural_creativity` values `0-3`).
+- `R+` alternate staged inference mode with vibrance and bias controls.
 - SeedVR2 direct x2 upscaling as the default upscale path.
 - Source-mode launchers for Windows, Linux, and macOS.
 - Windows packaging and in-place packaged update flow.
@@ -236,7 +237,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -267,7 +268,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.7.2",
+  "app_version": "1.8.0",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {

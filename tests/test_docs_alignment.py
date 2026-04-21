@@ -72,6 +72,7 @@ def test_user_docs_describe_auto_resource_tiering() -> None:
     assert "engineering-only" in usage
     assert "pack-compare" in usage
     assert "pack-compare-suite" in usage
+    assert "rplus-compare" in usage
     assert "prompt-grid-benchmark" in usage
     assert "public enabled pack" in packaging.lower()
     assert "public enabled pack selection" in release_readme.lower()

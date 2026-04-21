@@ -213,6 +213,8 @@ def _create_images_table(conn: sqlite3.Connection) -> None:
             steps INTEGER,
             guidance_scale REAL,
             duration_ms INTEGER,
+            inference_process TEXT,
+            procedural_creativity INTEGER,
             mode TEXT,
             source_image TEXT,
             source_filename TEXT,
@@ -426,6 +428,8 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
         "lora_count": "INTEGER",
         "color_flags": "INTEGER",
         "favorite": "INTEGER NOT NULL DEFAULT 0",
+        "inference_process": "TEXT",
+        "procedural_creativity": "INTEGER",
     }
     for name, sql_type in required_columns.items():
         if name in existing:
@@ -478,10 +482,10 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
             INSERT INTO images (
                 owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
                 prompt_wildcard_resolved, width, height, model_pack, backend, device, steps, guidance_scale,
-                duration_ms, mode, source_image, source_filename, source_width, source_height, similarity,
+                duration_ms, inference_process, procedural_creativity, mode, source_image, source_filename, source_width, source_height, similarity,
                 wildcards_json, wildcard_count, loras_json, lora_count, color_flags, favorite, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(owner_id, filename) DO UPDATE SET
                 output_path=excluded.output_path,
                 prompt=excluded.prompt,
@@ -497,6 +501,8 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 steps=excluded.steps,
                 guidance_scale=excluded.guidance_scale,
                 duration_ms=excluded.duration_ms,
+                inference_process=excluded.inference_process,
+                procedural_creativity=excluded.procedural_creativity,
                 mode=excluded.mode,
                 source_image=excluded.source_image,
                 source_filename=excluded.source_filename,
@@ -528,6 +534,8 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 _to_int(record.get("steps")),
                 _to_float(record.get("guidance_scale")),
                 _to_int(record.get("duration_ms")),
+                record.get("inference_process"),
+                _to_int(record.get("procedural_creativity")),
                 record.get("mode"),
                 record.get("source_image"),
                 record.get("source_filename"),
@@ -602,10 +610,10 @@ def _upsert_image(
         INSERT INTO images (
             owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
             prompt_wildcard_resolved, width, height, model_pack, backend, device, steps, guidance_scale,
-            duration_ms, mode, source_image, source_filename, source_width, source_height, similarity,
+            duration_ms, inference_process, procedural_creativity, mode, source_image, source_filename, source_width, source_height, similarity,
             wildcards_json, wildcard_count, loras_json, lora_count, color_flags, favorite, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(owner_id, filename) DO UPDATE SET
             output_path=excluded.output_path,
             prompt=excluded.prompt,
@@ -621,6 +629,8 @@ def _upsert_image(
             steps=excluded.steps,
             guidance_scale=excluded.guidance_scale,
             duration_ms=excluded.duration_ms,
+            inference_process=excluded.inference_process,
+            procedural_creativity=excluded.procedural_creativity,
             mode=excluded.mode,
             source_image=excluded.source_image,
             source_filename=excluded.source_filename,
@@ -652,6 +662,8 @@ def _upsert_image(
             _to_int(metadata.get("steps")),
             _to_float(metadata.get("guidance_scale")),
             _to_int(metadata.get("duration_ms")),
+            metadata.get("inference_process"),
+            _to_int(metadata.get("procedural_creativity")),
             metadata.get("mode"),
             metadata.get("source_image"),
             metadata.get("source_filename"),

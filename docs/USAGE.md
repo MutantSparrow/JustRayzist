@@ -89,6 +89,13 @@ Launcher flow:
 - Color swatches beside `Newest First` filter the gallery by dominant image color.
 - The first launch after a color-classifier update may briefly show `Updating gallery color cache...` while the cached gallery color data is rebuilt in the background.
 
+## R+ Mode
+
+- The web UI can toggle `R+` for normal generate jobs.
+- When `R+` is on in the web UI, the request is sent as `inference_process="rplus"` and the UI pins that run to `20` steps.
+- `R+` exposes `vibrance` and `bias` controls in the web UI and CLI. Raw API callers can send the same values directly.
+- `R+` is generate-only in the web UI today. Reference-image `img2img` keeps the standard path and greys out the `R+` controls while active.
+
 ## Auto Resource Tiering
 
 Normal runs no longer ask the user to choose `high`, `balanced`, or `constrained`.
@@ -121,6 +128,13 @@ python -m app.cli.main generate `
   --prompt "A cinematic skyline at sunrise" `
   --width 1024 `
   --height 1024
+
+python -m app.cli.main generate `
+  --pack Rayzist_bf16 `
+  --prompt "A cinematic skyline at sunrise" `
+  --inference-process rplus `
+  --rplus-vibrance 0.2 `
+  --rplus-initial-bias-level 0.1
 ```
 
 Supported generation cap: UI presets up to `1536x1536`; raw API requests up to `2048x2048`.
@@ -167,6 +181,11 @@ These commands are discoverable in the CLI, but they are intended for diagnostic
 python -m app.cli.main pack-compare `
   --prompt "A cinematic skyline at sunrise"
 
+python -m app.cli.main rplus-compare `
+  --pack Rayzist_bf16 `
+  --prompt "A cinematic skyline at sunrise" `
+  --seed 17
+
 python -m app.cli.main pack-compare-suite `
   --iterations 3
 
@@ -184,6 +203,7 @@ python -m app.cli.main seedvr2-still-benchmark `
 What they are for:
 
 - `pack-compare`: compare a base pack against a candidate runtime strategy such as derived FP8 storage.
+- `rplus-compare`: generate the same prompt and seed once with `standard` and once with `rplus`, then write paired reports and diff metrics.
 - `pack-compare-suite`: run the multi-pack benchmark matrix and generate contact sheets/reports.
 - `prompt-grid-benchmark`: run forced-tier plus auto-tier prompt grids with generation/upscale artifacts.
 - `seedvr2-still-benchmark`: benchmark SeedVR2 x2 direct behavior with still-image presets.
@@ -249,7 +269,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -280,7 +300,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.7.2",
+  "app_version": "1.8.0",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {

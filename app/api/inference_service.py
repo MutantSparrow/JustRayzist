@@ -37,7 +37,7 @@ from app.core.model_registry import (
     load_model_pack_by_name,
 )
 from app.core.worker import GenerationRequest, GenerationSession
-from app.core.worker.types import LoraSelection, resolve_procedural_creativity
+from app.core.worker.types import LoraSelection, resolve_inference_process, resolve_procedural_creativity
 from app.core.seedvr2 import SeedVR2StillImageConfig, upscale_with_seedvr2_direct_x2
 from app.core.upscale_hq import FAST_UPSCALE_ENGINE_NAME
 from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
@@ -956,16 +956,23 @@ class InferenceService:
         prompt: str,
         width: int,
         height: int,
+        steps: int | None = None,
         pack_name: str | None = None,
         seed: int | None = None,
         scheduler_mode: str | None = None,
+        inference_process: str | None = "standard",
         enhance_prompt: bool = False,
         procedural_creativity: int = 0,
+        rplus_vibrance: float = 0.0,
+        rplus_initial_bias_level: float = 0.0,
         loras: list[dict[str, Any]] | None = None,
         job_id: str | None = None,
     ) -> dict[str, Any]:
         effective_procedural_creativity = resolve_procedural_creativity(
             procedural_creativity=procedural_creativity
+        )
+        effective_inference_process = resolve_inference_process(
+            inference_process=inference_process
         )
         resolved_loras: tuple[LoraSelection, ...] = ()
         retained_lora_ids: tuple[str, ...] = ()
@@ -978,7 +985,7 @@ class InferenceService:
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
             retained_lora_ids = self._retain_generation_loras_locked(resolved_loras)
             LOGGER.info(
-                "Generate request: owner=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s creative_mode=%s",
+                "Generate request: owner=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s creative_mode=%s inference_process=%s",
                 safe_owner_id,
                 base_pack.name,
                 effective_pack.name,
@@ -987,6 +994,7 @@ class InferenceService:
                 height,
                 effective_seed,
                 effective_procedural_creativity,
+                effective_inference_process,
             )
             self._set_active_client_job_locked(
                 safe_owner_id,
@@ -1001,6 +1009,10 @@ class InferenceService:
                     "seed": effective_seed,
                     "enhance_prompt": enhance_prompt,
                     "procedural_creativity": effective_procedural_creativity,
+                    "steps": steps,
+                    "inference_process": effective_inference_process,
+                    "rplus_vibrance": rplus_vibrance,
+                    "rplus_initial_bias_level": rplus_initial_bias_level,
                     "lora_count": len(resolved_loras),
                     "started_at": datetime.now(timezone.utc).isoformat(),
                 },
@@ -1017,10 +1029,14 @@ class InferenceService:
                         prompt=prompt,
                         width=width,
                         height=height,
+                        steps=steps,
                         seed=effective_seed,
                         scheduler_mode=scheduler_mode,
+                        inference_process=effective_inference_process,
                         enhance_prompt=enhance_prompt,
                         procedural_creativity=effective_procedural_creativity,
+                        rplus_vibrance=rplus_vibrance,
+                        rplus_initial_bias_level=rplus_initial_bias_level,
                         loras=resolved_loras,
                     )
                 )
@@ -1061,6 +1077,7 @@ class InferenceService:
                         "duration_ms": result.duration_ms,
                         "seed": result.seed,
                         "scheduler_mode": result.scheduler_mode,
+                        "inference_process": result.inference_process,
                         "runtime_profile": result.runtime_profile,
                         "resource_tier": result.resource_tier,
                         "execution_mode": result.execution_mode,
@@ -1122,6 +1139,7 @@ class InferenceService:
                 image_row["resource_tier"] = result.resource_tier
                 image_row["execution_mode"] = result.execution_mode
                 image_row["backend"] = result.backend
+                image_row["inference_process"] = result.inference_process
                 image_row["fp8_fallback_used"] = result.fp8_fallback_used
                 image_row["fp8_fallback_reason"] = result.fp8_fallback_reason
                 image_row["fp8_runtime_mode"] = result.fp8_runtime_mode

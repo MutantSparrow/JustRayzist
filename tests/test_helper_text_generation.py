@@ -148,6 +148,160 @@ def test_helper_text_generation_falls_back_to_generate_when_base_decode_is_unava
     assert any("falling back to text_encoder.generate" in record.getMessage() for record in caplog.records)
 
 
+def test_move_encoded_to_module_device_uses_embedding_weight_device(temp_app_paths, make_app_settings) -> None:
+    backend = _make_backend(temp_app_paths, make_app_settings)
+
+    class _FakeTensor:
+        def __init__(self, label: str) -> None:
+            self.label = label
+            self.moves: list[object] = []
+
+        def to(self, device: object) -> str:
+            self.moves.append(device)
+            return f"{self.label}@{device}"
+
+    class _TextEncoder:
+        def parameters(self):
+            return iter(())
+
+        def get_input_embeddings(self):
+            return SimpleNamespace(weight=SimpleNamespace(device=torch.device("cuda")))
+
+    input_ids = _FakeTensor("ids")
+    attention_mask = _FakeTensor("mask")
+    moved = backend._move_encoded_to_module_device(
+        {"input_ids": input_ids, "attention_mask": attention_mask, "raw": "keep"},
+        _TextEncoder(),
+    )
+
+    assert moved["input_ids"] == "ids@cuda"
+    assert moved["attention_mask"] == "mask@cuda"
+    assert moved["raw"] == "keep"
+    assert input_ids.moves == [torch.device("cuda")]
+    assert attention_mask.moves == [torch.device("cuda")]
+
+
+def test_prompt_enhancement_fallback_sanitizes_greedy_generation_config(
+    monkeypatch,
+    caplog,
+    temp_app_paths,
+    make_app_settings,
+) -> None:
+    backend = _make_backend(temp_app_paths, make_app_settings)
+    tokenizer = _HelperTokenizer()
+    encoded = {"input_ids": torch.tensor([[1, 2]]), "attention_mask": torch.tensor([[1, 1]])}
+    captured: dict[str, object] = {}
+
+    class _TextEncoder:
+        def __init__(self) -> None:
+            self.generation_config = SimpleNamespace(
+                do_sample=True,
+                temperature=0.6,
+                top_p=0.95,
+                top_k=20,
+            )
+
+        def generate(self, **kwargs):
+            captured["kwargs"] = kwargs
+            return torch.tensor([[1, 2, 3]])
+
+    monkeypatch.setattr(
+        backend,
+        "_generate_with_base_model",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("missing base-model decode support")),
+    )
+    monkeypatch.setattr(backend, "_extract_rewritten_prompt", lambda full_text, input_text: "enhanced prompt")
+    monkeypatch.setattr(backend, "_rewrite_rejection_reason", lambda original, rewritten: "ok")
+    caplog.set_level(logging.DEBUG, logger="app.core.backends.diffusers_zimage")
+
+    rewritten, reason = backend._run_rewrite_attempt(
+        tokenizer=tokenizer,
+        text_encoder=_TextEncoder(),
+        encoded=encoded,
+        prompt="original prompt",
+        torch_module=torch,
+        generate_kwargs={"max_new_tokens": 24, "do_sample": False},
+        enhancement_seed=123,
+    )
+
+    kwargs = captured["kwargs"]
+    generation_config = kwargs["generation_config"]
+    assert rewritten == "enhanced prompt"
+    assert reason == "ok"
+    assert generation_config.do_sample is False
+    assert generation_config.temperature == pytest.approx(1.0)
+    assert generation_config.top_p == pytest.approx(1.0)
+    assert generation_config.top_k == 50
+    assert kwargs["use_model_defaults"] is False
+    assert "do_sample" not in kwargs
+    assert "temperature" not in kwargs
+    assert "top_p" not in kwargs
+    assert "top_k" not in kwargs
+    assert any("falling back to text_encoder.generate" in record.getMessage() for record in caplog.records)
+
+
+def test_helper_text_generation_fallback_builds_explicit_sampled_generation_config(
+    monkeypatch,
+    temp_app_paths,
+    make_app_settings,
+) -> None:
+    backend = _make_backend(temp_app_paths, make_app_settings)
+    tokenizer = _HelperTokenizer()
+    encoded = {"input_ids": torch.tensor([[1, 2]]), "attention_mask": torch.tensor([[1, 1]])}
+    captured: dict[str, object] = {}
+
+    class _TextEncoder:
+        def __init__(self) -> None:
+            self.generation_config = SimpleNamespace(
+                do_sample=True,
+                temperature=0.6,
+                top_p=0.95,
+                top_k=20,
+                repetition_penalty=1.08,
+            )
+
+        def generate(self, **kwargs):
+            captured["kwargs"] = kwargs
+            return torch.tensor([[1, 2, 3]])
+
+    monkeypatch.setattr(
+        backend,
+        "_generate_with_base_model",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("missing base-model decode support")),
+    )
+    monkeypatch.setattr(backend, "_extract_generated_completion_text", lambda full_text, input_text: "fallback text")
+
+    generated = backend._run_text_generation_attempt(
+        tokenizer=tokenizer,
+        text_encoder=_TextEncoder(),
+        encoded=encoded,
+        torch_module=torch,
+        generate_kwargs={
+            "max_new_tokens": 16,
+            "do_sample": True,
+            "temperature": 0.72,
+            "top_p": 0.92,
+            "repetition_penalty": 1.15,
+        },
+        generation_seed=789,
+    )
+
+    kwargs = captured["kwargs"]
+    generation_config = kwargs["generation_config"]
+    assert generated == "fallback text"
+    assert generation_config.do_sample is True
+    assert generation_config.temperature == pytest.approx(0.72)
+    assert generation_config.top_p == pytest.approx(0.92)
+    assert generation_config.top_k == 20
+    assert generation_config.repetition_penalty == pytest.approx(1.15)
+    assert kwargs["use_model_defaults"] is False
+    assert "do_sample" not in kwargs
+    assert "temperature" not in kwargs
+    assert "top_p" not in kwargs
+    assert "top_k" not in kwargs
+    assert "repetition_penalty" not in kwargs
+
+
 def test_refine_image_uses_effective_prompt_for_img2img(monkeypatch, temp_app_paths, make_app_settings) -> None:
     backend = _make_backend(temp_app_paths, make_app_settings)
     captured_calls: list[dict[str, object]] = []

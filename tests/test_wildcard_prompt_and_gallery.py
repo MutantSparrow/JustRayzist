@@ -157,6 +157,73 @@ def test_inference_generate_persists_wildcard_metadata(monkeypatch, temp_app_pat
     assert result["wildcard_count"] == 1
 
 
+def test_inference_generate_forwards_rplus_request_fields(monkeypatch, temp_app_paths, make_app_settings) -> None:
+    settings = make_app_settings(paths=temp_app_paths)
+    service = InferenceService(settings=settings)
+    captured: dict[str, object] = {}
+
+    fake_pack = SimpleNamespace(name="Rayzist_bf16", base_name="Rayzist_bf16", derived_strategy=None)
+
+    class _FakeSession:
+        def generate(self, request):
+            captured["request"] = request
+            return GenerationResult(
+                image=Image.new("RGB", (64, 64), color=(40, 80, 120)),
+                seed=request.seed,
+                steps=request.steps or 20,
+                guidance_scale=1.0,
+                scheduler_mode="euler",
+                backend="diffusers_zimage",
+                device="cpu",
+                duration_ms=123,
+                prompt_original=request.prompt,
+                prompt_wildcard_resolved=request.prompt,
+                prompt_effective=request.prompt,
+                prompt_enhanced=False,
+                prompt_effective_base=request.prompt,
+                inference_process=request.inference_process,
+            )
+
+        def runtime_status(self):
+            return {"backend": "diffusers_zimage"}
+
+    monkeypatch.setattr(service, "_resolve_runtime_pack", lambda pack_name: (fake_pack, fake_pack, settings.resource_tier))
+    monkeypatch.setattr(service, "_session_for_pack", lambda model_pack, resource_tier: _FakeSession())
+    monkeypatch.setattr("app.api.inference_service.append_generation_metric", lambda **kwargs: None)
+    monkeypatch.setattr(
+        "app.api.inference_service.save_png_with_metadata",
+        lambda **kwargs: kwargs["output_path"],
+    )
+    monkeypatch.setattr(
+        "app.api.inference_service.index_image",
+        lambda settings, image_path, owner_id=None: {
+            "filename": image_path.name,
+            "output_path": str(image_path),
+            "prompt": "portrait",
+        },
+    )
+
+    service.generate(
+        owner_id="example-client",
+        prompt="portrait",
+        width=64,
+        height=64,
+        seed=123,
+        steps=20,
+        inference_process="rplus",
+        procedural_creativity=2,
+        rplus_vibrance=0.75,
+        rplus_initial_bias_level=-0.5,
+    )
+
+    request = captured["request"]
+    assert request.steps == 20
+    assert request.inference_process == "rplus"
+    assert request.procedural_creativity == 2
+    assert request.rplus_vibrance == 0.75
+    assert request.rplus_initial_bias_level == -0.5
+
+
 def test_gallery_sync_persists_wildcard_metadata(monkeypatch, workspace_tmp_path: Path) -> None:
     root = workspace_tmp_path / "gallery-wildcard-metadata"
     monkeypatch.setenv("JUSTRAYZIST_ROOT", str(root))
@@ -174,6 +241,8 @@ def test_gallery_sync_persists_wildcard_metadata(monkeypatch, workspace_tmp_path
     metadata.add_text("width", "64")
     metadata.add_text("height", "64")
     metadata.add_text("model_pack", "Rayzist_bf16")
+    metadata.add_text("inference_process", "rplus")
+    metadata.add_text("procedural_creativity", "2")
     metadata.add_text(
         "wildcards_json",
         '[{"id":"abc123","display_name":"Picturesque Locations","token":"picturesque-locations","placeholder":"__picturesque-locations__","selected_entry":"a chalet in the French Alps","occurrence_index":0,"prompt_offset":9}]',
@@ -187,5 +256,7 @@ def test_gallery_sync_persists_wildcard_metadata(monkeypatch, workspace_tmp_path
     row = get_image(settings, "sample.png")
     assert row is not None
     assert row["prompt_wildcard_resolved"] == "portrait a chalet in the French Alps"
+    assert row["inference_process"] == "rplus"
+    assert row["procedural_creativity"] == 2
     assert '"selected_entry":"a chalet in the French Alps"' in row["wildcards_json"]
     assert row["wildcard_count"] == 1

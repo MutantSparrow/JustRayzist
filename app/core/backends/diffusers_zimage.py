@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 import math
 import re
@@ -28,7 +29,12 @@ from app.core.model_registry import ModelPack
 from app.core.platform_guidance import setup_repair_hint
 from app.core.pipeline_factory import LoadedZImagePipeline, build_zimage_pipeline
 from app.core.upscale import upscale_image
-from app.core.worker.types import GenerationRequest, LoraSelection, resolve_procedural_creativity
+from app.core.worker.types import (
+    GenerationRequest,
+    LoraSelection,
+    resolve_inference_process,
+    resolve_procedural_creativity,
+)
 from app.storage.wildcard_library import normalize_wildcard_entry_value
 
 LOGGER = logging.getLogger(__name__)
@@ -126,6 +132,19 @@ class GenerationResult:
     loras: tuple[dict[str, Any], ...] = ()
     lora_count: int = 0
     lora_trigger_words: tuple[str, ...] = ()
+    inference_process: str = "standard"
+    rplus_vibrance: float | None = None
+    rplus_initial_bias_level: float | None = None
+    rplus_initial_sample_size: int | str | None = None
+    rplus_effective_initial_noise_bias_level: float | None = None
+    rplus_stage3_seed: int | None = None
+    rplus_stage_count: int | None = None
+    rplus_stage1_steps: int | None = None
+    rplus_stage2_steps: int | None = None
+    rplus_stage3_steps: int | None = None
+    rplus_stage1_ran: bool | None = None
+    rplus_stage2_ran: bool | None = None
+    rplus_stage3_ran: bool | None = None
 
     def telemetry_dict(self) -> dict[str, Any]:
         return {
@@ -133,6 +152,7 @@ class GenerationResult:
             "steps": self.steps,
             "guidance_scale": self.guidance_scale,
             "scheduler_mode": self.scheduler_mode,
+            "inference_process": self.inference_process,
             "backend": self.backend,
             "device": self.device,
             "duration_ms": self.duration_ms,
@@ -211,15 +231,43 @@ class GenerationResult:
             "loras": [dict(item) for item in self.loras],
             "lora_count": self.lora_count,
             "lora_trigger_words": list(self.lora_trigger_words),
+            "rplus_vibrance": self.rplus_vibrance,
+            "rplus_initial_bias_level": self.rplus_initial_bias_level,
+            "rplus_initial_sample_size": self.rplus_initial_sample_size,
+            "rplus_effective_initial_noise_bias_level": self.rplus_effective_initial_noise_bias_level,
+            "rplus_stage3_seed": self.rplus_stage3_seed,
+            "rplus_stage_count": self.rplus_stage_count,
+            "rplus_stage1_steps": self.rplus_stage1_steps,
+            "rplus_stage2_steps": self.rplus_stage2_steps,
+            "rplus_stage3_steps": self.rplus_stage3_steps,
+            "rplus_stage1_ran": self.rplus_stage1_ran,
+            "rplus_stage2_ran": self.rplus_stage2_ran,
+            "rplus_stage3_ran": self.rplus_stage3_ran,
         }
 
 
 class DiffusersZImageBackend:
     BACKEND_NAME = "diffusers_zimage"
+    _INFERENCE_PROCESS_STANDARD = "standard"
+    _INFERENCE_PROCESS_RPLUS = "rplus"
     _SCHEDULER_EULER = "euler"
     _SCHEDULER_DPM_MANUAL = "dpm"
     _SCHEDULER_DPM_EXP_LIGHT = "dpm_exp_light"
     _SCHEDULER_DPM_DDIM = "dpm_ddim"
+    _RPLUS_STAGE3_SEED = 37_717
+    _RPLUS_SIGMA_PRESET_BRAVO: dict[int, tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...]]] = {
+        3: ((0.991, 0.920), (0.942, 0.000), (0.710, 0.000)),
+        4: ((0.991, 0.920), (0.935, 0.789, 0.000), (0.710, 0.000)),
+        5: ((0.991, 0.920), (0.935, 0.789, 0.000), (0.658, 0.302, 0.000)),
+        6: ((0.991, 0.920), (0.935, 0.770, 0.690, 0.000), (0.658, 0.302, 0.000)),
+        7: ((0.991, 0.920), (0.935, 0.900, 0.875, 0.800, 0.000), (0.658, 0.302, 0.000)),
+        8: ((0.991, 0.920), (0.935, 0.900, 0.875, 0.820, 0.750, 0.000), (0.658, 0.302, 0.000)),
+        9: (
+            (0.991, 0.920),
+            (0.935, 0.900, 0.875, 0.820, 0.750, 0.000),
+            (0.658, 0.4556, 0.200, 0.000),
+        ),
+    }
     _HIGH_MODE_AUTO = "auto"
     _HIGH_MODE_FULL_CUDA = "full_cuda"
     _HIGH_MODE_MODEL_OFFLOAD = "model_offload"
@@ -964,6 +1012,299 @@ class DiffusersZImageBackend:
                 f"(vae_scale_factor={vae_scale_factor})."
             )
         return latent_height, latent_width
+
+    @staticmethod
+    def _rplus_step_count(sigmas: list[float] | tuple[float, ...] | None) -> int:
+        if not sigmas:
+            return 0
+        return max(0, len(sigmas) - 1)
+
+    @classmethod
+    def _rplus_refine_sigma_sequence(
+        cls,
+        sigmas: list[float] | tuple[float, ...],
+        inserts: int,
+    ) -> list[float]:
+        refined = [float(value) for value in sigmas]
+        for _ in range(max(0, int(inserts))):
+            if len(refined) < 2:
+                break
+            insert_index = max(
+                range(len(refined) - 1),
+                key=lambda idx: abs(refined[idx] - refined[idx + 1]),
+            )
+            midpoint = 0.5 * (refined[insert_index] + refined[insert_index + 1])
+            refined.insert(insert_index + 1, float(midpoint))
+        return refined
+
+    @classmethod
+    def _rplus_bravo_sigmas(cls, steps: int) -> tuple[list[float], list[float], list[float]]:
+        normalized_steps = max(3, int(steps))
+        preset_steps = min(9, normalized_steps)
+        sigmas1, sigmas2, sigmas3 = cls._RPLUS_SIGMA_PRESET_BRAVO[preset_steps]
+        stage1 = [float(value) for value in sigmas1]
+        stage2 = [float(value) for value in sigmas2]
+        stage3 = [float(value) for value in sigmas3]
+        if normalized_steps > 9:
+            additional_steps = normalized_steps - 9
+            stage2 = cls._rplus_refine_sigma_sequence(stage2, int(0.4 + (0.6 * additional_steps)))
+            stage3 = cls._rplus_refine_sigma_sequence(stage3, additional_steps - (len(stage2) - len(sigmas2)))
+        return stage1, stage2, stage3
+
+    @staticmethod
+    def _rplus_normalize_sample_size(value: int | str | None) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            sample_size = int(value)
+            if sample_size < 64:
+                raise ValueError("rplus_initial_sample_size must be at least 64 pixels.")
+            return sample_size
+
+        normalized = str(value).strip().lower()
+        if normalized in {"", "full_size", "full", "image_size"}:
+            return None
+        if normalized.endswith("px"):
+            normalized = normalized[:-2]
+        if normalized.isdigit():
+            sample_size = int(normalized)
+            if sample_size < 64:
+                raise ValueError("rplus_initial_sample_size must be at least 64 pixels.")
+            return sample_size
+        raise ValueError(
+            "rplus_initial_sample_size must be an integer pixel value or 'full_size'."
+        )
+
+    @staticmethod
+    def _rplus_effective_initial_noise_bias_level(vibrance: float, bias_adjust: float) -> float:
+        bias_level = ((float(vibrance) + 1.0) * 4.0) - 1.0
+        bias_level = min(max(bias_level, 0.0), 4.0)
+        bias_level += 10.0 * float(bias_adjust)
+        return float(min(max(bias_level, -6.0), 14.0))
+
+    @classmethod
+    def _rplus_truncate_sigmas_by_value_range(
+        cls,
+        sigmas: list[float] | None,
+        sigma_limits: tuple[float, float] | list[float] | None,
+    ) -> list[float] | None:
+        if not sigmas:
+            return None
+        if sigma_limits is None:
+            return list(sigmas)
+
+        lower = float(min(sigma_limits))
+        upper = float(max(sigma_limits))
+        truncated: list[float] = []
+        for index in range(len(sigmas) - 1):
+            current = float(sigmas[index])
+            next_value = float(sigmas[index + 1])
+            if not truncated:
+                if lower <= current <= upper:
+                    truncated.append(current)
+                elif current > upper >= next_value:
+                    truncated.append(upper)
+                elif current < lower <= next_value:
+                    truncated.append(lower)
+            if not truncated:
+                continue
+            if lower <= next_value <= upper:
+                truncated.append(next_value)
+                continue
+            if next_value < lower <= current:
+                truncated.append(lower)
+                break
+            if next_value > upper >= current:
+                truncated.append(upper)
+                break
+        if len(truncated) < 2:
+            return None
+        return truncated
+
+    @staticmethod
+    def _rplus_merge_sigma_stages(primary: list[float] | None, secondary: list[float] | None) -> list[float] | None:
+        if primary is None:
+            return secondary
+        if secondary is None:
+            return primary
+        merged = list(primary)
+        if merged[-1] == secondary[0]:
+            merged.extend(secondary[1:])
+        else:
+            merged.extend(secondary)
+        return merged
+
+    @classmethod
+    def _rplus_prepare_stage_sigmas(
+        cls,
+        *,
+        steps: int,
+        sigma_limits: tuple[float, float] | list[float] | None = None,
+    ) -> tuple[list[float] | None, list[float] | None, list[float] | None, bool]:
+        sigmas1, sigmas2, sigmas3 = cls._rplus_bravo_sigmas(steps)
+        original_sigmas3 = list(sigmas3)
+        if sigma_limits is not None:
+            sigmas1 = cls._rplus_truncate_sigmas_by_value_range(sigmas1, sigma_limits)
+            sigmas2 = cls._rplus_truncate_sigmas_by_value_range(sigmas2, sigma_limits)
+            sigmas3 = cls._rplus_truncate_sigmas_by_value_range(sigmas3, sigma_limits)
+            sigmas1 = cls._rplus_merge_sigma_stages(sigmas1, sigmas2)
+            sigmas2 = None
+        add_noise_stage3 = bool(sigmas3 and original_sigmas3 and sigmas3[0] == original_sigmas3[0])
+        return sigmas1, sigmas2, sigmas3, add_noise_stage3
+
+    @staticmethod
+    def _rplus_prepare_prompt_embeds(pipe: Any, prompt: str, device: Any) -> list[Any]:
+        prompt_embeds, _negative_prompt_embeds = pipe.encode_prompt(
+            prompt=prompt,
+            negative_prompt=None,
+            do_classifier_free_guidance=False,
+            prompt_embeds=None,
+            negative_prompt_embeds=None,
+            device=device,
+            max_sequence_length=512,
+        )
+        return prompt_embeds
+
+    @staticmethod
+    def _rplus_prepare_noise_like(
+        latents: Any,
+        *,
+        torch_module: Any,
+        seed: int,
+    ) -> Any:
+        generator = DiffusersZImageBackend._build_generator(
+            torch_module,
+            str(latents.device),
+            seed,
+        )
+        return torch_module.randn(
+            latents.shape,
+            generator=generator,
+            dtype=latents.dtype,
+            device=latents.device,
+        )
+
+    @staticmethod
+    def _rplus_scheduler_mu(pipe: Any, latents: Any) -> float:
+        from diffusers.pipelines.z_image.pipeline_z_image import calculate_shift
+
+        image_seq_len = (latents.shape[2] // 2) * (latents.shape[3] // 2)
+        return float(
+            calculate_shift(
+                image_seq_len,
+                pipe.scheduler.config.get("base_image_seq_len", 256),
+                pipe.scheduler.config.get("max_image_seq_len", 4096),
+                pipe.scheduler.config.get("base_shift", 0.5),
+                pipe.scheduler.config.get("max_shift", 1.15),
+            )
+        )
+
+    @classmethod
+    def _rplus_prepare_schedule(cls, pipe: Any, latents: Any, sigmas: list[float]) -> Any:
+        from diffusers.pipelines.z_image.pipeline_z_image import retrieve_timesteps
+
+        pipe.scheduler.sigma_min = 0.0
+        timesteps, _ = retrieve_timesteps(
+            pipe.scheduler,
+            None,
+            latents.device,
+            sigmas=sigmas,
+            mu=cls._rplus_scheduler_mu(pipe, latents),
+        )
+        return timesteps
+
+    @classmethod
+    def _rplus_apply_stage_noise(
+        cls,
+        *,
+        pipe: Any,
+        latents: Any,
+        sigmas: list[float],
+        noise: Any,
+    ) -> Any:
+        timesteps = cls._rplus_prepare_schedule(pipe, latents, sigmas)
+        latent_timestep = timesteps[:1].repeat(latents.shape[0])
+        return pipe.scheduler.scale_noise(latents, latent_timestep, noise)
+
+    @classmethod
+    def _rplus_denoise_latents(
+        cls,
+        *,
+        pipe: Any,
+        latents: Any,
+        prompt_embeds: list[Any],
+        sigmas: list[float],
+        torch_module: Any,
+    ) -> Any:
+        timesteps = cls._rplus_prepare_schedule(pipe, latents, sigmas)
+        active_timesteps = timesteps[: cls._rplus_step_count(sigmas)]
+        for timestep_value in active_timesteps:
+            if getattr(pipe, "interrupt", False):
+                continue
+            timestep = timestep_value.expand(latents.shape[0])
+            timestep = (1000 - timestep) / 1000
+            latent_model_input = latents.to(pipe.transformer.dtype).unsqueeze(2)
+            latent_model_input_list = list(latent_model_input.unbind(dim=0))
+            model_out_list = pipe.transformer(
+                latent_model_input_list,
+                timestep,
+                prompt_embeds,
+                return_dict=False,
+            )[0]
+            noise_pred = torch_module.stack([item.float() for item in model_out_list], dim=0).squeeze(2)
+            noise_pred = -noise_pred
+            latents = pipe.scheduler.step(
+                noise_pred.to(torch_module.float32),
+                timestep_value,
+                latents,
+                return_dict=False,
+            )[0]
+        return latents
+
+    @staticmethod
+    def _rplus_decode_latents(pipe: Any, latents: Any) -> Image.Image:
+        decoded_latents = latents.to(pipe.vae.dtype)
+        decoded_latents = (decoded_latents / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
+        image = pipe.vae.decode(decoded_latents, return_dict=False)[0]
+        return pipe.image_processor.postprocess(image, output_type="pil")[0]
+
+    @classmethod
+    def _rplus_estimate_initial_noise_features(
+        cls,
+        *,
+        pipe: Any,
+        prompt: str,
+        width: int,
+        height: int,
+        stage1_sigma: float,
+        seed: int | None,
+        sample_size: int | None,
+        torch_module: Any,
+    ) -> tuple[Any, Any]:
+        sample_width = int(sample_size or width)
+        sample_height = int(sample_size or height)
+        prompt_embeds = cls._rplus_prepare_prompt_embeds(pipe, prompt, pipe._execution_device)
+        probe_generator = cls._build_generator(torch_module, str(pipe._execution_device), seed)
+        probe_latents = pipe.prepare_latents(
+            1,
+            pipe.transformer.in_channels,
+            sample_height,
+            sample_width,
+            torch_module.float32,
+            pipe._execution_device,
+            probe_generator,
+            None,
+        )
+        probe_latents = cls._rplus_denoise_latents(
+            pipe=pipe,
+            latents=probe_latents,
+            prompt_embeds=prompt_embeds,
+            sigmas=[1.0, float(stage1_sigma)],
+            torch_module=torch_module,
+        )
+        bias = probe_latents.mean(dim=(2, 3), keepdim=True)
+        scale = probe_latents.std(dim=(2, 3), keepdim=True, unbiased=False).clamp_min(cls._RANDOM_LATENT_STD_EPS)
+        return bias, scale
 
     @classmethod
     def _normalize_and_mix_latent(
@@ -1915,11 +2256,95 @@ class DiffusersZImageBackend:
     @staticmethod
     def _resolve_module_device(module: Any) -> Any:
         if hasattr(module, "device"):
-            return module.device
+            device = module.device
+            if str(getattr(device, "type", "")) != "meta":
+                return device
         try:
-            return next(module.parameters()).device
+            device = next(module.parameters()).device
+            if str(getattr(device, "type", "")) != "meta":
+                return device
         except Exception:
-            return None
+            pass
+        try:
+            embed_layer = module.get_input_embeddings()
+            if embed_layer is not None and hasattr(embed_layer, "weight"):
+                device = getattr(embed_layer.weight, "device", None)
+                if str(getattr(device, "type", "")) != "meta":
+                    return device
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _move_encoded_to_module_device(encoded: dict[str, Any], module: Any) -> dict[str, Any]:
+        device = DiffusersZImageBackend._resolve_module_device(module)
+        if device is None:
+            return dict(encoded)
+        moved: dict[str, Any] = {}
+        for key, value in encoded.items():
+            if hasattr(value, "to"):
+                try:
+                    moved[key] = value.to(device)
+                    continue
+                except Exception:
+                    pass
+            moved[key] = value
+        return moved
+
+    @staticmethod
+    def _build_generate_fallback_kwargs(text_encoder: Any, generate_kwargs: dict[str, Any]) -> dict[str, Any]:
+        fallback_kwargs = dict(generate_kwargs)
+        generation_config = getattr(text_encoder, "generation_config", None)
+        if generation_config is None:
+            return fallback_kwargs
+
+        do_sample = bool(fallback_kwargs.pop("do_sample", getattr(generation_config, "do_sample", False)))
+        temperature = float(fallback_kwargs.pop("temperature", getattr(generation_config, "temperature", 1.0)))
+        top_p = float(fallback_kwargs.pop("top_p", getattr(generation_config, "top_p", 1.0)))
+        raw_top_k = fallback_kwargs.pop("top_k", getattr(generation_config, "top_k", 50))
+        repetition_penalty = float(
+            fallback_kwargs.pop("repetition_penalty", getattr(generation_config, "repetition_penalty", 1.0))
+        )
+        fallback_kwargs["use_model_defaults"] = False
+        top_k = 50
+        try:
+            if raw_top_k is not None:
+                top_k = int(raw_top_k)
+        except (TypeError, ValueError):
+            top_k = 50
+
+        try:
+            from transformers import GenerationConfig
+        except ImportError:
+            try:
+                fallback_config = copy.deepcopy(generation_config)
+            except Exception:
+                return fallback_kwargs
+            setattr(fallback_config, "do_sample", do_sample)
+            setattr(fallback_config, "temperature", max(temperature, 1e-5) if do_sample else 1.0)
+            setattr(fallback_config, "top_p", top_p if do_sample else 1.0)
+            setattr(fallback_config, "top_k", max(0, top_k) if do_sample else 50)
+            setattr(fallback_config, "repetition_penalty", repetition_penalty)
+            fallback_kwargs["generation_config"] = fallback_config
+            return fallback_kwargs
+
+        config_kwargs: dict[str, Any] = {
+            "do_sample": do_sample,
+            "temperature": max(temperature, 1e-5) if do_sample else 1.0,
+            "top_p": top_p if do_sample else 1.0,
+            "top_k": max(0, top_k) if do_sample else 50,
+            "repetition_penalty": repetition_penalty,
+        }
+        for source in (generation_config, getattr(text_encoder, "config", None)):
+            if source is None:
+                continue
+            for key in ("pad_token_id", "bos_token_id", "eos_token_id", "decoder_start_token_id"):
+                value = getattr(source, key, None)
+                if value is not None and key not in config_kwargs:
+                    config_kwargs[key] = value
+
+        fallback_kwargs["generation_config"] = GenerationConfig(**config_kwargs)
+        return fallback_kwargs
 
     @staticmethod
     def _build_rewrite_prompt(tokenizer: Any, prompt: str) -> str:
@@ -2407,9 +2832,11 @@ class DiffusersZImageBackend:
                 decode_exc,
             )
             try:
+                fallback_encoded = self._move_encoded_to_module_device(encoded, text_encoder)
+                fallback_kwargs = self._build_generate_fallback_kwargs(text_encoder, generate_kwargs)
                 with self._seeded_rng_context(torch_module, generation_seed):
                     with torch_module.inference_mode():
-                        output_ids = text_encoder.generate(**encoded, **generate_kwargs)
+                        output_ids = text_encoder.generate(**fallback_encoded, **fallback_kwargs)
             except Exception as exc:
                 LOGGER.warning(
                     "Wildcard suggestion base-model decode failed and text_encoder.generate() fallback also failed. "
@@ -2503,10 +2930,7 @@ class DiffusersZImageBackend:
             except Exception as exc:
                 raise ValueError(f"Wildcard suggestion tokenizer failed: {exc}") from exc
 
-            model_device = self._resolve_module_device(text_encoder)
-            model_device_type = str(getattr(model_device, "type", ""))
-            if model_device is not None and model_device_type != "meta":
-                encoded = {key: value.to(model_device) for key, value in encoded.items()}
+            encoded = self._move_encoded_to_module_device(encoded, text_encoder)
 
             generate_kwargs: dict[str, Any] = {
                 "max_new_tokens": 256,
@@ -2585,10 +3009,7 @@ class DiffusersZImageBackend:
             LOGGER.warning("Prompt enhancement tokenizer failed; using original prompt. %s", exc)
             return prompt
 
-        model_device = self._resolve_module_device(text_encoder)
-        model_device_type = str(getattr(model_device, "type", ""))
-        if model_device is not None and model_device_type != "meta":
-            encoded = {key: value.to(model_device) for key, value in encoded.items()}
+        encoded = self._move_encoded_to_module_device(encoded, text_encoder)
 
         pad_token_id = getattr(tokenizer, "pad_token_id", None)
         eos_token_id = getattr(tokenizer, "eos_token_id", None)
@@ -3185,9 +3606,11 @@ class DiffusersZImageBackend:
                 decode_exc,
             )
             try:
+                fallback_encoded = self._move_encoded_to_module_device(encoded, text_encoder)
+                fallback_kwargs = self._build_generate_fallback_kwargs(text_encoder, generate_kwargs)
                 with self._seeded_rng_context(torch_module, enhancement_seed):
                     with torch_module.inference_mode():
-                        output_ids = text_encoder.generate(**encoded, **generate_kwargs)
+                        output_ids = text_encoder.generate(**fallback_encoded, **fallback_kwargs)
             except Exception as exc:
                 LOGGER.warning(
                     "Prompt enhancement base-model decode failed and text_encoder.generate() fallback also failed. "
@@ -3226,6 +3649,7 @@ class DiffusersZImageBackend:
         if embed_layer is None or not hasattr(embed_layer, "weight"):
             raise ValueError("text_encoder input embedding weights are unavailable.")
 
+        encoded = DiffusersZImageBackend._move_encoded_to_module_device(encoded, text_encoder)
         input_ids = encoded["input_ids"]
         attention_mask = encoded.get("attention_mask")
         past_key_values = None
@@ -3508,23 +3932,136 @@ class DiffusersZImageBackend:
                 self._clear_cuda_cache(torch_module)
         raise RuntimeError("Unreachable OOM fallback state.")
 
+    def _run_rplus_generate(
+        self,
+        *,
+        pipe: Any,
+        request: GenerationRequest,
+        prompt_effective: str,
+        procedural_latents: Any,
+        torch_module: Any,
+    ) -> tuple[Image.Image, dict[str, Any]]:
+        scheduler_mode = self._apply_scheduler_mode(pipe, self._SCHEDULER_EULER)
+        device = pipe._execution_device
+        prompt_embeds = self._rplus_prepare_prompt_embeds(pipe, prompt_effective, device)
+        sigmas1, sigmas2, sigmas3, add_noise_stage3 = self._rplus_prepare_stage_sigmas(
+            steps=request.steps or self._settings.runtime_profile.steps_default
+        )
+        active_stages = [
+            ("stage1", sigmas1),
+            ("stage2", sigmas2),
+            ("stage3", sigmas3),
+        ]
+        active_stages = [(name, sigmas) for name, sigmas in active_stages if sigmas is not None]
+        if not active_stages:
+            raise ValueError("Rplus sigma schedule resolved to zero active stages.")
+
+        effective_bias_level = self._rplus_effective_initial_noise_bias_level(
+            request.rplus_vibrance,
+            request.rplus_initial_bias_level,
+        )
+        normalized_sample_size = self._rplus_normalize_sample_size(request.rplus_initial_sample_size)
+
+        if procedural_latents is not None:
+            current_latents = procedural_latents.to(device=device, dtype=torch_module.float32)
+        else:
+            generator = self._build_generator(torch_module, str(device), request.seed)
+            current_latents = pipe.prepare_latents(
+                1,
+                pipe.transformer.in_channels,
+                request.height,
+                request.width,
+                torch_module.float32,
+                device,
+                generator,
+                None,
+            )
+            current_latents = current_latents * (1.0 + (float(request.rplus_vibrance) * 0.4))
+            if effective_bias_level != 0.0 and sigmas1:
+                bias, scale = self._rplus_estimate_initial_noise_features(
+                    pipe=pipe,
+                    prompt=prompt_effective,
+                    width=request.width,
+                    height=request.height,
+                    stage1_sigma=float(sigmas1[0]),
+                    seed=request.seed,
+                    sample_size=normalized_sample_size,
+                    torch_module=torch_module,
+                )
+                current_latents = current_latents + (
+                    (bias / scale) * effective_bias_level
+                ).to(device=current_latents.device, dtype=current_latents.dtype)
+
+        stage_steps = {
+            "stage1": self._rplus_step_count(sigmas1),
+            "stage2": self._rplus_step_count(sigmas2),
+            "stage3": self._rplus_step_count(sigmas3),
+        }
+        for stage_name, sigmas in active_stages:
+            if stage_name == "stage3" and add_noise_stage3:
+                current_latents = self._rplus_apply_stage_noise(
+                    pipe=pipe,
+                    latents=current_latents,
+                    sigmas=sigmas,
+                    noise=self._rplus_prepare_noise_like(
+                        current_latents,
+                        torch_module=torch_module,
+                        seed=self._RPLUS_STAGE3_SEED,
+                    ),
+                )
+            current_latents = self._rplus_denoise_latents(
+                pipe=pipe,
+                latents=current_latents,
+                prompt_embeds=prompt_embeds,
+                sigmas=sigmas,
+                torch_module=torch_module,
+            )
+
+        image = self._rplus_decode_latents(pipe, current_latents)
+        if hasattr(pipe, "maybe_free_model_hooks"):
+            pipe.maybe_free_model_hooks()
+        telemetry = {
+            "scheduler_mode": scheduler_mode,
+            "guidance_scale": 1.0,
+            "rplus_effective_initial_noise_bias_level": effective_bias_level,
+            "rplus_initial_sample_size": (
+                request.rplus_initial_sample_size
+                if request.rplus_initial_sample_size is not None
+                else "full_size"
+            ),
+            "rplus_stage3_seed": self._RPLUS_STAGE3_SEED,
+            "rplus_stage_count": len(active_stages),
+            "rplus_stage1_steps": stage_steps["stage1"],
+            "rplus_stage2_steps": stage_steps["stage2"],
+            "rplus_stage3_steps": stage_steps["stage3"],
+            "rplus_stage1_ran": sigmas1 is not None,
+            "rplus_stage2_ran": sigmas2 is not None,
+            "rplus_stage3_ran": sigmas3 is not None,
+        }
+        return image, telemetry
+
     def generate(self, request: GenerationRequest) -> GenerationResult:
         loaded = self._ensure_loaded()
         pipe = loaded.pipeline
+        inference_process = resolve_inference_process(inference_process=request.inference_process)
         effective_procedural_creativity = resolve_procedural_creativity(
             procedural_creativity=request.procedural_creativity
         )
         requested_scheduler_mode = self._normalize_scheduler_mode(request.scheduler_mode)
-        effective_scheduler_mode, procedural_latent_scheduler_forced = self._resolve_generate_scheduler_mode(
-            requested_mode=requested_scheduler_mode,
-            procedural_creativity=effective_procedural_creativity,
-        )
-        scheduler_mode = self._apply_scheduler_mode(pipe, effective_scheduler_mode)
+        procedural_latent_scheduler_forced = False
+        if inference_process == self._INFERENCE_PROCESS_RPLUS:
+            scheduler_mode = self._apply_scheduler_mode(pipe, self._SCHEDULER_EULER)
+        else:
+            effective_scheduler_mode, procedural_latent_scheduler_forced = self._resolve_generate_scheduler_mode(
+                requested_mode=requested_scheduler_mode,
+                procedural_creativity=effective_procedural_creativity,
+            )
+            scheduler_mode = self._apply_scheduler_mode(pipe, effective_scheduler_mode)
 
         import torch
 
         steps = request.steps or self._settings.runtime_profile.steps_default
-        guidance_scale = (
+        guidance_scale = 1.0 if inference_process == self._INFERENCE_PROCESS_RPLUS else (
             request.guidance_scale
             if request.guidance_scale is not None
             else self._settings.runtime_profile.guidance_scale_default
@@ -3603,42 +4140,56 @@ class DiffusersZImageBackend:
         execution_mode_before_generate = self._effective_execution_mode
         cuda_free_before_generate, _ = self._cuda_free_total_snapshot(torch)
         started = now_perf()
+        rplus_telemetry: dict[str, Any] = {}
         try:
             with torch.inference_mode():
                 if request.loras:
                     self._load_lora_adapters(pipe, request.loras)
-                try:
-                    output = pipe(
-                        prompt=prompt_effective,
-                        width=request.width,
-                        height=request.height,
-                        num_inference_steps=steps,
-                        guidance_scale=guidance_scale,
-                        generator=generator,
-                        latents=procedural_latents,
+                setattr(pipe, "_interrupt", False)
+                if inference_process == self._INFERENCE_PROCESS_RPLUS:
+                    image, rplus_telemetry = self._run_rplus_generate(
+                        pipe=pipe,
+                        request=request,
+                        prompt_effective=prompt_effective,
+                        procedural_latents=procedural_latents,
+                        torch_module=torch,
                     )
-                except (RuntimeError, ValueError, FloatingPointError) as exc:
-                    retry_mode = self._resolve_scheduler_retry_mode(scheduler_mode, exc)
-                    if retry_mode is None:
-                        raise
-                    LOGGER.warning(
-                        "Scheduler mode %s failed for pack %s (%s). Retrying once with %s.",
-                        scheduler_mode,
-                        getattr(self._model_pack, "name", "<unknown-pack>"),
-                        exc,
-                        retry_mode,
-                    )
-                    self._clear_cuda_cache(torch)
-                    scheduler_mode = self._apply_scheduler_mode(pipe, retry_mode)
-                    output = pipe(
-                        prompt=prompt_effective,
-                        width=request.width,
-                        height=request.height,
-                        num_inference_steps=steps,
-                        guidance_scale=guidance_scale,
-                        generator=generator,
-                        latents=procedural_latents,
-                    )
+                    scheduler_mode = str(rplus_telemetry["scheduler_mode"])
+                    guidance_scale = float(rplus_telemetry["guidance_scale"])
+                    output = None
+                else:
+                    try:
+                        output = pipe(
+                            prompt=prompt_effective,
+                            width=request.width,
+                            height=request.height,
+                            num_inference_steps=steps,
+                            guidance_scale=guidance_scale,
+                            generator=generator,
+                            latents=procedural_latents,
+                        )
+                    except (RuntimeError, ValueError, FloatingPointError) as exc:
+                        retry_mode = self._resolve_scheduler_retry_mode(scheduler_mode, exc)
+                        if retry_mode is None:
+                            raise
+                        LOGGER.warning(
+                            "Scheduler mode %s failed for pack %s (%s). Retrying once with %s.",
+                            scheduler_mode,
+                            getattr(self._model_pack, "name", "<unknown-pack>"),
+                            exc,
+                            retry_mode,
+                        )
+                        self._clear_cuda_cache(torch)
+                        scheduler_mode = self._apply_scheduler_mode(pipe, retry_mode)
+                        output = pipe(
+                            prompt=prompt_effective,
+                            width=request.width,
+                            height=request.height,
+                            num_inference_steps=steps,
+                            guidance_scale=guidance_scale,
+                            generator=generator,
+                            latents=procedural_latents,
+                        )
         finally:
             if active_lora_ids:
                 self._clear_lora_adapters(pipe, adapter_names=active_lora_ids)
@@ -3650,7 +4201,8 @@ class DiffusersZImageBackend:
         cuda_free_after_generate, _ = self._cuda_free_total_snapshot(torch)
         self._apply_high_runtime_fallback_if_needed(post_mem=post_mem, torch_module=torch)
         execution_mode_after_generate = self._effective_execution_mode
-        image = output.images[0]
+        if inference_process == self._INFERENCE_PROCESS_STANDARD:
+            image = output.images[0]
         selected_pack = getattr(self._model_pack, "base_name", None) or getattr(self._model_pack, "name", None)
         return GenerationResult(
             image=image,
@@ -3658,6 +4210,7 @@ class DiffusersZImageBackend:
             steps=steps,
             guidance_scale=guidance_scale,
             scheduler_mode=scheduler_mode,
+            inference_process=inference_process,
             backend=self._backend_name,
             device=loaded.device,
             duration_ms=duration_ms,
@@ -3711,6 +4264,60 @@ class DiffusersZImageBackend:
             loras=lora_payload,
             lora_count=len(lora_payload),
             lora_trigger_words=lora_trigger_words,
+            rplus_vibrance=request.rplus_vibrance if inference_process == self._INFERENCE_PROCESS_RPLUS else None,
+            rplus_initial_bias_level=(
+                request.rplus_initial_bias_level if inference_process == self._INFERENCE_PROCESS_RPLUS else None
+            ),
+            rplus_initial_sample_size=(
+                rplus_telemetry.get("rplus_initial_sample_size")
+                if inference_process == self._INFERENCE_PROCESS_RPLUS
+                else None
+            ),
+            rplus_effective_initial_noise_bias_level=(
+                rplus_telemetry.get("rplus_effective_initial_noise_bias_level")
+                if inference_process == self._INFERENCE_PROCESS_RPLUS
+                else None
+            ),
+            rplus_stage3_seed=(
+                rplus_telemetry.get("rplus_stage3_seed")
+                if inference_process == self._INFERENCE_PROCESS_RPLUS
+                else None
+            ),
+            rplus_stage_count=(
+                rplus_telemetry.get("rplus_stage_count")
+                if inference_process == self._INFERENCE_PROCESS_RPLUS
+                else None
+            ),
+            rplus_stage1_steps=(
+                rplus_telemetry.get("rplus_stage1_steps")
+                if inference_process == self._INFERENCE_PROCESS_RPLUS
+                else None
+            ),
+            rplus_stage2_steps=(
+                rplus_telemetry.get("rplus_stage2_steps")
+                if inference_process == self._INFERENCE_PROCESS_RPLUS
+                else None
+            ),
+            rplus_stage3_steps=(
+                rplus_telemetry.get("rplus_stage3_steps")
+                if inference_process == self._INFERENCE_PROCESS_RPLUS
+                else None
+            ),
+            rplus_stage1_ran=(
+                rplus_telemetry.get("rplus_stage1_ran")
+                if inference_process == self._INFERENCE_PROCESS_RPLUS
+                else None
+            ),
+            rplus_stage2_ran=(
+                rplus_telemetry.get("rplus_stage2_ran")
+                if inference_process == self._INFERENCE_PROCESS_RPLUS
+                else None
+            ),
+            rplus_stage3_ran=(
+                rplus_telemetry.get("rplus_stage3_ran")
+                if inference_process == self._INFERENCE_PROCESS_RPLUS
+                else None
+            ),
         )
 
     def upscale_and_refine(self, input_image: object, request: GenerationRequest) -> GenerationResult:

@@ -118,18 +118,10 @@
       </div>
 
       <div class="setting-group setting-group-reference">
-        <label>Image Reference</label>
         <input id="reference-image-input" type="file" accept="image/*" hidden>
         <div id="reference-image-controls" class="reference-image-controls">
           <button id="reference-image-add" class="reference-image-add" type="button">
-            <span class="reference-image-add-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" focusable="false">
-                <path d="M12 5v14"></path>
-                <path d="M5 12h14"></path>
-                <path d="M5 5h5"></path>
-                <path d="M19 19h-5"></path>
-              </svg>
-            </span>
+            <span class="reference-image-add-icon lora-add-plus" aria-hidden="true">+</span>
             <span class="reference-image-add-copy">
               <span class="reference-image-add-title">ADD IMAGE REFERENCE</span>
               <span class="reference-image-add-hint">Click or drag and drop one image</span>
@@ -156,24 +148,70 @@
         </div>
       </div>
 
-      <div class="setting-group">
-        <label>Freeze Seed</label>
-        <button id="freeze-seed-button" class="toggle-seed-button" type="button">FREEZE SEED: OFF</button>
-      </div>
-
-      <div class="setting-group">
-        <label for="procedural-latent-slider">Creative Mode</label>
-        <div id="procedural-latent-setting" class="slider-setting">
-          <input id="procedural-latent-slider" class="slider-setting-input" type="range" min="0" max="3" step="1" value="0" />
-          <div id="procedural-latent-value" class="slider-setting-value">OFF</div>
+      <div class="settings-row settings-row-split">
+        <div class="setting-group">
+          <button id="freeze-seed-button" class="toggle-seed-button" type="button">FREEZE SEED: OFF</button>
+        </div>
+        <div class="setting-group">
+          <button id="prompt-enhance-button" class="toggle-seed-button" type="button">
+            PROMPT ENHANCER: OFF
+          </button>
         </div>
       </div>
 
       <div class="setting-group">
-        <label>Prompt Enhancer</label>
-        <button id="prompt-enhance-button" class="toggle-seed-button" type="button">
-          PROMPT ENHANCER: OFF
-        </button>
+        <div id="procedural-latent-setting" class="slider-setting">
+          <input
+            id="procedural-latent-slider"
+            class="slider-setting-input"
+            type="range"
+            min="0"
+            max="3"
+            step="1"
+            value="0"
+            aria-label="Creative Mode"
+          />
+          <div id="procedural-latent-value" class="slider-setting-value">CREATIVE MODE: OFF</div>
+        </div>
+      </div>
+
+      <div id="rplus-setting-group" class="setting-group rplus-setting-group" aria-disabled="false">
+        <div class="rplus-mode-row">
+          <button
+            id="rplus-toggle-button"
+            class="toggle-seed-button"
+            type="button"
+            aria-pressed="false"
+          >R+ MODE: OFF</button>
+          <div id="rplus-sliders" class="rplus-sliders hidden" aria-hidden="true">
+            <div class="rplus-slider-block">
+              <input
+                id="rplus-vibrance-slider"
+                class="slider-setting-input"
+                type="range"
+                min="-2"
+                max="2"
+                step="0.25"
+                value="0"
+                aria-label="R+ Vibrance"
+              />
+              <div id="rplus-vibrance-value" class="slider-setting-value rplus-slider-value">VIBRANCE: OFF</div>
+            </div>
+            <div class="rplus-slider-block">
+              <input
+                id="rplus-bias-slider"
+                class="slider-setting-input"
+                type="range"
+                min="-2"
+                max="2"
+                step="0.25"
+                value="0"
+                aria-label="R+ Bias"
+              />
+              <div id="rplus-bias-value" class="slider-setting-value rplus-slider-value">BIAS: OFF</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </aside>

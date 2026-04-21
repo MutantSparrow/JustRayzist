@@ -14,6 +14,13 @@ const proceduralLatentSettingEl = document.getElementById("procedural-latent-set
 const proceduralLatentSliderEl = document.getElementById("procedural-latent-slider");
 const proceduralLatentValueEl = document.getElementById("procedural-latent-value");
 const promptEnhanceButtonEl = document.getElementById("prompt-enhance-button");
+const rplusSettingGroupEl = document.getElementById("rplus-setting-group");
+const rplusToggleButtonEl = document.getElementById("rplus-toggle-button");
+const rplusSlidersEl = document.getElementById("rplus-sliders");
+const rplusVibranceSliderEl = document.getElementById("rplus-vibrance-slider");
+const rplusBiasSliderEl = document.getElementById("rplus-bias-slider");
+const rplusVibranceValueEl = document.getElementById("rplus-vibrance-value");
+const rplusBiasValueEl = document.getElementById("rplus-bias-value");
 const topbarReferenceThumbWrapEl = document.getElementById("topbar-reference-thumb-wrap");
 const topbarReferenceThumbEl = document.getElementById("topbar-reference-thumb");
 const referenceImageInputEl = document.getElementById("reference-image-input");
@@ -132,6 +139,13 @@ const requiredUi = [
   ["procedural-latent-slider", proceduralLatentSliderEl],
   ["procedural-latent-value", proceduralLatentValueEl],
   ["prompt-enhance-button", promptEnhanceButtonEl],
+  ["rplus-setting-group", rplusSettingGroupEl],
+  ["rplus-toggle-button", rplusToggleButtonEl],
+  ["rplus-sliders", rplusSlidersEl],
+  ["rplus-vibrance-slider", rplusVibranceSliderEl],
+  ["rplus-bias-slider", rplusBiasSliderEl],
+  ["rplus-vibrance-value", rplusVibranceValueEl],
+  ["rplus-bias-value", rplusBiasValueEl],
   ["topbar-reference-thumb-wrap", topbarReferenceThumbWrapEl],
   ["topbar-reference-thumb", topbarReferenceThumbEl],
   ["reference-image-input", referenceImageInputEl],
@@ -249,6 +263,7 @@ const IMG2IMG_MIN_DIM = 64;
 const IMG2IMG_DEFAULT_SIMILARITY = 80;
 const CLIENT_JOB_POLL_INTERVAL_MS = 1500;
 const CLIENT_QUEUE_STORAGE_VERSION = 3;
+const RPLUS_UI_STEPS = 20;
 const GALLERY_COLOR_FILTERS = ["black", "white", "red", "yellow", "blue", "green"];
 const GALLERY_COLOR_CACHE_STATUS_MESSAGE = "Updating gallery color cache...";
 const GALLERY_COLOR_CACHE_POLL_INTERVAL_MS = 2500;
@@ -345,6 +360,18 @@ function loadAppliedLorasFromSession() {
   }
 }
 
+function sanitizeInferenceProcess(rawValue) {
+  return String(rawValue || "").trim().toLowerCase() === "rplus" ? "rplus" : "standard";
+}
+
+function normalizeRplusControlValue(rawValue) {
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) return 0;
+  const clamped = Math.max(-2, Math.min(2, value));
+  const snapped = Math.round(clamped * 4) / 4;
+  return Math.abs(snapped) < 0.0001 ? 0 : snapped;
+}
+
 const state = {
   clientId: getOrCreateClientId(),
   orientation: "portrait",
@@ -352,6 +379,9 @@ const state = {
   proceduralCreativity: 0,
   savedProceduralCreativityBeforeReference: null,
   promptEnhance: true,
+  rplusEnabled: false,
+  rplusVibrance: 0,
+  rplusBias: 0,
   upscaleMode: "fast",
   upscaleScale: 2,
   galleryColumns: getStoredGalleryColumns(),
@@ -3181,6 +3211,10 @@ function normalizeStoredJob(rawJob, overrides = {}) {
   const kind = sanitizeJobKind(overrides.kind || rawJob.kind);
   const width = Math.max(1, Number(overrides.width ?? rawJob.width) || 1);
   const height = Math.max(1, Number(overrides.height ?? rawJob.height) || 1);
+  const inferenceProcess =
+    kind === "generate"
+      ? sanitizeInferenceProcess(overrides.inference_process ?? rawJob.inference_process)
+      : "standard";
   return {
     kind,
     placeholderId,
@@ -3204,6 +3238,17 @@ function normalizeStoredJob(rawJob, overrides = {}) {
     procedural_creativity:
       kind === "generate"
         ? Number(overrides.procedural_creativity ?? rawJob.procedural_creativity ?? 0)
+        : 0,
+    inference_process: inferenceProcess,
+    rplus_vibrance:
+      kind === "generate" && inferenceProcess === "rplus"
+        ? normalizeRplusControlValue(overrides.rplus_vibrance ?? rawJob.rplus_vibrance ?? 0)
+        : 0,
+    rplus_initial_bias_level:
+      kind === "generate" && inferenceProcess === "rplus"
+        ? normalizeRplusControlValue(
+            overrides.rplus_initial_bias_level ?? rawJob.rplus_initial_bias_level ?? 0,
+          )
         : 0,
     similarity:
       kind === "img2img"
@@ -3246,6 +3291,15 @@ function serializeQueuedJob(job) {
     seed: job.seed ?? null,
     enhance_prompt: Boolean(job.enhance_prompt),
     procedural_creativity: Number(job.procedural_creativity || 0),
+    inference_process: sanitizeInferenceProcess(job.inference_process),
+    rplus_vibrance:
+      sanitizeJobKind(job.kind) === "generate" && sanitizeInferenceProcess(job.inference_process) === "rplus"
+        ? normalizeRplusControlValue(job.rplus_vibrance)
+        : 0,
+    rplus_initial_bias_level:
+      sanitizeJobKind(job.kind) === "generate" && sanitizeInferenceProcess(job.inference_process) === "rplus"
+        ? normalizeRplusControlValue(job.rplus_initial_bias_level)
+        : 0,
     similarity:
       sanitizeJobKind(job.kind) === "img2img"
         ? normalizeSimilarityPercent(job.similarity)
@@ -4001,6 +4055,9 @@ function updateSettingsSummary() {
       `Creative Mode <span class="summary-value">${describeProceduralCreativity(state.proceduralCreativity)}</span>`,
     );
   }
+  if (!hasReferenceImage() && state.rplusEnabled) {
+    pieces.push(`R+ <span class="summary-value">ON</span>`);
+  }
   if (appliedLoraCount() > 0) {
     pieces.push(`LoRAs <span class="summary-value">${appliedLoraCount()}</span>`);
   }
@@ -4102,6 +4159,7 @@ function setReferenceImage(reference) {
   state.proceduralCreativity = 0;
   updateReferenceImageUi();
   updateProceduralLatentControls();
+  updateRplusControls();
   updateSettingsSummary();
   updateGenerateButtonState();
 }
@@ -4117,6 +4175,7 @@ function clearReferenceImage() {
   }
   updateReferenceImageUi();
   updateProceduralLatentControls();
+  updateRplusControls();
   updateSettingsSummary();
   updateGenerateButtonState();
 }
@@ -4157,6 +4216,14 @@ function describeProceduralCreativity(level) {
   return "Extreme";
 }
 
+function describeRplusSliderPolarity(value) {
+  if (value < -1.0) return "VERY LOW";
+  if (value < 0) return "LOW";
+  if (value > 1.0) return "VERY HIGH";
+  if (value > 0) return "HIGH";
+  return "OFF";
+}
+
 function updateProceduralLatentControls() {
   const creativeLocked = hasReferenceImage();
   const effectiveLevel = creativeLocked ? 0 : state.proceduralCreativity;
@@ -4184,6 +4251,29 @@ function updatePromptEnhanceButton() {
     promptEnhanceButtonEl.textContent = "PROMPT ENHANCER: OFF";
     promptEnhanceButtonEl.classList.remove("active");
   }
+}
+
+function updateRplusControls() {
+  const locked = hasReferenceImage();
+  state.rplusVibrance = normalizeRplusControlValue(state.rplusVibrance);
+  state.rplusBias = normalizeRplusControlValue(state.rplusBias);
+  rplusSettingGroupEl.classList.toggle("disabled", locked);
+  rplusSettingGroupEl.setAttribute("aria-disabled", String(locked));
+  rplusToggleButtonEl.textContent = state.rplusEnabled ? "R+ MODE: ON" : "R+ MODE: OFF";
+  rplusToggleButtonEl.classList.toggle("active", state.rplusEnabled);
+  rplusToggleButtonEl.disabled = locked;
+  rplusToggleButtonEl.setAttribute("aria-pressed", String(state.rplusEnabled));
+  rplusSlidersEl.classList.toggle("hidden", !state.rplusEnabled);
+  rplusSlidersEl.setAttribute("aria-hidden", String(!state.rplusEnabled));
+  rplusVibranceSliderEl.value = String(state.rplusVibrance);
+  rplusBiasSliderEl.value = String(state.rplusBias);
+  rplusVibranceValueEl.textContent = `VIBRANCE: ${describeRplusSliderPolarity(state.rplusVibrance)}`;
+  rplusBiasValueEl.textContent = `BIAS: ${describeRplusSliderPolarity(state.rplusBias)}`;
+  rplusVibranceValueEl.classList.toggle("active", state.rplusVibrance !== 0);
+  rplusBiasValueEl.classList.toggle("active", state.rplusBias !== 0);
+  const disableSliders = locked || !state.rplusEnabled;
+  rplusVibranceSliderEl.disabled = disableSliders;
+  rplusBiasSliderEl.disabled = disableSliders;
 }
 
 function applyViewerTransform() {
@@ -4229,6 +4319,18 @@ function beginViewerCompareHold() {
   }
   viewerImageEl.src = buildViewerImageUrl(sourceFilename);
   viewerImageEl.alt = `Original preview ${sourceFilename}`;
+}
+
+function buildViewerModeTagsHtml(item) {
+  const tags = [];
+  if (sanitizeInferenceProcess(item?.inference_process) === "rplus") {
+    tags.push('<span class="viewer-meta-tag viewer-meta-tag-rplus">R+</span>');
+  }
+  const creativity = Math.max(0, Math.min(3, Number(item?.procedural_creativity) || 0));
+  if (creativity > 0) {
+    tags.push(`<span class="viewer-meta-tag viewer-meta-tag-creativity">CREA${creativity}</span>`);
+  }
+  return tags.join("");
 }
 
 function hideViewer() {
@@ -4287,6 +4389,7 @@ function applyViewerItemMeta(item) {
     const sourceFilename = resolveSourceFilename(item) || "reference image";
     const timestamp = item.timestamp || item.created_at;
     const pack = item.model_pack || "n/a";
+    const modeTags = buildViewerModeTagsHtml(item);
     const similarity = Math.max(0, Math.min(1, Number(item.similarity) || 0)) * 100;
     const promptText = String(item.prompt || item.prompt_effective || "").trim() || "(empty prompt)";
     const promptDisplay = state.viewerPromptExpanded ? promptText : shortPrompt(promptText, 140);
@@ -4307,6 +4410,7 @@ function applyViewerItemMeta(item) {
       `<span>${Math.round(similarity)}% similarity</span>`,
       '<span class="viewer-meta-sep">|</span>',
       `<span>${escapeHtml(pack)}</span>`,
+      modeTags,
       "</div>",
     ];
     if (wildcardDetails) {
@@ -4316,6 +4420,7 @@ function applyViewerItemMeta(item) {
   } else {
     const timestamp = item.timestamp || item.created_at;
     const pack = item.model_pack || "n/a";
+    const modeTags = buildViewerModeTagsHtml(item);
     const promptText = String(item.prompt || "").trim() || "(empty prompt)";
     const promptDisplay = state.viewerPromptExpanded ? promptText : shortPrompt(promptText, 140);
     const promptTitle = state.viewerPromptExpanded ? "Click to collapse prompt" : "Click to expand prompt";
@@ -4336,6 +4441,7 @@ function applyViewerItemMeta(item) {
       `<span>${escapeHtml(resolution)}</span>`,
       '<span class="viewer-meta-sep">|</span>',
       `<span>${escapeHtml(pack)}</span>`,
+      modeTags,
     ];
     if (loraLabel) {
       parts.push('<span class="viewer-meta-sep">|</span>');
@@ -5401,6 +5507,7 @@ function enqueueGenerationFromPrompt() {
   const dimensions = parseResolution(resolutionSelectEl.value);
   const seed = resolveSeedForGeneration();
   const placeholderId = `pending_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const inferenceProcess = state.rplusEnabled ? "rplus" : "standard";
 
   const job = {
     kind: "generate",
@@ -5411,6 +5518,10 @@ function enqueueGenerationFromPrompt() {
     seed,
     enhance_prompt: state.promptEnhance,
     procedural_creativity: state.proceduralCreativity,
+    inference_process: inferenceProcess,
+    rplus_vibrance: inferenceProcess === "rplus" ? normalizeRplusControlValue(state.rplusVibrance) : 0,
+    rplus_initial_bias_level:
+      inferenceProcess === "rplus" ? normalizeRplusControlValue(state.rplusBias) : 0,
     loras: Boolean(state.loraCapabilities?.supported)
       ? cloneLoraSelections(state.loraAppliedSelections)
       : [],
@@ -5708,7 +5819,13 @@ async function processGenerationQueue() {
             seed: job.seed,
             enhance_prompt: job.enhance_prompt,
             procedural_creativity: Number(job.procedural_creativity || 0),
+            inference_process: sanitizeInferenceProcess(job.inference_process),
           };
+          if (payloadBody.inference_process === "rplus") {
+            payloadBody.steps = RPLUS_UI_STEPS;
+            payloadBody.rplus_vibrance = normalizeRplusControlValue(job.rplus_vibrance);
+            payloadBody.rplus_initial_bias_level = normalizeRplusControlValue(job.rplus_initial_bias_level);
+          }
           if (Array.isArray(job.loras) && job.loras.length > 0) {
             payloadBody.loras = cloneLoraSelections(job.loras);
           }
@@ -5907,6 +6024,26 @@ function togglePromptEnhance() {
   updateSettingsSummary();
 }
 
+function toggleRplusEnabled() {
+  if (hasReferenceImage()) {
+    updateRplusControls();
+    return;
+  }
+  state.rplusEnabled = !state.rplusEnabled;
+  updateRplusControls();
+  updateSettingsSummary();
+}
+
+function setRplusVibrance(value) {
+  state.rplusVibrance = normalizeRplusControlValue(value);
+  updateRplusControls();
+}
+
+function setRplusBias(value) {
+  state.rplusBias = normalizeRplusControlValue(value);
+  updateRplusControls();
+}
+
 function beginDrag(event) {
   if (viewerModalEl.classList.contains("hidden")) return;
   if (event.button !== 0) return;
@@ -5963,6 +6100,7 @@ async function bootstrap() {
     updateFreezeSeedButton();
     updateProceduralLatentControls();
     updatePromptEnhanceButton();
+    updateRplusControls();
     updateUpscaleControls();
     updateMultiSelectControls();
     try {
@@ -6158,6 +6296,13 @@ proceduralLatentSliderEl.addEventListener("input", () => {
   setProceduralCreativity(proceduralLatentSliderEl.value);
 });
 promptEnhanceButtonEl.addEventListener("click", togglePromptEnhance);
+rplusToggleButtonEl.addEventListener("click", toggleRplusEnabled);
+rplusVibranceSliderEl.addEventListener("input", () => {
+  setRplusVibrance(rplusVibranceSliderEl.value);
+});
+rplusBiasSliderEl.addEventListener("input", () => {
+  setRplusBias(rplusBiasSliderEl.value);
+});
 referenceImageAddEl.addEventListener("click", () => {
   referenceImageInputEl.click();
 });

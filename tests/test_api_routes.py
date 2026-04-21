@@ -35,12 +35,16 @@ def test_generate_route_forwards_current_payload(monkeypatch) -> None:
             "prompt": "hello world",
             "width": 832,
             "height": 1248,
+            "steps": None,
             "pack_name": "Rayzist_bf16",
             "job_id": "pending_123",
             "seed": 123,
             "scheduler_mode": "dpm",
+            "inference_process": "standard",
             "enhance_prompt": True,
             "procedural_creativity": 2,
+            "rplus_vibrance": 0.0,
+            "rplus_initial_bias_level": 0.0,
         }
         return {
             "filename": "generated.png",
@@ -97,6 +101,10 @@ def test_generate_route_accepts_slider_only_payload(monkeypatch) -> None:
     def fake_generate(**kwargs):
         assert kwargs["procedural_creativity"] == 1
         assert kwargs["job_id"] is None
+        assert kwargs["steps"] is None
+        assert kwargs["inference_process"] == "standard"
+        assert kwargs["rplus_vibrance"] == 0.0
+        assert kwargs["rplus_initial_bias_level"] == 0.0
         return {
             "filename": "generated.png",
             "output_path": "S:/STABLEDIFFUSION/JustRayzist/outputs/example-client/generated.png",
@@ -125,6 +133,46 @@ def test_generate_route_accepts_slider_only_payload(monkeypatch) -> None:
     )
     assert response.status_code == 200
     assert response.json()["filename"] == "generated.png"
+
+
+def test_generate_route_forwards_rplus_payload(monkeypatch) -> None:
+    def fake_generate(**kwargs):
+        assert kwargs["steps"] == 20
+        assert kwargs["inference_process"] == "rplus"
+        assert kwargs["rplus_vibrance"] == 1.25
+        assert kwargs["rplus_initial_bias_level"] == -0.75
+        return {
+            "filename": "generated.png",
+            "output_path": "S:/STABLEDIFFUSION/JustRayzist/outputs/example-client/generated.png",
+            "prompt": "hello world",
+            "width": 1024,
+            "height": 1024,
+            "duration_ms": 1234,
+            "url": "/images/generated.png",
+            "prompt_enhanced": False,
+            "scheduler_mode": "euler",
+            "steps": 20,
+        }
+
+    monkeypatch.setattr(api_main.inference, "generate", fake_generate)
+
+    client = TestClient(api_main.app)
+    response = client.post(
+        "/generate",
+        headers=CLIENT_HEADER,
+        json={
+            "prompt": "hello world",
+            "width": 1024,
+            "height": 1024,
+            "steps": 20,
+            "inference_process": "rplus",
+            "rplus_vibrance": 1.25,
+            "rplus_initial_bias_level": -0.75,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["steps"] == 20
 
 
 def test_generate_route_maps_cancellation_to_409(monkeypatch) -> None:
