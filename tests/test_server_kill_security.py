@@ -19,3 +19,19 @@ def test_server_kill_route_rejects_remote_clients(monkeypatch) -> None:
     assert response.status_code == 403
     assert "local machine only" in response.json()["detail"]
     assert called["count"] == 0
+
+
+def test_server_restart_route_rejects_remote_clients(monkeypatch) -> None:
+    called = {"count": 0}
+
+    def fake_restart(delay_seconds: float = 0.35) -> None:
+        called["count"] += 1
+
+    monkeypatch.setattr(api_main, "_restart_server_process", fake_restart)
+
+    client = TestClient(api_main.app, client=("192.168.1.44", 50000))
+    response = client.post("/server/restart")
+
+    assert response.status_code == 403
+    assert "local machine only" in response.json()["detail"]
+    assert called["count"] == 0

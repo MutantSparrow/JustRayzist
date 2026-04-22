@@ -293,6 +293,7 @@
       <p class="subtle">Danger-zone actions for the current client scope and local machine.</p>
       <div class="maintenance-actions">
         <button id="maintenance-delete-gallery" class="danger-btn" type="button">Delete Gallery</button>
+        <button id="maintenance-restart-server" class="danger-btn" type="button">Restart Server</button>
         <button id="maintenance-kill-server" class="danger-btn" type="button">Kill Server</button>
       </div>
     </section>
@@ -306,9 +307,9 @@
 
   <section id="disconnect-overlay" class="disconnect-overlay hidden" aria-hidden="true">
     <div class="disconnect-crt" aria-hidden="true"></div>
-    <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
+    <p id="disconnect-message" class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
   </section>
 
-  <script src="/ui/api.js?v=20260413_01"></script>
+  <script src="/ui/api.js?v=20260422_01"></script>
 </body>
 </html>

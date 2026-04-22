@@ -626,6 +626,7 @@ def test_api_manifest_route_lists_bulk_download_route() -> None:
     assert any(item["path"] == "/client-jobs" for item in items)
     assert any(item["path"] == "/client-jobs/cancel" for item in items)
     assert any(item["path"] == "/gallery/rebuild" for item in items)
+    assert any(item["path"] == "/server/restart" for item in items)
     assert any(item["path"].startswith("/images?") and "color=blue" in item["path"] for item in items)
     assert any(item["path"] == "/health" for item in items)
 
@@ -692,6 +693,63 @@ def test_server_kill_route_schedules_shutdown(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["message"] == "Server shutdown initiated."
     assert called["count"] == 1
+
+
+def test_server_restart_route_schedules_restart(monkeypatch) -> None:
+    called = {"count": 0}
+
+    def fake_restart(delay_seconds: float = 0.35) -> None:
+        called["count"] += 1
+        assert delay_seconds == 0.35
+
+    monkeypatch.setattr(api_main, "_restart_server_process", fake_restart)
+
+    client = TestClient(api_main.app)
+    response = client.post("/server/restart")
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Server restart initiated."
+    assert called["count"] == 1
+
+
+def test_build_server_restart_exec_args_source_mode(monkeypatch) -> None:
+    executable = r"C:\Python311\python.exe"
+    monkeypatch.setenv("JUSTRAYZIST_SERVER_HOST", "0.0.0.0")
+    monkeypatch.setenv("JUSTRAYZIST_SERVER_PORT", "38888")
+    monkeypatch.setenv("JUSTRAYZIST_SERVER_VERBOSE_LOGS", "1")
+    monkeypatch.setattr(api_main.sys, "executable", executable)
+    monkeypatch.setattr(api_main.sys, "frozen", False, raising=False)
+
+    resolved_executable, args, env, root_dir = api_main._build_server_restart_exec_args()
+
+    assert resolved_executable == executable
+    assert args == [
+        executable,
+        "-m",
+        "app.cli.main",
+        "serve",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "38888",
+        "--verbose-logs",
+    ]
+    assert env["JUSTRAYZIST_ROOT"] == root_dir
+
+
+def test_build_server_restart_exec_args_frozen_mode(monkeypatch) -> None:
+    executable = r"C:\JustRayzist\bin\web\justrayzist-web.exe"
+    monkeypatch.delenv("JUSTRAYZIST_SERVER_HOST", raising=False)
+    monkeypatch.delenv("JUSTRAYZIST_SERVER_PORT", raising=False)
+    monkeypatch.delenv("JUSTRAYZIST_SERVER_VERBOSE_LOGS", raising=False)
+    monkeypatch.setattr(api_main.sys, "executable", executable)
+    monkeypatch.setattr(api_main.sys, "frozen", True, raising=False)
+
+    resolved_executable, args, env, root_dir = api_main._build_server_restart_exec_args()
+
+    assert resolved_executable == executable
+    assert args == [executable, "--host", "127.0.0.1", "--port", "37717"]
+    assert env["JUSTRAYZIST_ROOT"] == root_dir
 
 
 

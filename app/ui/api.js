@@ -13,11 +13,14 @@ const clearEl = document.getElementById("tester-clear");
 const statusEl = document.getElementById("tester-status");
 const responseEl = document.getElementById("tester-response");
 const deleteGalleryEl = document.getElementById("maintenance-delete-gallery");
+const restartServerEl = document.getElementById("maintenance-restart-server");
 const killServerEl = document.getElementById("maintenance-kill-server");
 const disconnectOverlayEl = document.getElementById("disconnect-overlay");
+const disconnectMessageEl = document.getElementById("disconnect-message");
 
 const CLIENT_ID_STORAGE_KEY = "justrayzist.client_id";
 const API_MANIFEST_PATH = "/api-manifest";
+const DEFAULT_DISCONNECT_MESSAGE = "SESSION DISCONNECTED. HAVE A NICE DAY";
 let endpoints = [];
 
 function asJson(value) {
@@ -253,7 +256,12 @@ function clearTester() {
   updateTesterMode();
 }
 
-function startDisconnectEffect() {
+function setDisconnectMessage(text) {
+  disconnectMessageEl.textContent = String(text || DEFAULT_DISCONNECT_MESSAGE);
+}
+
+function startDisconnectEffect(message = DEFAULT_DISCONNECT_MESSAGE) {
+  setDisconnectMessage(message);
   disconnectOverlayEl.classList.remove("active");
   disconnectOverlayEl.classList.remove("hidden");
   disconnectOverlayEl.setAttribute("aria-hidden", "false");
@@ -267,6 +275,33 @@ function stopDisconnectEffect() {
   disconnectOverlayEl.classList.remove("active");
   disconnectOverlayEl.classList.add("hidden");
   disconnectOverlayEl.setAttribute("aria-hidden", "true");
+  setDisconnectMessage(DEFAULT_DISCONNECT_MESSAGE);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+async function waitForServerRecovery(timeoutMs = 60000, intervalMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  await sleep(1500);
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`/health?ts=${Date.now()}`, {
+        method: "GET",
+        cache: "no-store",
+        headers: { "Cache-Control": "no-store" },
+      });
+      if (response.ok) {
+        return true;
+      }
+    } catch (_) {
+    }
+    await sleep(intervalMs);
+  }
+  return false;
 }
 
 async function deleteGallery() {
@@ -325,6 +360,49 @@ async function killServer() {
   }
 }
 
+async function restartServer() {
+  if (!window.confirm("Restart local server now?")) return;
+  startDisconnectEffect("SERVER RESTARTING. WAITING FOR RECONNECT");
+  setStatus("Restarting server ...", true);
+  responseEl.textContent = "";
+  try {
+    const response = await fetch("/server/restart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (_) {
+      payload = null;
+    }
+    if (!response.ok) {
+      stopDisconnectEffect();
+      setStatus(`HTTP ${response.status} ${response.statusText}`, false);
+      responseEl.textContent = payload == null ? "" : asJson(payload);
+      return;
+    }
+    setStatus(`HTTP ${response.status} ${response.statusText}`, true);
+    responseEl.textContent = payload == null ? "" : asJson(payload);
+  } catch (error) {
+    if (!(error instanceof TypeError)) {
+      stopDisconnectEffect();
+      setStatus(`Request failed: ${String(error?.message || error)}`, false);
+      responseEl.textContent = "";
+      return;
+    }
+  }
+
+  const recovered = await waitForServerRecovery();
+  if (recovered) {
+    window.location.reload();
+    return;
+  }
+  stopDisconnectEffect();
+  setStatus("Server restart did not recover within 60 seconds.", false);
+}
+
 async function bootstrap() {
   baseUrlEl.textContent = window.location.origin;
   clientIdEl.value = getOrCreateClientId();
@@ -344,6 +422,11 @@ methodEl.addEventListener("change", () => updateTesterMode());
 pathEl.addEventListener("input", () => updateTesterMode());
 deleteGalleryEl.addEventListener("click", () => {
   deleteGallery().catch((error) => {
+    setStatus(`Request failed: ${String(error?.message || error)}`, false);
+  });
+});
+restartServerEl.addEventListener("click", () => {
+  restartServer().catch((error) => {
     setStatus(`Request failed: ${String(error?.message || error)}`, false);
   });
 });

@@ -6,11 +6,11 @@ JustRayzist is a local-first image generation app built around the Rayzist Z-Ima
 
 The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
 
-## New in v1.8.2
+## New in v1.8.3
 
-- Retunes default `upscale` after `v1.8.1` regression reports so shipped x2 results are less oversharpened.
-- Keeps the `baseline_ai_x2 + FS` default path, but lowers the photo img2img similarity to `0.85` and halves the upscale-only FS intensity.
-- Leaves default `clarity` unchanged while documenting the hotfix and rebuilding fresh bootstrap packages.
+- Adds best-effort compat for extracted Z-Image LoRAs that ship missing `.alpha` tensors plus direct `.diff` and `.diff_b` parameter deltas.
+- Adds local-only `POST /server/restart` and API-page restart control so source or packaged server can reboot in place and pick up code changes.
+- Extends regression coverage for extracted LoRA conversion, direct delta apply/revert, restart route scheduling, and restart security.
 
 ![Wildcard library preview](readme_images/wildcards_preview.png)
 
@@ -237,7 +237,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -268,7 +268,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.2",
+  "app_version": "1.8.3",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {

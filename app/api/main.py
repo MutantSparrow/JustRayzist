@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import sys
 import threading
 import time
 import zipfile
@@ -100,6 +101,38 @@ def _shutdown_server_process(delay_seconds: float = 0.35) -> None:
         os._exit(0)
 
     threading.Thread(target=_kill, daemon=True, name="justrayzist-shutdown").start()
+
+
+def _build_server_restart_exec_args() -> tuple[str, list[str], dict[str, str], str]:
+    host = str(os.environ.get("JUSTRAYZIST_SERVER_HOST", "127.0.0.1")).strip() or "127.0.0.1"
+    port = str(os.environ.get("JUSTRAYZIST_SERVER_PORT", "37717")).strip() or "37717"
+    verbose_logs = str(os.environ.get("JUSTRAYZIST_SERVER_VERBOSE_LOGS", "0")).strip() == "1"
+    root_dir = str(settings.paths.root_dir)
+    env = os.environ.copy()
+    env["JUSTRAYZIST_ROOT"] = root_dir
+    executable = sys.executable
+    if getattr(sys, "frozen", False):
+        args = [executable, "--host", host, "--port", port]
+    else:
+        args = [executable, "-m", "app.cli.main", "serve", "--host", host, "--port", port]
+    if verbose_logs:
+        args.append("--verbose-logs")
+    return executable, args, env, root_dir
+
+
+def _restart_server_process(delay_seconds: float = 0.35) -> None:
+    executable, args, env, root_dir = _build_server_restart_exec_args()
+
+    def _restart() -> None:
+        time.sleep(max(delay_seconds, 0.0))
+        try:
+            os.chdir(root_dir)
+            os.execve(executable, args, env)
+        except Exception:
+            LOGGER.exception("Server restart failed.")
+            os._exit(1)
+
+    threading.Thread(target=_restart, daemon=True, name="justrayzist-restart").start()
 
 
 class LoraSelectionRequest(BaseModel):
@@ -1230,6 +1263,14 @@ def server_kill(request: Request, background_tasks: BackgroundTasks) -> dict:
         raise HTTPException(status_code=403, detail="Server shutdown is allowed from the local machine only.")
     background_tasks.add_task(_shutdown_server_process)
     return {"status": "ok", "message": "Server shutdown initiated."}
+
+
+@app.post("/server/restart")
+def server_restart(request: Request, background_tasks: BackgroundTasks) -> dict:
+    if not _is_local_request(request):
+        raise HTTPException(status_code=403, detail="Server restart is allowed from the local machine only.")
+    background_tasks.add_task(_restart_server_process)
+    return {"status": "ok", "message": "Server restart initiated."}
 
 
 ui_dir = Path(settings.paths.ui_dir)

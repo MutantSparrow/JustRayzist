@@ -16,6 +16,55 @@ from app.core.worker.types import LoraSelection
 from app.storage.gallery_index import get_image, sync_outputs_to_gallery
 
 
+class _FakeAttention(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.norm_q = torch.nn.LayerNorm(2, elementwise_affine=True)
+        self.norm_k = torch.nn.LayerNorm(2, elementwise_affine=True)
+        self.to_out = torch.nn.Sequential(torch.nn.Linear(6, 6, bias=False))
+
+
+class _FakeTransformerBlock(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.attention = _FakeAttention()
+        self.attention_norm1 = torch.nn.LayerNorm(6, elementwise_affine=True)
+        self.ffn_norm1 = torch.nn.LayerNorm(6, elementwise_affine=True)
+        self.adaLN_modulation = torch.nn.Sequential(torch.nn.Linear(3, 24, bias=True))
+
+
+class _FakeFinalLayer(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.adaLN_modulation = torch.nn.Sequential(torch.nn.SiLU(), torch.nn.Linear(3, 6, bias=True))
+        self.linear = torch.nn.Linear(6, 4, bias=True)
+
+
+class _FakeTimestepEmbedder(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mlp = torch.nn.Sequential(
+            torch.nn.Linear(3, 5, bias=True),
+            torch.nn.SiLU(),
+            torch.nn.Linear(5, 3, bias=True),
+        )
+
+
+class _FakeTransformer(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cap_embedder = torch.nn.Sequential(
+            torch.nn.LayerNorm(4, elementwise_affine=True),
+            torch.nn.Linear(4, 6, bias=True),
+        )
+        self.layers = torch.nn.ModuleList([_FakeTransformerBlock()])
+        self.context_refiner = torch.nn.ModuleList([_FakeTransformerBlock()])
+        self.noise_refiner = torch.nn.ModuleList([_FakeTransformerBlock()])
+        self.t_embedder = _FakeTimestepEmbedder()
+        self.all_x_embedder = torch.nn.ModuleDict({"2-1": torch.nn.Linear(4, 6, bias=True)})
+        self.all_final_layer = torch.nn.ModuleDict({"2-1": _FakeFinalLayer()})
+
+
 class _FakeLoraPipe:
     def __init__(self) -> None:
         self.load_calls: list[dict[str, object]] = []
@@ -26,6 +75,7 @@ class _FakeLoraPipe:
         self.loaded_adapters: set[str] = set()
         self.disable_calls = 0
         self.enable_calls = 0
+        self.transformer = _FakeTransformer()
 
     def load_lora_weights(self, source, **kwargs) -> None:
         adapter_name = kwargs.get("adapter_name")
@@ -211,6 +261,50 @@ def test_convert_zimage_legacy_lora_state_dict_to_diffusers_applies_alpha_scalin
     )
 
 
+def test_convert_zimage_legacy_lora_state_dict_to_diffusers_defaults_missing_alpha_to_rank() -> None:
+    down_weight = torch.ones((2, 2))
+    up_weight = torch.full((2, 2), 3.0)
+    converted, format_label = DiffusersZImageBackend._convert_zimage_legacy_lora_state_dict_to_diffusers(
+        "rank-default-style",
+        {
+            "layers.0.attention.out.lora.down.weight": down_weight,
+            "layers.0.attention.out.lora.up.weight": up_weight,
+        },
+    )
+
+    assert format_label == "legacy-zimage"
+    assert torch.equal(
+        converted["transformer.layers.0.attention.to_out.0.lora_A.weight"],
+        down_weight,
+    )
+    assert torch.equal(
+        converted["transformer.layers.0.attention.to_out.0.lora_B.weight"],
+        up_weight,
+    )
+
+
+def test_convert_zimage_legacy_lora_state_dict_to_diffusers_splits_qkv_without_alpha() -> None:
+    qkv_down = torch.full((2, 4), 3.0)
+    qkv_up = torch.arange(24, dtype=torch.float32).reshape(6, 4)
+
+    converted, format_label = DiffusersZImageBackend._convert_zimage_legacy_lora_state_dict_to_diffusers(
+        "rank-default-qkv-style",
+        {
+            "layers.0.attention.qkv.lora_down.weight": qkv_down,
+            "layers.0.attention.qkv.lora_up.weight": qkv_up,
+        },
+    )
+
+    assert format_label == "legacy-zimage"
+    assert torch.equal(converted["transformer.layers.0.attention.to_q.lora_A.weight"], qkv_down)
+    assert torch.equal(converted["transformer.layers.0.attention.to_k.lora_A.weight"], qkv_down)
+    assert torch.equal(converted["transformer.layers.0.attention.to_v.lora_A.weight"], qkv_down)
+    q_up, k_up, v_up = qkv_up.chunk(3, dim=0)
+    assert torch.equal(converted["transformer.layers.0.attention.to_q.lora_B.weight"], q_up)
+    assert torch.equal(converted["transformer.layers.0.attention.to_k.lora_B.weight"], k_up)
+    assert torch.equal(converted["transformer.layers.0.attention.to_v.lora_B.weight"], v_up)
+
+
 def test_convert_zimage_legacy_lora_state_dict_to_diffusers_preserves_diffusers_keys() -> None:
     diffusers_state_dict = {
         "transformer.layers.0.attention.to_q.lora_A.weight": torch.ones((2, 2)),
@@ -259,6 +353,53 @@ def test_convert_zimage_legacy_lora_state_dict_to_diffusers_rejects_unknown_layo
         )
 
 
+def test_prepare_zimage_lora_compat_state_collects_direct_deltas_with_runtime_remaps() -> None:
+    model = ZImageTransformer2DModel(
+        all_patch_size=(2,),
+        all_f_patch_size=(1,),
+        in_channels=4,
+        dim=96,
+        n_layers=1,
+        n_refiner_layers=1,
+        n_heads=3,
+        n_kv_heads=3,
+        norm_eps=1e-5,
+        qk_norm=True,
+        cap_feat_dim=32,
+        axes_dims=[8, 8, 16],
+        axes_lens=[16, 16, 16],
+    )
+    prepared = DiffusersZImageBackend._prepare_zimage_lora_compat_state(
+        "extracted-style",
+        {
+            "diffusion_model.cap_embedder.0.diff": torch.ones((32,)),
+            "diffusion_model.cap_embedder.1.lora_down.weight": torch.ones((2, 32)),
+            "diffusion_model.cap_embedder.1.lora_up.weight": torch.ones((96, 2)),
+            "diffusion_model.layers.0.attention.q_norm.diff": torch.ones((32,)),
+            "diffusion_model.layers.0.attention.k_norm.diff": torch.ones((32,)),
+            "diffusion_model.x_embedder.diff_b": torch.ones((96,)),
+            "diffusion_model.final_layer.linear.diff_b": torch.ones((16,)),
+        },
+    )
+
+    assert prepared.format_label == "legacy-zimage-extracted"
+    assert prepared.dropped_keys == ()
+    assert set(prepared.adapter_state_dict.keys()) == {
+        "transformer.cap_embedder.1.lora_A.weight",
+        "transformer.cap_embedder.1.lora_B.weight",
+    }
+    direct_targets = {delta.target_key for delta in prepared.direct_param_deltas}
+    assert direct_targets == {
+        "transformer.cap_embedder.0.weight",
+        "transformer.layers.0.attention.norm_q.weight",
+        "transformer.layers.0.attention.norm_k.weight",
+        "transformer.all_x_embedder.2-1.bias",
+        "transformer.all_final_layer.2-1.linear.bias",
+    }
+    runtime_targets = {name for name, _ in model.named_parameters()} | {name for name, _ in model.named_buffers()}
+    assert {target.removeprefix("transformer.") for target in direct_targets} <= runtime_targets
+
+
 def test_load_lora_adapters_always_passes_state_dict_payload(monkeypatch, caplog) -> None:
     backend = object.__new__(DiffusersZImageBackend)
     pipe = _FakeLoraPipe()
@@ -292,6 +433,101 @@ def test_load_lora_adapters_always_passes_state_dict_payload(monkeypatch, caplog
     assert pipe.fuse_calls == []
     assert "Activating LoRAs ids=['cinematic-style'] weights=[1.25]" in caplog.text
     assert "runtime_path=unfused" in caplog.text
+
+
+def test_load_lora_adapters_warns_and_drops_norm_final_diff(monkeypatch, caplog) -> None:
+    backend = object.__new__(DiffusersZImageBackend)
+    pipe = _FakeLoraPipe()
+    lora = LoraSelection(
+        id="compat-style",
+        path=Path("S:/STABLEDIFFUSION/JustRayzist/models/loras/compat-style.safetensors"),
+        weight=1.0,
+    )
+
+    monkeypatch.setattr(
+        zimage_module,
+        "load_safetensors_file",
+        lambda path, device="cpu": {
+            "diffusion_model.cap_embedder.1.lora_down.weight": torch.ones((2, 4)),
+            "diffusion_model.cap_embedder.1.lora_up.weight": torch.ones((6, 2)),
+            "diffusion_model.norm_final.diff": torch.tensor([float("inf"), 0.0, 0.0, 0.0]),
+        },
+    )
+
+    with caplog.at_level("WARNING"):
+        backend._load_lora_adapters(pipe, (lora,))
+
+    assert len(pipe.load_calls) == 1
+    assert "compat dropped unsupported extracted tensors" in caplog.text
+    assert "norm_final.diff" in caplog.text
+
+
+def test_load_lora_adapters_applies_and_reverts_direct_deltas_linearly(monkeypatch) -> None:
+    backend = object.__new__(DiffusersZImageBackend)
+    pipe = _FakeLoraPipe()
+    cap_weight_before = pipe.transformer.cap_embedder[0].weight.detach().clone()
+    x_bias_before = pipe.transformer.all_x_embedder["2-1"].bias.detach().clone()
+
+    loras = (
+        LoraSelection(
+            id="style-one",
+            path=Path("S:/STABLEDIFFUSION/JustRayzist/models/loras/style-one.safetensors"),
+            weight=0.5,
+        ),
+        LoraSelection(
+            id="style-two",
+            path=Path("S:/STABLEDIFFUSION/JustRayzist/models/loras/style-two.safetensors"),
+            weight=1.5,
+        ),
+    )
+
+    state_dicts = {
+        "style-one.safetensors": {
+            "diffusion_model.cap_embedder.1.lora_down.weight": torch.ones((2, 4)),
+            "diffusion_model.cap_embedder.1.lora_up.weight": torch.ones((6, 2)),
+            "diffusion_model.cap_embedder.0.diff": torch.ones((4,)),
+            "diffusion_model.x_embedder.diff_b": torch.full((6,), 2.0),
+        },
+        "style-two.safetensors": {
+            "diffusion_model.cap_embedder.1.lora_down.weight": torch.full((2, 4), 3.0),
+            "diffusion_model.cap_embedder.1.lora_up.weight": torch.full((6, 2), 4.0),
+            "diffusion_model.cap_embedder.0.diff": torch.full((4,), 3.0),
+            "diffusion_model.x_embedder.diff_b": torch.full((6,), 5.0),
+        },
+    }
+
+    monkeypatch.setattr(
+        zimage_module,
+        "load_safetensors_file",
+        lambda path, device="cpu": state_dicts[Path(path).name],
+    )
+
+    backend._load_lora_adapters(pipe, loras)
+
+    assert torch.allclose(
+        pipe.transformer.cap_embedder[0].weight.detach(),
+        cap_weight_before + torch.full_like(cap_weight_before, 5.0),
+        atol=1e-6,
+        rtol=0.0,
+    )
+    assert torch.allclose(
+        pipe.transformer.all_x_embedder["2-1"].bias.detach(),
+        x_bias_before + torch.full_like(x_bias_before, 8.5),
+        atol=1e-6,
+        rtol=0.0,
+    )
+
+    backend._clear_lora_adapters(pipe, adapter_names=["style-one", "style-two"])
+
+    assert torch.allclose(pipe.transformer.cap_embedder[0].weight.detach(), cap_weight_before, atol=1e-6, rtol=0.0)
+    assert torch.allclose(
+        pipe.transformer.all_x_embedder["2-1"].bias.detach(),
+        x_bias_before,
+        atol=1e-6,
+        rtol=0.0,
+    )
+    assert pipe.delete_calls == [["style-one", "style-two"]]
+    assert backend._applied_lora_direct_deltas_by_transformer == {}
 
 
 def test_load_lora_adapters_passes_exact_user_weights_for_stacked_adapters(monkeypatch) -> None:

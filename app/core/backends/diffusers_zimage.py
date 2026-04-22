@@ -246,6 +246,27 @@ class GenerationResult:
         }
 
 
+@dataclass(frozen=True)
+class LoraDirectParameterDelta:
+    target_key: str
+    tensor: Any
+
+
+@dataclass(frozen=True)
+class PreparedLoraCompatState:
+    adapter_state_dict: dict[str, Any]
+    direct_param_deltas: tuple[LoraDirectParameterDelta, ...]
+    format_label: str
+    dropped_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AppliedLoraDirectParameterDelta:
+    target_key: str
+    parameter: Any
+    applied_delta: Any
+
+
 class DiffusersZImageBackend:
     BACKEND_NAME = "diffusers_zimage"
     _INFERENCE_PROCESS_STANDARD = "standard"
@@ -400,6 +421,9 @@ class DiffusersZImageBackend:
         self._preflight_fallback_triggered = False
         self._high_runtime_fallback_latched = False
         self._high_runtime_pressure_hits = 0
+        self._applied_lora_direct_deltas_by_transformer: dict[
+            int, dict[str, tuple[AppliedLoraDirectParameterDelta, ...]]
+        ] = {}
 
     @staticmethod
     def _interrupt_pipe(pipe: Any | None) -> None:
@@ -3206,6 +3230,8 @@ class DiffusersZImageBackend:
             ".lora.down.weight",
             ".lora.up.weight",
             ".alpha",
+            ".diff_b",
+            ".diff",
         )
         for suffix in suffixes:
             if key.endswith(suffix):
@@ -3253,10 +3279,16 @@ class DiffusersZImageBackend:
             ".lora.up.weight", ".lora_up.weight"
         )
         updated_key = re.sub(
-            r"\.out(?=\.(?:lora_down|lora_up|lora_A|lora_B|alpha)\b)",
+            r"\.out(?=\.(?:lora_down|lora_up|lora_A|lora_B|alpha|diff|diff_b)\b)",
             ".to_out.0",
             updated_key,
         )
+        updated_key = updated_key.replace(".attention.q_norm.", ".attention.norm_q.")
+        updated_key = updated_key.replace(".attention.k_norm.", ".attention.norm_k.")
+        if updated_key.startswith("x_embedder."):
+            updated_key = updated_key.replace("x_embedder.", "all_x_embedder.2-1.", 1)
+        if updated_key.startswith("final_layer."):
+            updated_key = updated_key.replace("final_layer.", "all_final_layer.2-1.", 1)
         return updated_key
 
     @classmethod
@@ -3323,17 +3355,30 @@ class DiffusersZImageBackend:
         return finalized
 
     @staticmethod
-    def _ensure_transformer_lora_key(key: str) -> str:
+    def _tensor_has_only_finite_values(tensor: Any) -> bool:
+        isfinite = getattr(tensor, "isfinite", None)
+        if not callable(isfinite):
+            return True
+        try:
+            return bool(isfinite().all().item())
+        except Exception:
+            return True
+
+    @staticmethod
+    def _ensure_transformer_key(key: str) -> str:
         return key if key.startswith("transformer.") else f"transformer.{key}"
+
+    @staticmethod
+    def _ensure_transformer_lora_key(key: str) -> str:
+        return DiffusersZImageBackend._ensure_transformer_key(key)
 
     @staticmethod
     def _split_qkv_lora_up_weight(up_weight: Any) -> tuple[Any, Any, Any]:
         return tuple(up_weight.chunk(3, dim=0))
 
     @classmethod
-    def _convert_zimage_legacy_lora_state_dict_to_diffusers(
+    def _canonicalize_zimage_lora_state_dict(
         cls,
-        lora_id: str,
         state_dict: dict[str, Any],
     ) -> tuple[dict[str, Any], str]:
         string_keys = [str(key) for key in state_dict.keys()]
@@ -3343,23 +3388,33 @@ class DiffusersZImageBackend:
         has_legacy_dotted = any(".lora.down.weight" in key or ".lora.up.weight" in key for key in string_keys)
         has_non_diffusers = any(".lora_down.weight" in key or ".lora_up.weight" in key for key in string_keys)
         has_alphas = any(key.endswith(".alpha") for key in string_keys)
+        has_direct_deltas = any(key.endswith(".diff") or key.endswith(".diff_b") for key in string_keys)
 
         format_label = "diffusers-native"
         if has_lora_unet:
             format_label = "lora_unet"
-        elif has_diffusion_model or has_default or has_legacy_dotted or has_non_diffusers or has_alphas:
+        elif has_diffusion_model or has_default or has_legacy_dotted or has_non_diffusers or has_alphas or has_direct_deltas:
             format_label = "legacy-zimage"
 
         canonical_state_dict: dict[str, Any] = {}
         for raw_key, value in state_dict.items():
-            canonical_key = str(raw_key).replace("default.", "")
+            canonical_key = str(raw_key)
+            if canonical_key.startswith("default."):
+                canonical_key = canonical_key.removeprefix("default.")
             if canonical_key.startswith("diffusion_model."):
                 canonical_key = canonical_key.removeprefix("diffusion_model.")
             if canonical_key.startswith("lora_unet_"):
                 canonical_key = cls._convert_lora_unet_key_to_legacy_zimage_key(canonical_key)
             canonical_key = cls._normalize_legacy_zimage_lora_key(canonical_key)
             canonical_state_dict[canonical_key] = value
+        return canonical_state_dict, format_label
 
+    @classmethod
+    def _convert_canonical_zimage_adapter_state_dict_to_diffusers(
+        cls,
+        lora_id: str,
+        canonical_state_dict: dict[str, Any],
+    ) -> dict[str, Any]:
         canonical_has_diffusers = any(".lora_A.weight" in key or ".lora_B.weight" in key for key in canonical_state_dict.keys())
         canonical_has_non_diffusers = any(
             ".lora_down.weight" in key or ".lora_up.weight" in key for key in canonical_state_dict.keys()
@@ -3369,7 +3424,7 @@ class DiffusersZImageBackend:
             finalized = cls._apply_diffusers_native_alpha_scale(lora_id, canonical_state_dict)
             if not finalized:
                 raise ValueError(f"LoRA '{lora_id}' did not contain any diffusers LoRA weights.")
-            return finalized, format_label
+            return finalized
 
         if not canonical_has_non_diffusers:
             sample_key = next(iter(canonical_state_dict.keys()), "<empty>")
@@ -3389,19 +3444,19 @@ class DiffusersZImageBackend:
                 raise ValueError(
                     f"LoRA '{lora_id}' is missing the matching up weight for '{key}'."
                 )
-            if alpha_key not in working_state_dict:
-                raise ValueError(
-                    f"LoRA '{lora_id}' is missing the matching alpha for '{key}'."
-                )
 
             down_weight = working_state_dict.pop(key)
             up_weight = working_state_dict.pop(up_key)
-            alpha_value = working_state_dict.pop(alpha_key)
-            scaled_down_weight, scaled_up_weight = cls._apply_zimage_alpha_scale(
-                down_weight,
-                up_weight,
-                alpha_value,
-            )
+            if alpha_key in working_state_dict:
+                alpha_value = working_state_dict.pop(alpha_key)
+                scaled_down_weight, scaled_up_weight = cls._apply_zimage_alpha_scale(
+                    down_weight,
+                    up_weight,
+                    alpha_value,
+                )
+            else:
+                scaled_down_weight, scaled_up_weight = down_weight, up_weight
+
             if ".attention.qkv." in key:
                 q_up_weight, k_up_weight, v_up_weight = cls._split_qkv_lora_up_weight(scaled_up_weight)
                 for projection_name, projection_up_weight in (
@@ -3433,7 +3488,163 @@ class DiffusersZImageBackend:
             )
         if not converted_state_dict:
             raise ValueError(f"LoRA '{lora_id}' did not contain any convertible Z-Image LoRA weights.")
+        return converted_state_dict
+
+    @classmethod
+    def _prepare_zimage_lora_compat_state(
+        cls,
+        lora_id: str,
+        state_dict: dict[str, Any],
+    ) -> PreparedLoraCompatState:
+        canonical_state_dict, base_format_label = cls._canonicalize_zimage_lora_state_dict(state_dict)
+        adapter_source_state_dict: dict[str, Any] = {}
+        direct_param_deltas: list[LoraDirectParameterDelta] = []
+        dropped_keys: list[str] = []
+
+        for key, value in canonical_state_dict.items():
+            if key.endswith(".diff"):
+                if not cls._tensor_has_only_finite_values(value):
+                    if key == "norm_final.diff":
+                        dropped_keys.append(key)
+                        continue
+                    raise ValueError(f"LoRA '{lora_id}' contains non-finite extracted delta for '{key}'.")
+                if key == "norm_final.diff":
+                    dropped_keys.append(key)
+                    continue
+                direct_param_deltas.append(
+                    LoraDirectParameterDelta(
+                        target_key=cls._ensure_transformer_key(key.removesuffix(".diff") + ".weight"),
+                        tensor=value,
+                    )
+                )
+                continue
+            if key.endswith(".diff_b"):
+                if not cls._tensor_has_only_finite_values(value):
+                    raise ValueError(f"LoRA '{lora_id}' contains non-finite extracted delta for '{key}'.")
+                direct_param_deltas.append(
+                    LoraDirectParameterDelta(
+                        target_key=cls._ensure_transformer_key(key.removesuffix(".diff_b") + ".bias"),
+                        tensor=value,
+                    )
+                )
+                continue
+            adapter_source_state_dict[key] = value
+
+        adapter_state_dict = cls._convert_canonical_zimage_adapter_state_dict_to_diffusers(
+            lora_id,
+            adapter_source_state_dict,
+        )
+        format_label = base_format_label
+        if direct_param_deltas or dropped_keys:
+            format_label = f"{base_format_label}-extracted"
+        return PreparedLoraCompatState(
+            adapter_state_dict=adapter_state_dict,
+            direct_param_deltas=tuple(direct_param_deltas),
+            format_label=format_label,
+            dropped_keys=tuple(dropped_keys),
+        )
+
+    @classmethod
+    def _convert_zimage_legacy_lora_state_dict_to_diffusers(
+        cls,
+        lora_id: str,
+        state_dict: dict[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        canonical_state_dict, format_label = cls._canonicalize_zimage_lora_state_dict(state_dict)
+        converted_state_dict = cls._convert_canonical_zimage_adapter_state_dict_to_diffusers(
+            lora_id,
+            canonical_state_dict,
+        )
         return converted_state_dict, format_label
+
+    def _direct_lora_delta_tracker(self) -> dict[int, dict[str, tuple[AppliedLoraDirectParameterDelta, ...]]]:
+        tracker = getattr(self, "_applied_lora_direct_deltas_by_transformer", None)
+        if tracker is None:
+            tracker = {}
+            self._applied_lora_direct_deltas_by_transformer = tracker
+        return tracker
+
+    def _apply_lora_direct_deltas(
+        self,
+        pipe: Any,
+        prepared_states_by_adapter: dict[str, PreparedLoraCompatState],
+        adapter_weights_by_name: dict[str, float],
+    ) -> None:
+        if not any(state.direct_param_deltas for state in prepared_states_by_adapter.values()):
+            return
+        transformer = getattr(pipe, "transformer", None)
+        if transformer is None:
+            raise ValueError("Active pipeline does not expose the transformer module for extracted LoRA deltas.")
+
+        target_tensors = dict(transformer.named_parameters())
+        target_tensors.update(dict(transformer.named_buffers()))
+
+        applied_by_adapter: dict[str, list[AppliedLoraDirectParameterDelta]] = {}
+        flat_applied: list[AppliedLoraDirectParameterDelta] = []
+        try:
+            for adapter_name, prepared_state in prepared_states_by_adapter.items():
+                if not prepared_state.direct_param_deltas:
+                    continue
+                adapter_weight = float(adapter_weights_by_name.get(adapter_name, 1.0))
+                for direct_delta in prepared_state.direct_param_deltas:
+                    target_name = direct_delta.target_key.removeprefix("transformer.")
+                    target_tensor = target_tensors.get(target_name)
+                    if target_tensor is None:
+                        raise ValueError(
+                            f"LoRA '{adapter_name}' extracted delta targets missing transformer tensor '{direct_delta.target_key}'."
+                        )
+                    target_shape = tuple(getattr(target_tensor, "shape", ()))
+                    delta_shape = tuple(getattr(direct_delta.tensor, "shape", ()))
+                    if target_shape != delta_shape:
+                        raise ValueError(
+                            f"LoRA '{adapter_name}' extracted delta shape mismatch for '{direct_delta.target_key}': "
+                            f"expected {target_shape}, got {delta_shape}."
+                        )
+                    applied_delta = direct_delta.tensor.to(device=target_tensor.device, dtype=target_tensor.dtype)
+                    if not self._tensor_has_only_finite_values(applied_delta):
+                        raise ValueError(
+                            f"LoRA '{adapter_name}' extracted delta for '{direct_delta.target_key}' contains non-finite values."
+                        )
+                    if adapter_weight != 1.0:
+                        applied_delta = applied_delta * adapter_weight
+                    target_tensor.data.add_(applied_delta)
+                    applied = AppliedLoraDirectParameterDelta(
+                        target_key=direct_delta.target_key,
+                        parameter=target_tensor,
+                        applied_delta=applied_delta,
+                    )
+                    applied_by_adapter.setdefault(adapter_name, []).append(applied)
+                    flat_applied.append(applied)
+        except Exception:
+            for applied in reversed(flat_applied):
+                applied.parameter.data.sub_(applied.applied_delta)
+            raise
+
+        if not applied_by_adapter:
+            return
+
+        tracker = self._direct_lora_delta_tracker()
+        tracked_by_name = tracker.setdefault(id(transformer), {})
+        for adapter_name, applied_items in applied_by_adapter.items():
+            existing = list(tracked_by_name.get(adapter_name, ()))
+            existing.extend(applied_items)
+            tracked_by_name[adapter_name] = tuple(existing)
+
+    def _revert_lora_direct_deltas(self, pipe: Any, adapter_names: list[str] | None = None) -> None:
+        transformer = getattr(pipe, "transformer", None)
+        if transformer is None:
+            return
+        tracker = self._direct_lora_delta_tracker()
+        tracked_by_name = tracker.get(id(transformer))
+        if not tracked_by_name:
+            return
+
+        target_names = list(adapter_names or tracked_by_name.keys())
+        for adapter_name in target_names:
+            for applied in reversed(tracked_by_name.pop(adapter_name, ())):
+                applied.parameter.data.sub_(applied.applied_delta)
+        if not tracked_by_name:
+            tracker.pop(id(transformer), None)
 
     def _load_lora_adapters(self, pipe: Any, loras: tuple[LoraSelection, ...]) -> None:
         if not loras:
@@ -3452,17 +3663,25 @@ class DiffusersZImageBackend:
             )
             self._clear_lora_adapters(pipe, adapter_names=conflicting_adapter_names)
         adapter_formats: dict[str, str] = {}
+        prepared_states_by_adapter: dict[str, PreparedLoraCompatState] = {}
         for lora in loras:
             raw_state_dict = load_safetensors_file(str(lora.path), device="cpu")
-            prepared_state_dict, format_label = self._convert_zimage_legacy_lora_state_dict_to_diffusers(
+            prepared_state = self._prepare_zimage_lora_compat_state(
                 lora.id,
                 raw_state_dict,
             )
-            adapter_formats[lora.id] = format_label
-            if format_label != "diffusers-native":
+            prepared_states_by_adapter[lora.id] = prepared_state
+            adapter_formats[lora.id] = prepared_state.format_label
+            if prepared_state.dropped_keys:
+                LOGGER.warning(
+                    "LoRA '%s' compat dropped unsupported extracted tensors keys=%s",
+                    lora.id,
+                    list(prepared_state.dropped_keys),
+                )
+            if prepared_state.format_label != "diffusers-native":
                 LOGGER.info(
                     "Detected %s LoRA format for '%s'; converting locally to diffusers format.",
-                    format_label,
+                    prepared_state.format_label,
                     lora.id,
                 )
             try:
@@ -3473,7 +3692,7 @@ class DiffusersZImageBackend:
                         category=UserWarning,
                     )
                     pipe.load_lora_weights(
-                        prepared_state_dict,
+                        prepared_state.adapter_state_dict,
                         adapter_name=lora.id,
                         hotswap=False,
                         use_safetensors=True,
@@ -3481,7 +3700,7 @@ class DiffusersZImageBackend:
                     )
             except ValueError as exc:
                 if "`state_dict` should be empty" in str(exc):
-                    sample_key = next(iter(prepared_state_dict.keys()), "<empty>")
+                    sample_key = next(iter(prepared_state.adapter_state_dict.keys()), "<empty>")
                     raise ValueError(
                         f"LoRA '{lora.id}' could not be converted to a diffusers-compatible transformer state dict. "
                         f"First converted key: '{sample_key}'."
@@ -3493,6 +3712,11 @@ class DiffusersZImageBackend:
                 pipe.enable_lora()
             except Exception:
                 pass
+        self._apply_lora_direct_deltas(
+            pipe,
+            prepared_states_by_adapter,
+            dict(zip(adapter_names, adapter_weights, strict=False)),
+        )
         LOGGER.info(
             "Activating LoRAs ids=%s weights=%s formats=%s runtime_path=%s",
             adapter_names,
@@ -3532,6 +3756,7 @@ class DiffusersZImageBackend:
                 pipe.disable_lora()
             except Exception:
                 pass
+        self._revert_lora_direct_deltas(pipe, adapter_names=adapter_names)
         try:
             pipe.unfuse_lora(components=["transformer"])
         except Exception:

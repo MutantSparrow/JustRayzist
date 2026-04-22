@@ -1300,7 +1300,11 @@ def serve(
     import uvicorn
 
     configure_logging(verbose_logs=verbose_logs)
-    load_settings()
+    resolved_settings = load_settings()
+    os.environ["JUSTRAYZIST_ROOT"] = str(resolved_settings.paths.root_dir)
+    os.environ["JUSTRAYZIST_SERVER_HOST"] = host
+    os.environ["JUSTRAYZIST_SERVER_PORT"] = str(port)
+    os.environ["JUSTRAYZIST_SERVER_VERBOSE_LOGS"] = "1" if verbose_logs else "0"
     logging.getLogger(__name__).info("Starting web server on http://%s:%d", host, port)
     uvicorn_log_level = str(os.environ.get("JUSTRAYZIST_LOG_LEVEL", "INFO")).strip().lower()
     uvicorn.run(

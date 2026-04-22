@@ -685,6 +685,15 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
         response={"status": "ok", "message": "Server shutdown initiated."},
         include_in_readme=False,
     ),
+    ApiExample(
+        method="POST",
+        path="/server/restart",
+        description="Request local server restart on the same bind host and port so code changes are picked up.",
+        requires_client=False,
+        request={},
+        response={"status": "ok", "message": "Server restart initiated."},
+        include_in_readme=False,
+    ),
 )
 
 
