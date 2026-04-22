@@ -11,7 +11,7 @@ import torch
 
 from app.config import load_settings
 from app.core.backends import diffusers_zimage as zimage_module
-from app.core.backends.diffusers_zimage import DiffusersZImageBackend
+from app.core.backends.diffusers_zimage import DiffusersZImageBackend, LoraDirectParameterDelta, PreparedLoraCompatState
 from app.core.worker.types import LoraSelection
 from app.storage.gallery_index import get_image, sync_outputs_to_gallery
 
@@ -63,6 +63,26 @@ class _FakeTransformer(torch.nn.Module):
         self.t_embedder = _FakeTimestepEmbedder()
         self.all_x_embedder = torch.nn.ModuleDict({"2-1": torch.nn.Linear(4, 6, bias=True)})
         self.all_final_layer = torch.nn.ModuleDict({"2-1": _FakeFinalLayer()})
+
+
+class _FakePeftWrappedLeaf(torch.nn.Module):
+    def __init__(self, module: torch.nn.Module) -> None:
+        super().__init__()
+        self.base_layer = module
+
+
+class _FakePeftTransformerRoot(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.base_model = torch.nn.Module()
+        self.base_model.model = _FakeTransformer()
+        self.base_model.model.cap_embedder[1] = _FakePeftWrappedLeaf(self.base_model.model.cap_embedder[1])
+        self.base_model.model.all_x_embedder["2-1"] = _FakePeftWrappedLeaf(
+            self.base_model.model.all_x_embedder["2-1"]
+        )
+        final_layer = self.base_model.model.all_final_layer["2-1"]
+        final_layer.linear = _FakePeftWrappedLeaf(final_layer.linear)
+        final_layer.adaLN_modulation[1] = _FakePeftWrappedLeaf(final_layer.adaLN_modulation[1])
 
 
 class _FakeLoraPipe:
@@ -528,6 +548,77 @@ def test_load_lora_adapters_applies_and_reverts_direct_deltas_linearly(monkeypat
     )
     assert pipe.delete_calls == [["style-one", "style-two"]]
     assert backend._applied_lora_direct_deltas_by_transformer == {}
+
+
+def test_apply_lora_direct_deltas_resolves_peft_base_layer_aliases() -> None:
+    backend = object.__new__(DiffusersZImageBackend)
+    pipe = _FakeLoraPipe()
+    pipe.transformer = _FakePeftTransformerRoot()
+    wrapped_transformer = pipe.transformer.base_model.model
+    cap_bias_before = wrapped_transformer.cap_embedder[1].base_layer.bias.detach().clone()
+    x_bias_before = wrapped_transformer.all_x_embedder["2-1"].base_layer.bias.detach().clone()
+    final_bias_before = wrapped_transformer.all_final_layer["2-1"].linear.base_layer.bias.detach().clone()
+
+    prepared = PreparedLoraCompatState(
+        adapter_state_dict={},
+        direct_param_deltas=(
+            LoraDirectParameterDelta(
+                target_key="transformer.cap_embedder.1.bias",
+                tensor=torch.full_like(cap_bias_before, 2.0),
+            ),
+            LoraDirectParameterDelta(
+                target_key="transformer.all_x_embedder.2-1.bias",
+                tensor=torch.full_like(x_bias_before, 3.0),
+            ),
+            LoraDirectParameterDelta(
+                target_key="transformer.all_final_layer.2-1.linear.bias",
+                tensor=torch.full_like(final_bias_before, 5.0),
+            ),
+        ),
+        format_label="legacy-zimage-extracted",
+    )
+
+    backend._apply_lora_direct_deltas(pipe, {"compat-style": prepared}, {"compat-style": 0.5})
+
+    assert torch.allclose(
+        wrapped_transformer.cap_embedder[1].base_layer.bias.detach(),
+        cap_bias_before + torch.full_like(cap_bias_before, 1.0),
+        atol=1e-6,
+        rtol=0.0,
+    )
+    assert torch.allclose(
+        wrapped_transformer.all_x_embedder["2-1"].base_layer.bias.detach(),
+        x_bias_before + torch.full_like(x_bias_before, 1.5),
+        atol=1e-6,
+        rtol=0.0,
+    )
+    assert torch.allclose(
+        wrapped_transformer.all_final_layer["2-1"].linear.base_layer.bias.detach(),
+        final_bias_before + torch.full_like(final_bias_before, 2.5),
+        atol=1e-6,
+        rtol=0.0,
+    )
+
+    backend._revert_lora_direct_deltas(pipe, adapter_names=["compat-style"])
+
+    assert torch.allclose(
+        wrapped_transformer.cap_embedder[1].base_layer.bias.detach(),
+        cap_bias_before,
+        atol=1e-6,
+        rtol=0.0,
+    )
+    assert torch.allclose(
+        wrapped_transformer.all_x_embedder["2-1"].base_layer.bias.detach(),
+        x_bias_before,
+        atol=1e-6,
+        rtol=0.0,
+    )
+    assert torch.allclose(
+        wrapped_transformer.all_final_layer["2-1"].linear.base_layer.bias.detach(),
+        final_bias_before,
+        atol=1e-6,
+        rtol=0.0,
+    )
 
 
 def test_load_lora_adapters_passes_exact_user_weights_for_stacked_adapters(monkeypatch) -> None:

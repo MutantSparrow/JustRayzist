@@ -6,11 +6,11 @@ JustRayzist is a local-first image generation app built around the Rayzist Z-Ima
 
 The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
 
-## New in v1.8.3
+## New in v1.8.4
 
-- Adds best-effort compat for extracted Z-Image LoRAs that ship missing `.alpha` tensors plus direct `.diff` and `.diff_b` parameter deltas.
-- Adds local-only `POST /server/restart` and API-page restart control so source or packaged server can reboot in place and pick up code changes.
-- Extends regression coverage for extracted LoRA conversion, direct delta apply/revert, restart route scheduling, and restart security.
+- Fixes extracted Z-Image LoRAs whose direct `diff_b` tensors target modules wrapped by PEFT `base_layer` shims after adapter load.
+- Resolves direct-delta targets through wrapper aliases such as `base_model.model.*`, `module.*`, and `*.base_layer.*` so mixed LoRA plus extracted-delta adapters apply cleanly.
+- Adds regression coverage for wrapped `cap_embedder`, `all_x_embedder`, and `all_final_layer` direct-delta targets.
 
 ![Wildcard library preview](readme_images/wildcards_preview.png)
 
@@ -237,7 +237,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.3",
+  "version": "1.8.4",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -268,7 +268,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.3",
+  "app_version": "1.8.4",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {

@@ -3373,6 +3373,47 @@ class DiffusersZImageBackend:
         return DiffusersZImageBackend._ensure_transformer_key(key)
 
     @staticmethod
+    def _iter_transformer_tensor_name_aliases(name: str) -> tuple[str, ...]:
+        aliases: set[str] = {str(name)}
+        pending = [str(name)]
+        removable_prefixes = (
+            "base_model.model.",
+            "model.",
+            "_orig_mod.",
+            "module.",
+        )
+        removable_segments = (
+            ".base_layer.",
+            ".original_module.",
+            "._orig_mod.",
+        )
+
+        while pending:
+            current = pending.pop()
+            for prefix in removable_prefixes:
+                if current.startswith(prefix):
+                    alias = current.removeprefix(prefix)
+                    if alias not in aliases:
+                        aliases.add(alias)
+                        pending.append(alias)
+            for segment in removable_segments:
+                if segment in current:
+                    alias = current.replace(segment, ".")
+                    if alias not in aliases:
+                        aliases.add(alias)
+                        pending.append(alias)
+        return tuple(aliases)
+
+    @classmethod
+    def _collect_transformer_target_tensors(cls, transformer: Any) -> dict[str, Any]:
+        target_tensors: dict[str, Any] = {}
+        for collection in (transformer.named_parameters(), transformer.named_buffers()):
+            for name, tensor in collection:
+                for alias in cls._iter_transformer_tensor_name_aliases(str(name)):
+                    target_tensors.setdefault(alias, tensor)
+        return target_tensors
+
+    @staticmethod
     def _split_qkv_lora_up_weight(up_weight: Any) -> tuple[Any, Any, Any]:
         return tuple(up_weight.chunk(3, dim=0))
 
@@ -3576,8 +3617,7 @@ class DiffusersZImageBackend:
         if transformer is None:
             raise ValueError("Active pipeline does not expose the transformer module for extracted LoRA deltas.")
 
-        target_tensors = dict(transformer.named_parameters())
-        target_tensors.update(dict(transformer.named_buffers()))
+        target_tensors = self._collect_transformer_target_tensors(transformer)
 
         applied_by_adapter: dict[str, list[AppliedLoraDirectParameterDelta]] = {}
         flat_applied: list[AppliedLoraDirectParameterDelta] = []
