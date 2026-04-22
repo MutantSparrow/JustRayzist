@@ -209,6 +209,37 @@ def test_run_fidelity_upscale_core_photo_uses_seed_then_img2img(monkeypatch, tem
     assert result.step_timings_ms["fidelity_img2img_ms"] == 111
 
 
+def test_run_fidelity_upscale_core_photo_accepts_similarity_override(monkeypatch, temp_app_paths, make_app_settings) -> None:
+    settings = make_app_settings(paths=temp_app_paths)
+    source_image = Image.new("RGB", (40, 24), color=(10, 20, 30))
+    session = _FakeSession()
+
+    monkeypatch.setattr(deblur_core, "ensure_deblur_prerequisites", lambda settings: None)
+    monkeypatch.setattr(
+        deblur_core,
+        "upscale_with_seedvr2_direct_x2",
+        lambda **kwargs: SimpleNamespace(
+            image=Image.new("RGB", (80, 48), color=(60, 70, 80)),
+            duration_ms=222,
+            device="cuda:0",
+        ),
+    )
+
+    result = deblur_core.run_fidelity_upscale_core(
+        image=source_image,
+        settings=settings,
+        session=session,
+        profile_name=settings.runtime_profile.name,
+        content_type="photo",
+        seed=777,
+        scheduler_mode="euler",
+        photo_similarity_override=0.85,
+    )
+
+    assert result.similarity == pytest.approx(0.85)
+    assert session.last_request.refine_strength == pytest.approx(0.15)
+
+
 def test_run_fidelity_upscale_core_art_skips_img2img(monkeypatch, temp_app_paths, make_app_settings) -> None:
     settings = make_app_settings(paths=temp_app_paths)
     source_image = Image.new("RGB", (40, 24), color=(10, 20, 30))
@@ -273,7 +304,7 @@ def test_run_default_upscale_pipeline_uses_fidelity_core_then_fs(monkeypatch, te
         call_order.append("fs")
         assert kwargs["method"] == deblur_core.CLARITY_FS_METHOD
         assert kwargs["blur_type"] == deblur_core.CLARITY_FS_TYPE
-        assert kwargs["intensity"] == deblur_core.CLARITY_FS_INTENSITY
+        assert kwargs["intensity"] == deblur_core.DEFAULT_UPSCALE_FS_INTENSITY
         return image.copy()
 
     monkeypatch.setattr(deblur_core, "fs_sharpen", fake_fs)
@@ -293,6 +324,45 @@ def test_run_default_upscale_pipeline_uses_fidelity_core_then_fs(monkeypatch, te
     assert result.step_timings_ms["fidelity_seed_ms"] == 12
     assert result.step_timings_ms["fidelity_img2img_ms"] == 34
     assert result.step_timings_ms["upscale_fs_ms"] >= 0
+
+
+def test_run_default_upscale_pipeline_uses_upscale_specific_similarity_override(
+    monkeypatch, temp_app_paths, make_app_settings
+) -> None:
+    settings = make_app_settings(paths=temp_app_paths)
+    source_image = Image.new("RGB", (40, 24), color=(10, 20, 30))
+    session = _FakeSession()
+    captured: dict[str, object] = {}
+
+    def fake_core(**kwargs):
+        captured["photo_similarity_override"] = kwargs.get("photo_similarity_override")
+        return deblur_core.DeblurFidelityCoreResult(
+            x2_image=Image.new("RGB", (80, 48), color=(60, 70, 80)),
+            source_x2_image=Image.new("RGB", (80, 48), color=(30, 40, 50)),
+            source_width=40,
+            source_height=24,
+            working_width=80,
+            working_height=48,
+            seed=777,
+            similarity=0.85,
+            device="cuda:0",
+            content_type="photo",
+            step_timings_ms={"fidelity_seed_ms": 12, "fidelity_img2img_ms": 34},
+        )
+
+    monkeypatch.setattr(deblur_core, "run_fidelity_upscale_core", fake_core)
+    monkeypatch.setattr(deblur_core, "fs_sharpen", lambda image, **kwargs: image.copy())
+
+    deblur_core.run_default_upscale_pipeline(
+        image=source_image,
+        settings=settings,
+        session=session,
+        profile_name=settings.runtime_profile.name,
+        seed=777,
+        scheduler_mode="euler",
+    )
+
+    assert captured["photo_similarity_override"] == pytest.approx(deblur_core.DEFAULT_UPSCALE_PHOTO_SIMILARITY)
 
 
 def test_run_default_clarity_pipeline_uses_mb_chroma_edgeaware_fs_unsharp_then_shrink(

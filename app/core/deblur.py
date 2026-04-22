@@ -55,6 +55,8 @@ DEBLUR_FIDELITY_ART_VARIANTS = (
     "art_detail_chroma_edgeaware",
 )
 DEBLUR_FIDELITY_PHOTO_SIMILARITY = 0.90
+DEFAULT_UPSCALE_PHOTO_SIMILARITY = 0.85
+DEFAULT_UPSCALE_FS_INTENSITY = 4
 DEFAULT_UPSCALE_ENGINE_NAME = "baseline_ai_x2_fs"
 DEFAULT_CLARITY_ENGINE_NAME = "multiband_chroma_edgeaware_fs_unsharp_downscale"
 
@@ -476,6 +478,7 @@ def run_fidelity_upscale_core(
     content_type: str = "photo",
     seed: int | None = None,
     scheduler_mode: str | None = None,
+    photo_similarity_override: float | None = None,
 ) -> DeblurFidelityCoreResult:
     ensure_deblur_prerequisites(settings)
     normalized_type = _validate_content_type(content_type)
@@ -500,7 +503,11 @@ def run_fidelity_upscale_core(
     img2img_ms = 0
 
     if normalized_type == "photo":
-        effective_similarity = DEBLUR_FIDELITY_PHOTO_SIMILARITY
+        effective_similarity = (
+            float(photo_similarity_override)
+            if photo_similarity_override is not None
+            else DEBLUR_FIDELITY_PHOTO_SIMILARITY
+        )
         img2img_result = session.refine_image(
             working_image,
             GenerationRequest(
@@ -645,13 +652,14 @@ def run_default_upscale_pipeline(
         content_type="photo",
         seed=seed,
         scheduler_mode=scheduler_mode,
+        photo_similarity_override=DEFAULT_UPSCALE_PHOTO_SIMILARITY,
     )
     fs_started = perf_counter()
     final_image = fs_sharpen(
         core_result.x2_image,
         method=CLARITY_FS_METHOD,
         blur_type=CLARITY_FS_TYPE,
-        intensity=CLARITY_FS_INTENSITY,
+        intensity=DEFAULT_UPSCALE_FS_INTENSITY,
     )
     fs_ms = _measure_ms(fs_started)
     return DefaultUpscaleResult(

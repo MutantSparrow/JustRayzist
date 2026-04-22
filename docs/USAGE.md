@@ -256,6 +256,7 @@ $headers = @{ "X-JustRayzist-Client" = "desktop-client" }
 - `GET /gallery/import-sources`
 - `POST /gallery/import`
 - `POST /server/kill`
+- `POST /server/restart`
 <!-- END GENERATED API ROUTES -->
 
 <!-- BEGIN GENERATED API EXAMPLES -->
@@ -269,7 +270,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -300,7 +301,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.1",
+  "app_version": "1.8.2",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -1182,6 +1183,25 @@ Sample response:
 {
   "status": "ok",
   "message": "Server shutdown initiated."
+}
+```
+
+### `POST /server/restart`
+
+Request local server restart on the same bind host and port so code changes are picked up.
+
+Sample request body:
+
+```json
+{}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "message": "Server restart initiated."
 }
 ```
 <!-- END GENERATED API EXAMPLES -->

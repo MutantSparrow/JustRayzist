@@ -6,11 +6,11 @@ JustRayzist is a local-first image generation app built around the Rayzist Z-Ima
 
 The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
 
-## New in v1.8.1
+## New in v1.8.2
 
-- Promotes `baseline_ai_x2 + FS` to the default upscale path across API and web UI flows.
-- Rebuilds default `clarity` around multiband detail transfer, original chroma recovery, edge-aware sharpening, FS sharpen, and final downscale.
-- Cleans release-facing docs and UI helper text so shipped behavior, examples, and metadata match the new image defaults.
+- Retunes default `upscale` after `v1.8.1` regression reports so shipped x2 results are less oversharpened.
+- Keeps the `baseline_ai_x2 + FS` default path, but lowers the photo img2img similarity to `0.85` and halves the upscale-only FS intensity.
+- Leaves default `clarity` unchanged while documenting the hotfix and rebuilding fresh bootstrap packages.
 
 ![Wildcard library preview](readme_images/wildcards_preview.png)
 
@@ -199,7 +199,7 @@ Key API behavior:
 - `scheduler_mode` remains optional for raw API and CLI usage.
 - `GET /health` and `GET /config` report both `runtime_profile` and `resource_tier`.
 - `GET /model-packs` returns public enabled packs only.
-- `POST /server/kill` is restricted to the local machine hosting the app.
+- `POST /server/kill` and `POST /server/restart` are restricted to the local machine hosting the app.
 
 <!-- BEGIN GENERATED API ROUTES -->
 - `GET /health`
@@ -237,7 +237,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -268,7 +268,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.1",
+  "app_version": "1.8.2",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
