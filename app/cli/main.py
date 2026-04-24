@@ -3035,6 +3035,14 @@ def seedvr2_still_benchmark(
         "--presets",
         help="Comma-separated preset ids. Defaults to all still-image tuning presets.",
     ),
+    runtime_preset: str = typer.Option(
+        "current_baseline",
+        "--runtime-preset",
+        help=(
+            "SeedVR2 runtime preset for x2 still-image runs. "
+            "Choose one of: current_baseline, highres_auto, highres_tiled_1024, highres_tiled_896."
+        ),
+    ),
     timeout_seconds: int = typer.Option(
         240,
         "--timeout-seconds",
@@ -3065,7 +3073,12 @@ def seedvr2_still_benchmark(
     import torch
     from PIL import Image
 
-    from app.core.seedvr2 import SeedVR2StillImageConfig, clear_seedvr2_runtime_cache, upscale_with_seedvr2_direct_x2
+    from app.core.seedvr2 import (
+        SEEDVR2_RUNTIME_PRESETS,
+        SeedVR2StillImageConfig,
+        clear_seedvr2_runtime_cache,
+        upscale_with_seedvr2_direct_x2,
+    )
     from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
 
     def _resolve_input_paths(root_dir: Path, raw_inputs: str) -> list[Path]:
@@ -3152,6 +3165,14 @@ def seedvr2_still_benchmark(
             raise ValueError("No valid preset ids provided in --presets.")
         return requested
 
+    def _normalize_runtime_preset(raw_runtime_preset: str) -> str:
+        normalized = str(raw_runtime_preset).strip().lower()
+        if normalized not in SEEDVR2_RUNTIME_PRESETS:
+            raise ValueError(
+                f"Unknown runtime preset '{raw_runtime_preset}'. Allowed: {', '.join(SEEDVR2_RUNTIME_PRESETS)}."
+            )
+        return normalized
+
     seed_settings = load_settings(profile_name=profile)
     root = seed_settings.paths.root_dir
     profile_settings = load_settings(profile_name=profile)
@@ -3161,6 +3182,7 @@ def seedvr2_still_benchmark(
     input_paths = _resolve_input_paths(root, inputs)
     model_dir, dit_filename, vae_filename = _resolve_model_paths(root)
     preset_ids = _parse_presets(presets)
+    effective_runtime_preset = _normalize_runtime_preset(runtime_preset)
 
     started_utc = datetime.now(timezone.utc)
     report_key = started_utc.strftime("%Y%m%d_%H%M%S")
@@ -3182,6 +3204,7 @@ def seedvr2_still_benchmark(
     typer.echo(
         "Running SeedVR2 still benchmark (x2 direct only) with presets: "
         + ", ".join(preset_ids)
+        + f" | runtime preset: {effective_runtime_preset}"
     )
 
     for source_path in input_paths:
@@ -3196,6 +3219,7 @@ def seedvr2_still_benchmark(
                     "strategy": "direct_target",
                     "run_index": run_index,
                     "profile": profile_settings.runtime_profile.name,
+                    "runtime_preset": effective_runtime_preset,
                     "status": "pending",
                     "duration_ms": None,
                     "upscale_infer_ms": None,
@@ -3234,6 +3258,7 @@ def seedvr2_still_benchmark(
                         dit_filename=dit_filename,
                         vae_filename=vae_filename,
                         still_image_config=still_cfg,
+                        runtime_preset=effective_runtime_preset,
                     )
                     output_path = build_output_path(
                         destination_dir,
@@ -3249,6 +3274,7 @@ def seedvr2_still_benchmark(
                             "benchmark_scale": 2,
                             "benchmark_strategy": "direct_target",
                             "benchmark_preset": preset_id,
+                            "benchmark_runtime_preset": effective_runtime_preset,
                             "source_image": str(source_path),
                             **result.telemetry_dict(),
                         },
@@ -3272,6 +3298,7 @@ def seedvr2_still_benchmark(
                             "benchmark_scale": 2,
                             "benchmark_strategy": "direct_target",
                             "benchmark_preset": preset_id,
+                            "benchmark_runtime_preset": effective_runtime_preset,
                             "source_image": str(source_path),
                             "output_path": str(saved_path),
                             "duration_ms": duration_ms,
@@ -3298,6 +3325,7 @@ def seedvr2_still_benchmark(
         "strategy",
         "run_index",
         "profile",
+        "runtime_preset",
         "status",
         "duration_ms",
         "upscale_infer_ms",

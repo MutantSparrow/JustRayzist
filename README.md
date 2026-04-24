@@ -6,11 +6,11 @@ JustRayzist is a local-first image generation app built around the Rayzist Z-Ima
 
 The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
 
-## New in v1.8.4
+## New in v1.8.3
 
-- Fixes extracted Z-Image LoRAs whose direct `diff_b` tensors target modules wrapped by PEFT `base_layer` shims after adapter load.
-- Resolves direct-delta targets through wrapper aliases such as `base_model.model.*`, `module.*`, and `*.base_layer.*` so mixed LoRA plus extracted-delta adapters apply cleanly.
-- Adds regression coverage for wrapped `cap_embedder`, `all_x_embedder`, and `all_final_layer` direct-delta targets.
+- Fixes LoRA and Wildcard drawer masonry relayout jumps so library scrolling stays anchored while cards reflow.
+- Reworks default x2 upscale into content-aware path that auto keeps photos on detail-preserving branch and illustrations on art-preserve branch.
+- Reduces tiled upscale seam drift by using current-baseline SeedVR2 policy first, bigger decode overlap on fallback tiling, and source-guided seam repair.
 
 ![Wildcard library preview](readme_images/wildcards_preview.png)
 
@@ -26,7 +26,7 @@ The project is designed to run offline after setup. Normal user flows stay on a 
 - Gallery indexing with favorites, dominant-color filters, bulk download, rebuild, and import-from-source support.
 - Prompt enhancement and Creative Mode (`procedural_creativity` values `0-3`).
 - `R+` alternate staged inference mode with vibrance and bias controls.
-- Baseline AI x2 plus FS sharpen as the default upscale path.
+- Content-aware x2 upscale with photo or illustration routing, tiled seam repair, and photo-only FS finishing.
 - Source-mode launchers for Windows, Linux, and macOS.
 - Windows packaging and in-place packaged update flow.
 
@@ -181,7 +181,7 @@ Engineering-only comparison and benchmark commands:
 python -m app.cli.main pack-compare --prompt "cinematic skyline at sunrise"
 python -m app.cli.main pack-compare-suite --iterations 3
 python -m app.cli.main prompt-grid-benchmark --pack Rayzist_bf16 --prompt "PROMPT 1" --prompt "PROMPT 2" --prompt "PROMPT 3"
-python -m app.cli.main seedvr2-still-benchmark --inputs outputs\sample.png --presets seed_faithful,seed_sharp
+python -m app.cli.main seedvr2-still-benchmark --inputs outputs\sample.png --presets seed_faithful,seed_sharp --runtime-preset current_baseline
 python -m app.cli.main procedural-latent-preview --count 16 --seed-start 1 --creativity 2
 ```
 
@@ -237,7 +237,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.4",
+  "version": "1.8.3",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -268,7 +268,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.4",
+  "app_version": "1.8.3",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -807,7 +807,7 @@ Sample response:
 
 ### `POST /upscale`
 
-Upscale one gallery image with the baseline AI x2 plus FS sharpen path.
+Upscale one gallery image with the content-aware x2 path for photos and illustration.
 
 Requires `X-JustRayzist-Client`.
 
@@ -831,8 +831,8 @@ Sample response:
   "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
   "mode": "api_upscale",
   "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-  "upscale_engine": "baseline_ai_x2_fs",
-  "execution_mode": "baseline_ai_x2_fs",
+  "upscale_engine": "content_aware_ai_x2",
+  "execution_mode": "content_aware_ai_x2",
   "duration_ms": 23456,
   "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png"
 }

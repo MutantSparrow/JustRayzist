@@ -1476,6 +1476,18 @@ function applyLoraPreviewAspectRatio(preview) {
     : "1 / 1";
 }
 
+function preserveScrollPosition(container, callback) {
+  if (!(container instanceof HTMLElement) || typeof callback !== "function") {
+    return typeof callback === "function" ? callback() : undefined;
+  }
+  const scrollTop = container.scrollTop;
+  const scrollLeft = container.scrollLeft;
+  const result = callback();
+  container.scrollTop = scrollTop;
+  container.scrollLeft = scrollLeft;
+  return result;
+}
+
 function createLoraMasonryColumns(columnCount) {
   loraListEl.innerHTML = "";
   loraListEl.style.setProperty("--lora-masonry-columns", String(columnCount));
@@ -1503,10 +1515,12 @@ function appendToShortestLoraMasonryColumn(item, columns, heights) {
 }
 
 function placeLoraMasonryItems(items) {
-  const columnCount = getLoraMasonryColumnCount();
-  const columns = createLoraMasonryColumns(columnCount);
-  const heights = new Array(columnCount).fill(0);
-  items.forEach((item) => appendToShortestLoraMasonryColumn(item, columns, heights));
+  preserveScrollPosition(loraListEl, () => {
+    const columnCount = getLoraMasonryColumnCount();
+    const columns = createLoraMasonryColumns(columnCount);
+    const heights = new Array(columnCount).fill(0);
+    items.forEach((item) => appendToShortestLoraMasonryColumn(item, columns, heights));
+  });
 }
 
 function relayoutLoraLibraryMasonry() {
@@ -2366,10 +2380,12 @@ function appendToShortestWildcardMasonryColumn(item, columns, heights) {
 }
 
 function placeWildcardMasonryItems(items) {
-  const columnCount = getWildcardMasonryColumnCount();
-  const columns = createWildcardMasonryColumns(columnCount);
-  const heights = new Array(columnCount).fill(0);
-  items.forEach((item) => appendToShortestWildcardMasonryColumn(item, columns, heights));
+  preserveScrollPosition(wildcardListEl, () => {
+    const columnCount = getWildcardMasonryColumnCount();
+    const columns = createWildcardMasonryColumns(columnCount);
+    const heights = new Array(columnCount).fill(0);
+    items.forEach((item) => appendToShortestWildcardMasonryColumn(item, columns, heights));
+  });
 }
 
 function relayoutWildcardLibraryMasonry() {
@@ -4016,7 +4032,7 @@ function updateUpscaleControls() {
   state.upscaleMode = "fast";
   state.upscaleScale = 2;
   if (upscaleSettingsHintEl) {
-    upscaleSettingsHintEl.textContent = "Upscale uses baseline AI x2 plus FS sharpen.";
+    upscaleSettingsHintEl.textContent = "Upscale uses content-aware x2 path for photos and illustration.";
   }
 }
 

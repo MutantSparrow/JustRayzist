@@ -154,6 +154,7 @@ def test_inference_upscale_persists_lineage(monkeypatch, temp_app_paths, make_ap
     settings = make_app_settings(paths=temp_app_paths)
     service = InferenceService(settings=settings)
     saved_metadata: dict[str, object] = {}
+    captured: dict[str, object] = {}
     source_path = temp_app_paths.outputs_dir / "example-client" / "source.png"
     source_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (320, 240), color=(12, 34, 56)).save(source_path)
@@ -180,9 +181,10 @@ def test_inference_upscale_persists_lineage(monkeypatch, temp_app_paths, make_ap
         ),
     )
     monkeypatch.setattr(service, "_session_for_pack", lambda model_pack, resource_tier: object())
-    monkeypatch.setattr(
-        "app.api.inference_service.run_default_upscale_pipeline",
-        lambda **kwargs: DefaultUpscaleResult(
+
+    def fake_upscale_pipeline(**kwargs):
+        captured["prompt_text"] = kwargs.get("prompt_text")
+        return DefaultUpscaleResult(
             image=Image.new("RGB", (640, 480), color=(80, 100, 140)),
             duration_ms=654,
             source_width=320,
@@ -197,8 +199,9 @@ def test_inference_upscale_persists_lineage(monkeypatch, temp_app_paths, make_ap
                 "fidelity_img2img_ms": 22,
                 "upscale_fs_ms": 4,
             },
-        ),
-    )
+        )
+
+    monkeypatch.setattr("app.api.inference_service.run_default_upscale_pipeline", fake_upscale_pipeline)
     monkeypatch.setattr("app.api.inference_service.append_generation_metric", lambda **kwargs: None)
 
     def fake_save_png_with_metadata(**kwargs):
@@ -228,5 +231,6 @@ def test_inference_upscale_persists_lineage(monkeypatch, temp_app_paths, make_ap
     assert metadata["fidelity_seed_ms"] == 11
     assert metadata["fidelity_img2img_ms"] == 22
     assert metadata["upscale_fs_ms"] == 4
+    assert captured["prompt_text"] == "hello world"
     assert result["mode"] == "api_upscale"
     assert result["upscale_engine"] == DEFAULT_UPSCALE_ENGINE_NAME

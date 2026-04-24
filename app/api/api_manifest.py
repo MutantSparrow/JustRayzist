@@ -483,7 +483,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ApiExample(
         method="POST",
         path="/upscale",
-        description="Upscale one gallery image with the baseline AI x2 plus FS sharpen path.",
+        description="Upscale one gallery image with the content-aware x2 path for photos and illustration.",
         requires_client=True,
         request={
             "job_id": "pending_upscale_1712345678901_abcd1234",
@@ -497,8 +497,8 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
             "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
             "mode": "api_upscale",
             "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-            "upscale_engine": "baseline_ai_x2_fs",
-            "execution_mode": "baseline_ai_x2_fs",
+            "upscale_engine": "content_aware_ai_x2",
+            "execution_mode": "content_aware_ai_x2",
             "duration_ms": 23456,
             "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png",
         },

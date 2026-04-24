@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import math
 import random
+import re
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 import cv2
 import numpy as np
@@ -21,12 +22,15 @@ from app.core.clarity import (
 )
 from app.core.seedvr2 import (
     SEEDVR2_DIT_FILENAME,
+    SEEDVR2_RUNTIME_PRESET_CURRENT_BASELINE,
+    SEEDVR2_RUNTIME_PRESET_HIGHRES_AUTO,
     SEEDVR2_VAE_FILENAME,
     SeedVR2StillImageConfig,
     _runtime_script_path,
     _seedvr2_model_dir,
     upscale_with_seedvr2_direct_x2,
 )
+from app.core.tile_seams import soften_tile_seams, tile_seam_positions
 from app.core.worker import GenerationSession
 from app.core.worker.types import GenerationRequest
 
@@ -57,8 +61,67 @@ DEBLUR_FIDELITY_ART_VARIANTS = (
 DEBLUR_FIDELITY_PHOTO_SIMILARITY = 0.90
 DEFAULT_UPSCALE_PHOTO_SIMILARITY = 0.85
 DEFAULT_UPSCALE_FS_INTENSITY = 4
-DEFAULT_UPSCALE_ENGINE_NAME = "baseline_ai_x2_fs"
+DEFAULT_UPSCALE_ENGINE_NAME = "content_aware_ai_x2"
 DEFAULT_CLARITY_ENGINE_NAME = "multiband_chroma_edgeaware_fs_unsharp_downscale"
+UPSCALE_CONTENT_MODE_VALUES = ("auto", "photo", "art")
+_UPSCALE_PROMPT_ART_PATTERNS: tuple[str, ...] = (
+    r"\billustration\b",
+    r"\billustrated\b",
+    r"\bdrawing\b",
+    r"\bsketch(?:ed)?\b",
+    r"\bline(?:-| )art\b",
+    r"\bdigital art\b",
+    r"\bconcept art\b",
+    r"\banime\b",
+    r"\bmanga\b",
+    r"\bcomic(?: book)?\b",
+    r"\bcartoon\b",
+    r"\bcel(?:-| )shad(?:e|ed|ing)\b",
+    r"\binked\b",
+    r"\bpanel\b",
+    r"\bstoryboard\b",
+    r"\bgraphic novel\b",
+    r"\bwebtoon\b",
+    r"\bchibi\b",
+    r"\bkawaii\b",
+    r"\bmoe\b",
+    r"\bshonen\b",
+    r"\bshojo\b",
+    r"\bseinen\b",
+    r"\bmanhwa\b",
+    r"\bfan art\b",
+)
+_UPSCALE_PROMPT_PHOTO_PATTERNS: tuple[str, ...] = (
+    r"\bphoto\b",
+    r"\bphotograph(?:y|ic)?\b",
+    r"\bphotorealistic\b",
+    r"\brealistic\b",
+    r"\bcinematic\b",
+    r"\bportrait\b",
+    r"\bselfie\b",
+    r"\bsnapshot\b",
+    r"\bpicture\b",
+    r"\bcamera\b",
+    r"\bdslr\b",
+    r"\bmirrorless\b",
+    r"\blens\b",
+    r"\bbokeh\b",
+    r"\bdepth of field\b",
+    r"\bexposure\b",
+    r"\baperture\b",
+    r"\bshutter speed\b",
+    r"\biso\b",
+    r"\bfocal length\b",
+    r"\bclose(?:-| )up\b",
+    r"\bmacro\b",
+    r"\bwide(?:-| )angle\b",
+    r"\bstudio lighting\b",
+    r"\bfilm grain\b",
+)
+
+UpscaleContentMode = Literal["auto", "photo", "art"]
+ResolvedUpscaleContentMode = Literal["photo", "art"]
+UpscaleContentDecisionSource = Literal["prompt", "image", "mixed", "forced"]
 
 _IMG2IMG_MAX_PIXELS = 1_500_000
 _IMG2IMG_DIM_MULTIPLE = 32
@@ -147,6 +210,9 @@ class DeblurFidelityCoreResult:
     device: str
     content_type: str
     step_timings_ms: dict[str, int]
+    seed_decode_tiled: bool = False
+    seed_decode_tile_size: int | None = None
+    seed_decode_tile_overlap: int | None = None
 
 
 @dataclass
@@ -161,6 +227,7 @@ class DefaultUpscaleResult:
     device: str
     engine_name: str
     step_timings_ms: dict[str, int]
+    telemetry_extra: dict[str, Any] | None = None
 
     def telemetry_dict(self) -> dict[str, Any]:
         return {
@@ -169,6 +236,7 @@ class DefaultUpscaleResult:
             "working_height": self.working_height,
             "upscale_duration_ms": self.duration_ms,
             **self.step_timings_ms,
+            **(self.telemetry_extra or {}),
         }
 
 
@@ -195,6 +263,15 @@ class DefaultClarityResult:
             "clarity_duration_ms": self.duration_ms,
             **self.step_timings_ms,
         }
+
+
+@dataclass
+class UpscaleContentModeDecision:
+    mode: ResolvedUpscaleContentMode
+    source: UpscaleContentDecisionSource
+    prompt_art_hits: int
+    prompt_photo_hits: int
+    image_art_signals: int
 
 
 @dataclass
@@ -241,6 +318,10 @@ def _lab_float_channels(image: Image.Image) -> tuple[np.ndarray, np.ndarray, np.
     return lab[..., 0], lab[..., 1], lab[..., 2]
 
 
+def _lab_float_image(image: Image.Image) -> np.ndarray:
+    return cv2.cvtColor(_rgb_array(image), cv2.COLOR_RGB2LAB).astype(np.float32)
+
+
 def _lab_to_rgb_image(l_channel: np.ndarray, a_channel: np.ndarray, b_channel: np.ndarray) -> Image.Image:
     lab = np.stack(
         [
@@ -251,6 +332,11 @@ def _lab_to_rgb_image(l_channel: np.ndarray, a_channel: np.ndarray, b_channel: n
         axis=-1,
     ).astype(np.uint8)
     rgb = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+    return Image.fromarray(rgb, mode="RGB")
+
+
+def _lab_image_to_rgb_image(lab_image: np.ndarray) -> Image.Image:
+    rgb = cv2.cvtColor(np.clip(lab_image, 0.0, 255.0).astype(np.uint8), cv2.COLOR_LAB2RGB)
     return Image.fromarray(rgb, mode="RGB")
 
 
@@ -275,6 +361,165 @@ def _gradient_energy(luma: np.ndarray) -> float:
     grad_x = cv2.Sobel(luma, cv2.CV_32F, 1, 0, ksize=3)
     grad_y = cv2.Sobel(luma, cv2.CV_32F, 0, 1, ksize=3)
     return float(np.mean(np.sqrt((grad_x * grad_x) + (grad_y * grad_y))))
+
+
+def _gradient_magnitude(luma: np.ndarray) -> np.ndarray:
+    grad_x = cv2.Sobel(luma, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(luma, cv2.CV_32F, 0, 1, ksize=3)
+    return np.sqrt((grad_x * grad_x) + (grad_y * grad_y))
+
+
+def _tile_cell_bounds(length: int, seam_positions: tuple[int, ...]) -> tuple[tuple[int, int], ...]:
+    edges = [0, *[int(value) for value in seam_positions if 0 < int(value) < int(length)], int(length)]
+    bounds: list[tuple[int, int]] = []
+    for start, end in zip(edges, edges[1:]):
+        if end > start:
+            bounds.append((int(start), int(end)))
+    return tuple(bounds)
+
+
+def _raised_cosine_axis_weights(axis_length: int, bounds: tuple[tuple[int, int], ...]) -> np.ndarray:
+    if not bounds:
+        return np.zeros((0, max(0, int(axis_length))), dtype=np.float32)
+    weights = np.zeros((len(bounds), int(axis_length)), dtype=np.float32)
+    centers = [0.5 * float(start + end - 1) for start, end in bounds]
+    for index in range(int(axis_length)):
+        position = float(index)
+        if position <= centers[0]:
+            weights[0, index] = 1.0
+            continue
+        if position >= centers[-1]:
+            weights[-1, index] = 1.0
+            continue
+        for left_index in range(len(centers) - 1):
+            left_center = float(centers[left_index])
+            right_center = float(centers[left_index + 1])
+            if position > right_center:
+                continue
+            span = max(1e-6, right_center - left_center)
+            t = np.clip((position - left_center) / span, 0.0, 1.0)
+            blend = 0.5 - (0.5 * math.cos(math.pi * t))
+            weights[left_index, index] = 1.0 - float(blend)
+            weights[left_index + 1, index] = float(blend)
+            break
+    return weights
+
+
+def _masked_mean(values: np.ndarray, mask: np.ndarray | None) -> float:
+    if mask is None or not np.any(mask):
+        return float(values.mean())
+    return float(values[mask].mean())
+
+
+def _validate_upscale_content_mode(content_mode: UpscaleContentMode) -> UpscaleContentMode:
+    normalized = str(content_mode or "auto").strip().lower() or "auto"
+    if normalized not in UPSCALE_CONTENT_MODE_VALUES:
+        raise ValueError(
+            f"Unsupported upscale content mode: {content_mode}. Choose one of: {', '.join(UPSCALE_CONTENT_MODE_VALUES)}."
+        )
+    return normalized  # type: ignore[return-value]
+
+
+def _score_prompt_patterns(prompt_text: str | None, patterns: tuple[str, ...]) -> int:
+    normalized = str(prompt_text or "").strip().lower()
+    if not normalized:
+        return 0
+    return sum(1 for pattern in patterns if re.search(pattern, normalized))
+
+
+def _resize_for_upscale_mode_detection(image: Image.Image, *, max_edge: int = 512) -> Image.Image:
+    rgb = image.convert("RGB")
+    longest_edge = max(rgb.width, rgb.height)
+    if longest_edge <= int(max_edge):
+        return rgb
+    scale = float(max_edge) / float(longest_edge)
+    return rgb.resize(
+        (
+            max(1, int(round(float(rgb.width) * scale))),
+            max(1, int(round(float(rgb.height) * scale))),
+        ),
+        Image.Resampling.LANCZOS,
+    )
+
+
+def _palette_top32_share(image: Image.Image) -> float:
+    rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
+    quantized = (rgb // 8).astype(np.int32)
+    flattened = ((quantized[..., 0] * 32 * 32) + (quantized[..., 1] * 32) + quantized[..., 2]).reshape(-1)
+    counts = np.bincount(flattened, minlength=32 * 32 * 32)
+    top_k = min(32, counts.shape[0])
+    if top_k <= 0:
+        return 0.0
+    top_indices = np.argpartition(counts, -top_k)[-top_k:]
+    return float(counts[top_indices].sum()) / float(max(1, flattened.size))
+
+
+def _microtexture_energy(image: Image.Image) -> float:
+    gray = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
+    blurred = cv2.GaussianBlur(gray, (0, 0), sigmaX=1.2, sigmaY=1.2)
+    return float(np.mean(np.abs(gray - blurred)))
+
+
+def _line_share(image: Image.Image) -> float:
+    gray = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
+    grad = _gradient_magnitude(gray)
+    return float(np.mean(grad >= 0.18))
+
+
+def _detect_upscale_content_mode_from_image(image: Image.Image) -> tuple[ResolvedUpscaleContentMode, int]:
+    resized = _resize_for_upscale_mode_detection(image)
+    palette_top32_share = _palette_top32_share(resized)
+    microtexture_energy = _microtexture_energy(resized)
+    line_share = _line_share(resized)
+    image_art_signals = sum(
+        (
+            palette_top32_share >= 0.72,
+            microtexture_energy <= 0.028,
+            line_share >= 0.06,
+        )
+    )
+    return ("art" if image_art_signals >= 2 else "photo"), int(image_art_signals)
+
+
+def detect_upscale_content_mode(
+    image: Image.Image,
+    prompt_text: str | None = None,
+) -> UpscaleContentModeDecision:
+    prompt_art_hits = _score_prompt_patterns(prompt_text, _UPSCALE_PROMPT_ART_PATTERNS)
+    prompt_photo_hits = _score_prompt_patterns(prompt_text, _UPSCALE_PROMPT_PHOTO_PATTERNS)
+    image_mode, image_art_signals = _detect_upscale_content_mode_from_image(image)
+
+    if prompt_photo_hits > prompt_art_hits:
+        return UpscaleContentModeDecision(
+            mode="photo",
+            source="prompt",
+            prompt_art_hits=prompt_art_hits,
+            prompt_photo_hits=prompt_photo_hits,
+            image_art_signals=image_art_signals,
+        )
+    if prompt_art_hits > prompt_photo_hits:
+        return UpscaleContentModeDecision(
+            mode="art",
+            source="prompt",
+            prompt_art_hits=prompt_art_hits,
+            prompt_photo_hits=prompt_photo_hits,
+            image_art_signals=image_art_signals,
+        )
+    if prompt_photo_hits > 0 or prompt_art_hits > 0:
+        return UpscaleContentModeDecision(
+            mode="photo",
+            source="mixed",
+            prompt_art_hits=prompt_art_hits,
+            prompt_photo_hits=prompt_photo_hits,
+            image_art_signals=image_art_signals,
+        )
+    return UpscaleContentModeDecision(
+        mode=image_mode,
+        source="image",
+        prompt_art_hits=prompt_art_hits,
+        prompt_photo_hits=prompt_photo_hits,
+        image_art_signals=image_art_signals,
+    )
 
 
 def restore_original_chroma(
@@ -384,6 +629,132 @@ def apply_edge_aware_sharpen(
     return Image.fromarray((blended * 255.0).round().astype(np.uint8), mode="RGB")
 
 
+def repair_photo_upscale_tile_drift(
+    source_x2_image: Image.Image,
+    candidate_image: Image.Image,
+    *,
+    tile_size: int,
+    tile_overlap: int,
+) -> tuple[Image.Image, float]:
+    source_rgb = source_x2_image.convert("RGB")
+    candidate_rgb = candidate_image.convert("RGB")
+    if source_rgb.size != candidate_rgb.size:
+        source_rgb = source_rgb.resize(candidate_rgb.size, Image.Resampling.LANCZOS)
+
+    width, height = candidate_rgb.size
+    vertical_seams = tile_seam_positions(width, tile_size, tile_overlap)
+    horizontal_seams = tile_seam_positions(height, tile_size, tile_overlap)
+    if not vertical_seams and not horizontal_seams:
+        return candidate_rgb.copy(), 0.0
+
+    sigma = float(np.clip(float(tile_overlap) / 2.0, 16.0, 48.0))
+    source_lab = _lab_float_image(source_rgb)
+    candidate_lab = _lab_float_image(candidate_rgb)
+    source_low = cv2.GaussianBlur(source_lab, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    candidate_low = cv2.GaussianBlur(candidate_lab, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    candidate_high = candidate_lab - candidate_low
+    low_delta = candidate_low - source_low
+
+    source_luma = source_lab[..., 0]
+    source_grad = _gradient_magnitude(source_luma)
+    grad_threshold = float(np.quantile(source_grad, 0.70))
+    smooth_mask = source_grad <= grad_threshold
+    if float(smooth_mask.mean()) < 0.02:
+        smooth_mask = np.ones_like(smooth_mask, dtype=bool)
+
+    global_delta = np.array(
+        [_masked_mean(low_delta[..., channel_index], smooth_mask) for channel_index in range(3)],
+        dtype=np.float32,
+    )
+
+    x_bounds = _tile_cell_bounds(width, vertical_seams)
+    y_bounds = _tile_cell_bounds(height, horizontal_seams)
+    x_weights = _raised_cosine_axis_weights(width, x_bounds)
+    y_weights = _raised_cosine_axis_weights(height, y_bounds)
+    cell_deltas = np.zeros((len(y_bounds), len(x_bounds), 3), dtype=np.float32)
+    for row_index, (y0, y1) in enumerate(y_bounds):
+        for col_index, (x0, x1) in enumerate(x_bounds):
+            cell_mask = smooth_mask[y0:y1, x0:x1]
+            cell_delta = low_delta[y0:y1, x0:x1, :]
+            if float(cell_mask.mean()) >= 0.02 and np.any(cell_mask):
+                cell_deltas[row_index, col_index, :] = np.array(
+                    [
+                        _masked_mean(cell_delta[..., channel_index], cell_mask)
+                        for channel_index in range(3)
+                    ],
+                    dtype=np.float32,
+                )
+            else:
+                cell_deltas[row_index, col_index, :] = global_delta
+
+    correction = np.einsum("yh,xw,yxc->hwc", y_weights, x_weights, cell_deltas, optimize=True)
+    corrected_low = candidate_low - correction
+    repaired_lab = corrected_low + candidate_high
+    repaired_image = _lab_image_to_rgb_image(repaired_lab)
+    repaired_image = soften_tile_seams(
+        repaired_image,
+        vertical_seams=vertical_seams,
+        horizontal_seams=horizontal_seams,
+        band_radius=max(12, int(tile_overlap) // 6),
+    )
+    return repaired_image, sigma
+
+
+def repair_art_upscale_tile_drift(
+    source_x2_image: Image.Image,
+    candidate_image: Image.Image,
+    *,
+    tile_size: int,
+    tile_overlap: int,
+) -> tuple[Image.Image, float]:
+    source_rgb = source_x2_image.convert("RGB")
+    candidate_rgb = candidate_image.convert("RGB")
+    if source_rgb.size != candidate_rgb.size:
+        source_rgb = source_rgb.resize(candidate_rgb.size, Image.Resampling.LANCZOS)
+
+    width, height = candidate_rgb.size
+    vertical_seams = tile_seam_positions(width, tile_size, tile_overlap)
+    horizontal_seams = tile_seam_positions(height, tile_size, tile_overlap)
+    if not vertical_seams and not horizontal_seams:
+        return candidate_rgb.copy(), 0.0
+
+    sigma = float(np.clip(float(tile_overlap) / 2.0, 16.0, 48.0))
+    source_lab = _lab_float_image(source_rgb)
+    candidate_lab = _lab_float_image(candidate_rgb)
+    source_luma = source_lab[..., 0]
+    candidate_luma = candidate_lab[..., 0]
+    source_low = cv2.GaussianBlur(source_luma, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    candidate_low = cv2.GaussianBlur(candidate_luma, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    candidate_high = candidate_luma - candidate_low
+    low_delta = candidate_low - source_low
+
+    source_grad = _gradient_magnitude(source_luma)
+    grad_threshold = float(np.quantile(source_grad, 0.70))
+    smooth_mask = source_grad <= grad_threshold
+    if float(smooth_mask.mean()) < 0.02:
+        smooth_mask = np.ones_like(smooth_mask, dtype=bool)
+
+    global_delta = _masked_mean(low_delta, smooth_mask)
+    x_bounds = _tile_cell_bounds(width, vertical_seams)
+    y_bounds = _tile_cell_bounds(height, horizontal_seams)
+    x_weights = _raised_cosine_axis_weights(width, x_bounds)
+    y_weights = _raised_cosine_axis_weights(height, y_bounds)
+    cell_deltas = np.zeros((len(y_bounds), len(x_bounds)), dtype=np.float32)
+    for row_index, (y0, y1) in enumerate(y_bounds):
+        for col_index, (x0, x1) in enumerate(x_bounds):
+            cell_mask = smooth_mask[y0:y1, x0:x1]
+            cell_delta = low_delta[y0:y1, x0:x1]
+            if float(cell_mask.mean()) >= 0.02 and np.any(cell_mask):
+                cell_deltas[row_index, col_index] = _masked_mean(cell_delta, cell_mask)
+            else:
+                cell_deltas[row_index, col_index] = global_delta
+
+    correction = np.einsum("yh,xw,yx->hw", y_weights, x_weights, cell_deltas, optimize=True)
+    repaired_lab = candidate_lab.copy()
+    repaired_lab[..., 0] = (candidate_low - correction) + candidate_high
+    return _lab_image_to_rgb_image(repaired_lab), sigma
+
+
 def compute_texture_metrics(
     original_image: Image.Image,
     candidate_image: Image.Image,
@@ -479,6 +850,7 @@ def run_fidelity_upscale_core(
     seed: int | None = None,
     scheduler_mode: str | None = None,
     photo_similarity_override: float | None = None,
+    seed_runtime_preset: str = SEEDVR2_RUNTIME_PRESET_HIGHRES_AUTO,
 ) -> DeblurFidelityCoreResult:
     ensure_deblur_prerequisites(settings)
     normalized_type = _validate_content_type(content_type)
@@ -491,6 +863,7 @@ def run_fidelity_upscale_core(
         settings=settings,
         runtime_profile=profile_name,
         seed=effective_seed,
+        runtime_preset=seed_runtime_preset,
         still_image_config=SeedVR2StillImageConfig(
             input_noise_scale=0.0,
             latent_noise_scale=0.0,
@@ -539,6 +912,9 @@ def run_fidelity_upscale_core(
             "fidelity_seed_ms": seed_ms,
             "fidelity_img2img_ms": img2img_ms,
         },
+        seed_decode_tiled=bool(getattr(seed_result, "vae_decode_tiled", False)),
+        seed_decode_tile_size=int(getattr(seed_result, "vae_decode_tile_size", 0) or 0) or None,
+        seed_decode_tile_overlap=int(getattr(seed_result, "vae_decode_tile_overlap", 0) or 0) or None,
     )
 
 
@@ -642,26 +1018,89 @@ def run_default_upscale_pipeline(
     profile_name: str,
     seed: int | None = None,
     scheduler_mode: str | None = None,
+    content_mode: UpscaleContentMode = "auto",
+    prompt_text: str | None = None,
 ) -> DefaultUpscaleResult:
     total_started = perf_counter()
+    normalized_content_mode = _validate_upscale_content_mode(content_mode)
+    if normalized_content_mode == "auto":
+        content_decision = detect_upscale_content_mode(image, prompt_text=prompt_text)
+    else:
+        content_decision = UpscaleContentModeDecision(
+            mode=normalized_content_mode,
+            source="forced",
+            prompt_art_hits=0,
+            prompt_photo_hits=0,
+            image_art_signals=0,
+        )
     core_result = run_fidelity_upscale_core(
         image=image,
         settings=settings,
         session=session,
         profile_name=profile_name,
-        content_type="photo",
+        content_type=content_decision.mode,
         seed=seed,
         scheduler_mode=scheduler_mode,
-        photo_similarity_override=DEFAULT_UPSCALE_PHOTO_SIMILARITY,
+        photo_similarity_override=(
+            DEFAULT_UPSCALE_PHOTO_SIMILARITY if content_decision.mode == "photo" else None
+        ),
+        seed_runtime_preset=SEEDVR2_RUNTIME_PRESET_CURRENT_BASELINE,
     )
-    fs_started = perf_counter()
-    final_image = fs_sharpen(
-        core_result.x2_image,
-        method=CLARITY_FS_METHOD,
-        blur_type=CLARITY_FS_TYPE,
-        intensity=DEFAULT_UPSCALE_FS_INTENSITY,
+    seam_repair_started = perf_counter()
+    seam_repair_applied = bool(
+        core_result.seed_decode_tiled
+        and core_result.seed_decode_tile_size
+        and core_result.seed_decode_tile_overlap
     )
-    fs_ms = _measure_ms(fs_started)
+    repaired_image = core_result.x2_image
+    seam_repair_sigma = 0.0
+    if seam_repair_applied:
+        if content_decision.mode == "art":
+            repaired_image, seam_repair_sigma = repair_art_upscale_tile_drift(
+                core_result.source_x2_image,
+                core_result.x2_image,
+                tile_size=int(core_result.seed_decode_tile_size or 0),
+                tile_overlap=int(core_result.seed_decode_tile_overlap or 0),
+            )
+        else:
+            repaired_image, seam_repair_sigma = repair_photo_upscale_tile_drift(
+                core_result.source_x2_image,
+                core_result.x2_image,
+                tile_size=int(core_result.seed_decode_tile_size or 0),
+                tile_overlap=int(core_result.seed_decode_tile_overlap or 0),
+            )
+    seam_repair_ms = _measure_ms(seam_repair_started)
+    art_multiband_ms = 0
+    art_chroma_ms = 0
+    fs_ms = 0
+    pipeline_variant = "photo_default"
+    if content_decision.mode == "art":
+        pipeline_variant = "art_preserve"
+        art_multiband_started = perf_counter()
+        multiband_image = transfer_multiband_detail(
+            core_result.source_x2_image,
+            repaired_image,
+            mid_amount=0.60,
+            high_amount=0.80,
+        )
+        art_multiband_ms = _measure_ms(art_multiband_started)
+        art_chroma_started = perf_counter()
+        final_image = restore_original_chroma_x2(
+            core_result.source_x2_image,
+            multiband_image,
+            source_weight=0.75,
+            candidate_weight=0.25,
+        )
+        art_chroma_ms = _measure_ms(art_chroma_started)
+    else:
+        fs_started = perf_counter()
+        final_image = fs_sharpen(
+            repaired_image,
+            method=CLARITY_FS_METHOD,
+            blur_type=CLARITY_FS_TYPE,
+            intensity=DEFAULT_UPSCALE_FS_INTENSITY,
+        )
+        fs_ms = _measure_ms(fs_started)
     return DefaultUpscaleResult(
         image=final_image,
         duration_ms=_measure_ms(total_started),
@@ -674,7 +1113,22 @@ def run_default_upscale_pipeline(
         engine_name=DEFAULT_UPSCALE_ENGINE_NAME,
         step_timings_ms={
             **core_result.step_timings_ms,
+            "upscale_seam_repair_ms": seam_repair_ms,
+            "upscale_art_multiband_ms": art_multiband_ms,
+            "upscale_art_chroma_ms": art_chroma_ms,
             "upscale_fs_ms": fs_ms,
+        },
+        telemetry_extra={
+            "upscale_seam_repair_applied": seam_repair_applied,
+            "upscale_seam_repair_mode": "source_guided_lowfreq" if seam_repair_applied else "none",
+            "upscale_seam_repair_sigma": seam_repair_sigma,
+            "upscale_seam_repair_decode_overlap": int(core_result.seed_decode_tile_overlap or 0),
+            "upscale_auto_content_mode": content_decision.mode,
+            "upscale_auto_content_source": content_decision.source,
+            "upscale_auto_prompt_art_hits": content_decision.prompt_art_hits,
+            "upscale_auto_prompt_photo_hits": content_decision.prompt_photo_hits,
+            "upscale_auto_image_art_signals": content_decision.image_art_signals,
+            "upscale_pipeline_variant": pipeline_variant,
         },
     )
 

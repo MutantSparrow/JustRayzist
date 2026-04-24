@@ -1491,6 +1491,7 @@ class InferenceService:
                     profile_name=self._settings.runtime_profile.name,
                     seed=effective_seed,
                     scheduler_mode=scheduler_mode,
+                    prompt_text=source_prompt,
                 )
                 final_image = result.image
                 final_width, final_height = final_image.size

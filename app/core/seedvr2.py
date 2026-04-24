@@ -58,6 +58,12 @@ _RUNTIME_MODULE: Any | None = None
 _RUNTIME_SCRIPT: Path | None = None
 _RUNNER_CACHE_BY_KEY: dict[str, dict[str, Any]] = {}
 LOGGER = logging.getLogger(__name__)
+_SEEDVR2_DECODE_TILE_OVERLAP_BY_SIZE = {
+    1024: 256,
+    896: 224,
+    768: 192,
+    640: 160,
+}
 
 
 @dataclass(frozen=True)
@@ -1024,7 +1030,7 @@ def _attempts_for_profile(profile_name: str, max_dim: int, attention_mode: str) 
                 vae_encode_tile_overlap=128,
                 vae_decode_tiled=max_dim > 1536,
                 vae_decode_tile_size=1024,
-                vae_decode_tile_overlap=128,
+                vae_decode_tile_overlap=_decode_tile_overlap_for_size(1024),
                 attention_mode=attention_mode,
                 color_correction=SEEDVR2_DEFAULT_COLOR_CORRECTION,
             ),
@@ -1046,7 +1052,7 @@ def _attempts_for_profile(profile_name: str, max_dim: int, attention_mode: str) 
                 vae_encode_tile_overlap=128,
                 vae_decode_tiled=max_dim > 2048,
                 vae_decode_tile_size=1024,
-                vae_decode_tile_overlap=128,
+                vae_decode_tile_overlap=_decode_tile_overlap_for_size(1024),
                 attention_mode=attention_mode,
                 color_correction=SEEDVR2_DEFAULT_COLOR_CORRECTION,
             ),
@@ -1064,7 +1070,7 @@ def _attempts_for_profile(profile_name: str, max_dim: int, attention_mode: str) 
                 vae_encode_tile_overlap=128,
                 vae_decode_tiled=max_dim > 1536,
                 vae_decode_tile_size=1024,
-                vae_decode_tile_overlap=128,
+                vae_decode_tile_overlap=_decode_tile_overlap_for_size(1024),
                 attention_mode=attention_mode,
                 color_correction=SEEDVR2_DEFAULT_COLOR_CORRECTION,
             ),
@@ -1082,7 +1088,7 @@ def _attempts_for_profile(profile_name: str, max_dim: int, attention_mode: str) 
                 vae_encode_tile_overlap=128,
                 vae_decode_tiled=True,
                 vae_decode_tile_size=896,
-                vae_decode_tile_overlap=128,
+                vae_decode_tile_overlap=_decode_tile_overlap_for_size(896),
                 attention_mode=attention_mode,
                 color_correction=SEEDVR2_DEFAULT_COLOR_CORRECTION,
             ),
@@ -1103,7 +1109,7 @@ def _attempts_for_profile(profile_name: str, max_dim: int, attention_mode: str) 
             vae_encode_tile_overlap=128,
             vae_decode_tiled=True,
             vae_decode_tile_size=896,
-            vae_decode_tile_overlap=128,
+            vae_decode_tile_overlap=_decode_tile_overlap_for_size(896),
             attention_mode=attention_mode,
             color_correction=SEEDVR2_DEFAULT_COLOR_CORRECTION,
         ),
@@ -1121,7 +1127,7 @@ def _attempts_for_profile(profile_name: str, max_dim: int, attention_mode: str) 
             vae_encode_tile_overlap=128,
             vae_decode_tiled=True,
             vae_decode_tile_size=768,
-            vae_decode_tile_overlap=128,
+            vae_decode_tile_overlap=_decode_tile_overlap_for_size(768),
             attention_mode=attention_mode,
             color_correction=SEEDVR2_DEFAULT_COLOR_CORRECTION,
         ),
@@ -1139,7 +1145,7 @@ def _attempts_for_profile(profile_name: str, max_dim: int, attention_mode: str) 
             vae_encode_tile_overlap=128,
             vae_decode_tiled=True,
             vae_decode_tile_size=640,
-            vae_decode_tile_overlap=128,
+            vae_decode_tile_overlap=_decode_tile_overlap_for_size(640),
             attention_mode=attention_mode,
             color_correction=SEEDVR2_DEFAULT_COLOR_CORRECTION,
         ),
@@ -1171,7 +1177,7 @@ def _with_forced_tiling(
         vae_encode_tile_overlap=int(tile_overlap),
         vae_decode_tiled=True,
         vae_decode_tile_size=int(tile_size),
-        vae_decode_tile_overlap=int(tile_overlap),
+        vae_decode_tile_overlap=_decode_tile_overlap_for_size(int(tile_size)),
     )
 
 
@@ -1298,6 +1304,13 @@ def _ensure_seedvr2_runtime_dependencies() -> None:
             "SeedVR2 runtime dependency missing: cv2. "
             "Install OpenCV for the active Python environment or rerun the project bootstrap."
         ) from exc
+
+
+def _decode_tile_overlap_for_size(tile_size: int) -> int:
+    normalized_tile_size = int(tile_size)
+    if normalized_tile_size in _SEEDVR2_DECODE_TILE_OVERLAP_BY_SIZE:
+        return int(_SEEDVR2_DECODE_TILE_OVERLAP_BY_SIZE[normalized_tile_size])
+    return max(128, normalized_tile_size // 4)
 
 
 def _is_retryable_failure(exc: Exception) -> bool:

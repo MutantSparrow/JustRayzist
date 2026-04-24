@@ -144,7 +144,8 @@ SeedVR2 x2 still benchmark:
 ```powershell
 python -m app.cli.main seedvr2-still-benchmark `
   --inputs outputs\sample.png `
-  --presets seed_faithful,seed_sharp
+  --presets seed_faithful,seed_sharp `
+  --runtime-preset current_baseline
 ```
 
 Soak run and report:
@@ -164,7 +165,7 @@ Engineering-only benchmark commands:
 These commands keep forced `--profile` / `--profiles` flags for diagnostics and reproducible comparisons. They are not part of the normal startup/runtime flow.
 
 ```powershell
-python -m app.cli.main seedvr2-still-benchmark --inputs outputs\sample.png --presets seed_faithful,seed_sharp
+python -m app.cli.main seedvr2-still-benchmark --inputs outputs\sample.png --presets seed_faithful,seed_sharp --runtime-preset current_baseline
 ```
 
 Procedural latent preview:
@@ -197,7 +198,8 @@ python -m app.cli.main prompt-grid-benchmark `
 
 python -m app.cli.main seedvr2-still-benchmark `
   --inputs outputs\sample.png `
-  --presets seed_faithful,seed_sharp
+  --presets seed_faithful,seed_sharp `
+  --runtime-preset current_baseline
 ```
 
 What they are for:
@@ -206,7 +208,7 @@ What they are for:
 - `rplus-compare`: generate the same prompt and seed once with `standard` and once with `rplus`, then write paired reports and diff metrics.
 - `pack-compare-suite`: run the multi-pack benchmark matrix and generate contact sheets/reports.
 - `prompt-grid-benchmark`: run forced-tier plus auto-tier prompt grids with generation/upscale artifacts.
-- `seedvr2-still-benchmark`: benchmark SeedVR2 x2 direct behavior with still-image presets.
+- `seedvr2-still-benchmark`: benchmark SeedVR2 x2 direct behavior with still-image presets and explicit runtime preset control.
 
 ## API Usage
 
@@ -270,7 +272,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.4",
+  "version": "1.8.3",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -301,7 +303,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.4",
+  "app_version": "1.8.3",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -840,7 +842,7 @@ Sample response:
 
 ### `POST /upscale`
 
-Upscale one gallery image with the baseline AI x2 plus FS sharpen path.
+Upscale one gallery image with the content-aware x2 path for photos and illustration.
 
 Requires `X-JustRayzist-Client`.
 
@@ -864,8 +866,8 @@ Sample response:
   "filename": "justrayzist_YYYYMMDD_hhmmss_001.png",
   "mode": "api_upscale",
   "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-  "upscale_engine": "baseline_ai_x2_fs",
-  "execution_mode": "baseline_ai_x2_fs",
+  "upscale_engine": "content_aware_ai_x2",
+  "execution_mode": "content_aware_ai_x2",
   "duration_ms": 23456,
   "url": "/images/justrayzist_YYYYMMDD_hhmmss_001.png"
 }
