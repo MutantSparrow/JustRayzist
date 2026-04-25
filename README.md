@@ -6,11 +6,11 @@ JustRayzist is a local-first image generation app built around the Rayzist Z-Ima
 
 The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
 
-## New in v1.8.3
+## New in v1.8.4
 
-- Fixes LoRA and Wildcard drawer masonry relayout jumps so library scrolling stays anchored while cards reflow.
-- Reworks default x2 upscale into content-aware path that auto keeps photos on detail-preserving branch and illustrations on art-preserve branch.
-- Reduces tiled upscale seam drift by using current-baseline SeedVR2 policy first, bigger decode overlap on fallback tiling, and source-guided seam repair.
+- Adds concise, plain-language tooltips for generation settings, R+ controls, image reference, gallery color filters, and thumbnail sizing.
+- Shows whether an upscaled image used the photo or illustration route in fullscreen metadata next to the resolution.
+- Persists the detected upscale route in gallery metadata so fullscreen labels survive reloads and gallery rebuilds.
 
 ![Wildcard library preview](readme_images/wildcards_preview.png)
 
@@ -237,7 +237,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.3",
+  "version": "1.8.4",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -268,7 +268,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.3",
+  "app_version": "1.8.4",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {

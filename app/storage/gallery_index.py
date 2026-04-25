@@ -225,6 +225,7 @@ def _create_images_table(conn: sqlite3.Connection) -> None:
             wildcard_count INTEGER,
             loras_json TEXT,
             lora_count INTEGER,
+            upscale_auto_content_mode TEXT,
             color_flags INTEGER,
             favorite INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
@@ -426,6 +427,7 @@ def _ensure_optional_columns(conn: sqlite3.Connection) -> None:
         "wildcard_count": "INTEGER",
         "loras_json": "TEXT",
         "lora_count": "INTEGER",
+        "upscale_auto_content_mode": "TEXT",
         "color_flags": "INTEGER",
         "favorite": "INTEGER NOT NULL DEFAULT 0",
         "inference_process": "TEXT",
@@ -483,9 +485,9 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
                 prompt_wildcard_resolved, width, height, model_pack, backend, device, steps, guidance_scale,
                 duration_ms, inference_process, procedural_creativity, mode, source_image, source_filename, source_width, source_height, similarity,
-                wildcards_json, wildcard_count, loras_json, lora_count, color_flags, favorite, created_at
+                wildcards_json, wildcard_count, loras_json, lora_count, upscale_auto_content_mode, color_flags, favorite, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(owner_id, filename) DO UPDATE SET
                 output_path=excluded.output_path,
                 prompt=excluded.prompt,
@@ -513,6 +515,7 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 wildcard_count=excluded.wildcard_count,
                 loras_json=excluded.loras_json,
                 lora_count=excluded.lora_count,
+                upscale_auto_content_mode=excluded.upscale_auto_content_mode,
                 color_flags=excluded.color_flags,
                 favorite=CASE WHEN images.favorite != 0 THEN images.favorite ELSE excluded.favorite END
             ;
@@ -546,6 +549,7 @@ def _migrate_images_schema(conn: sqlite3.Connection, settings: AppSettings) -> N
                 _to_int(record.get("wildcard_count")),
                 record.get("loras_json"),
                 _to_int(record.get("lora_count")),
+                record.get("upscale_auto_content_mode"),
                 _to_int(record.get("color_flags")),
                 1 if int(record.get("favorite") or 0) != 0 else 0,
                 str(record.get("created_at") or _utc_timestamp()),
@@ -611,9 +615,9 @@ def _upsert_image(
             owner_id, filename, output_path, prompt, timestamp, application_name, application_version,
             prompt_wildcard_resolved, width, height, model_pack, backend, device, steps, guidance_scale,
             duration_ms, inference_process, procedural_creativity, mode, source_image, source_filename, source_width, source_height, similarity,
-            wildcards_json, wildcard_count, loras_json, lora_count, color_flags, favorite, created_at
+            wildcards_json, wildcard_count, loras_json, lora_count, upscale_auto_content_mode, color_flags, favorite, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(owner_id, filename) DO UPDATE SET
             output_path=excluded.output_path,
             prompt=excluded.prompt,
@@ -641,6 +645,7 @@ def _upsert_image(
             wildcard_count=excluded.wildcard_count,
             loras_json=excluded.loras_json,
             lora_count=excluded.lora_count,
+            upscale_auto_content_mode=excluded.upscale_auto_content_mode,
             color_flags=excluded.color_flags,
             favorite=images.favorite
         ;
@@ -674,6 +679,7 @@ def _upsert_image(
             _to_int(metadata.get("wildcard_count")),
             metadata.get("loras_json"),
             _to_int(metadata.get("lora_count")),
+            metadata.get("upscale_auto_content_mode"),
             color_flags,
             0,
             created_at,

@@ -35,6 +35,7 @@ def _save_test_png(
     timestamp: str = "2026-02-22T00:00:00+00:00",
     *,
     color: tuple[int, int, int] = (120, 140, 180),
+    metadata_extra: dict[str, str] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     image = Image.new("RGB", (64, 64), color=color)
@@ -46,6 +47,8 @@ def _save_test_png(
     metadata.add_text("width", "64")
     metadata.add_text("height", "64")
     metadata.add_text("model_pack", "Rayzist_bf16")
+    for key, value in (metadata_extra or {}).items():
+        metadata.add_text(key, value)
     image.save(path, format="PNG", pnginfo=metadata)
 
 
@@ -100,6 +103,29 @@ def test_gallery_sync_ignores_non_png_files(monkeypatch, workspace_tmp_path: Pat
 
     assert indexed == 1
     assert [row["filename"] for row in list_images(settings, limit=20)] == ["sample.png"]
+
+
+def test_gallery_sync_indexes_upscale_content_mode(monkeypatch, workspace_tmp_path: Path) -> None:
+    root = workspace_tmp_path / "gallery-upscale-content-mode"
+    monkeypatch.setenv("JUSTRAYZIST_ROOT", str(root))
+    settings = load_settings()
+
+    output_path = settings.paths.outputs_dir / "upscaled.png"
+    _save_test_png(
+        output_path,
+        "Upscaled illustration",
+        metadata_extra={
+            "mode": "api_upscale",
+            "source_filename": "source.png",
+            "upscale_auto_content_mode": "art",
+        },
+    )
+
+    assert sync_outputs_to_gallery(settings) == 1
+    row = get_image(settings, "upscaled.png")
+    assert row is not None
+    assert row["mode"] == "api_upscale"
+    assert row["upscale_auto_content_mode"] == "art"
 
 
 def test_gallery_color_classification_flags_primary_buckets(monkeypatch, workspace_tmp_path: Path) -> None:
@@ -388,6 +414,5 @@ def test_gallery_rebuild_refreshes_existing_owner_png_metadata(monkeypatch, work
     assert row is not None
     assert row["prompt"] == "Updated prompt"
     assert row["timestamp"] == "2026-02-22T03:00:00+00:00"
-
 
 

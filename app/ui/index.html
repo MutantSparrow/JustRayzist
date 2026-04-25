@@ -16,7 +16,7 @@
     <div class="prompt-area">
       <div id="settings-summary" class="settings-summary" aria-live="polite"></div>
       <div class="prompt-shell">
-        <button id="settings-button" class="prompt-settings-button" type="button" aria-expanded="false" aria-label="Settings">
+        <button id="settings-button" class="prompt-settings-button" type="button" aria-expanded="false" aria-label="Open generation settings" title="Open generation settings">
           <span class="prompt-settings-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" focusable="false">
               <line x1="4" y1="6" x2="20" y2="6"></line>
@@ -120,7 +120,7 @@
       <div class="setting-group setting-group-reference">
         <input id="reference-image-input" type="file" accept="image/*" hidden>
         <div id="reference-image-controls" class="reference-image-controls">
-          <button id="reference-image-add" class="reference-image-add" type="button">
+          <button id="reference-image-add" class="reference-image-add" type="button" title="Add one image to guide the next result">
             <span class="reference-image-add-icon lora-add-plus" aria-hidden="true">+</span>
             <span class="reference-image-add-copy">
               <span class="reference-image-add-title">ADD IMAGE REFERENCE</span>
@@ -142,7 +142,7 @@
                 <span>Similarity</span>
                 <span id="reference-similarity-value" class="reference-image-similarity-value">80%</span>
               </div>
-              <input id="reference-similarity-slider" class="slider-setting-input" type="range" min="0" max="100" step="1" value="80">
+              <input id="reference-similarity-slider" class="slider-setting-input" type="range" min="0" max="100" step="1" value="80" title="Higher keeps the new image closer to the reference">
             </div>
           </div>
         </div>
@@ -150,17 +150,17 @@
 
       <div class="settings-row settings-row-split">
         <div class="setting-group">
-          <button id="freeze-seed-button" class="toggle-seed-button" type="button">FREEZE SEED: OFF</button>
+          <button id="freeze-seed-button" class="toggle-seed-button" type="button" title="Keep the same starting number so results are easier to repeat">FREEZE SEED: OFF</button>
         </div>
         <div class="setting-group">
-          <button id="prompt-enhance-button" class="toggle-seed-button" type="button">
+          <button id="prompt-enhance-button" class="toggle-seed-button" type="button" title="Add more detail to your prompt before generating">
             PROMPT ENHANCER: OFF
           </button>
         </div>
       </div>
 
       <div class="setting-group">
-        <div id="procedural-latent-setting" class="slider-setting">
+        <div id="procedural-latent-setting" class="slider-setting" title="Higher adds more surprise and changes the result more">
           <input
             id="procedural-latent-slider"
             class="slider-setting-input"
@@ -170,6 +170,7 @@
             step="1"
             value="0"
             aria-label="Creative Mode"
+            title="Higher adds more surprise and changes the result more"
           />
           <div id="procedural-latent-value" class="slider-setting-value">CREATIVE MODE: OFF</div>
         </div>
@@ -182,9 +183,10 @@
             class="toggle-seed-button"
             type="button"
             aria-pressed="false"
+            title="R+ makes results more vivid and punchy"
           >R+ MODE: OFF</button>
           <div id="rplus-sliders" class="rplus-sliders hidden" aria-hidden="true">
-            <div class="rplus-slider-block">
+            <div class="rplus-slider-block" title="Higher makes colors stronger. Lower keeps colors calmer">
               <input
                 id="rplus-vibrance-slider"
                 class="slider-setting-input"
@@ -194,10 +196,11 @@
                 step="0.25"
                 value="0"
                 aria-label="R+ Vibrance"
+                title="Higher makes colors stronger. Lower keeps colors calmer"
               />
               <div id="rplus-vibrance-value" class="slider-setting-value rplus-slider-value">VIBRANCE: OFF</div>
             </div>
-            <div class="rplus-slider-block">
+            <div class="rplus-slider-block" title="Higher pushes contrast harder. Lower keeps the image softer">
               <input
                 id="rplus-bias-slider"
                 class="slider-setting-input"
@@ -207,6 +210,7 @@
                 step="0.25"
                 value="0"
                 aria-label="R+ Bias"
+                title="Higher pushes contrast harder. Lower keeps the image softer"
               />
               <div id="rplus-bias-value" class="slider-setting-value rplus-slider-value">BIAS: OFF</div>
             </div>
@@ -259,25 +263,25 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h10"></path><path d="M8 11h7"></path><path d="M8 16h4"></path><path d="M5 5v14"></path><path d="M2.5 16.5L5 19l2.5-2.5"></path></svg>
         </button>
         <div id="gallery-color-filters" class="gallery-color-filters" aria-label="Filter gallery by color">
-          <button class="color-swatch swatch-black" type="button" data-color-filter="black" aria-label="Filter black images" aria-pressed="false" title="Black"></button>
-          <button class="color-swatch swatch-white" type="button" data-color-filter="white" aria-label="Filter white images" aria-pressed="false" title="White"></button>
-          <button class="color-swatch swatch-red" type="button" data-color-filter="red" aria-label="Filter red images" aria-pressed="false" title="Red"></button>
-          <button class="color-swatch swatch-yellow" type="button" data-color-filter="yellow" aria-label="Filter yellow images" aria-pressed="false" title="Yellow"></button>
-          <button class="color-swatch swatch-blue" type="button" data-color-filter="blue" aria-label="Filter blue images" aria-pressed="false" title="Blue"></button>
-          <button class="color-swatch swatch-green" type="button" data-color-filter="green" aria-label="Filter green images" aria-pressed="false" title="Green"></button>
-          <button id="gallery-favorite-filter" class="favorite-filter-button" type="button" aria-label="Filter favorite images" aria-pressed="false" title="Favorites">
+          <button class="color-swatch swatch-black" type="button" data-color-filter="black" aria-label="Filter by color: black" aria-pressed="false" title="Filter by color: black"></button>
+          <button class="color-swatch swatch-white" type="button" data-color-filter="white" aria-label="Filter by color: white" aria-pressed="false" title="Filter by color: white"></button>
+          <button class="color-swatch swatch-red" type="button" data-color-filter="red" aria-label="Filter by color: red" aria-pressed="false" title="Filter by color: red"></button>
+          <button class="color-swatch swatch-yellow" type="button" data-color-filter="yellow" aria-label="Filter by color: yellow" aria-pressed="false" title="Filter by color: yellow"></button>
+          <button class="color-swatch swatch-blue" type="button" data-color-filter="blue" aria-label="Filter by color: blue" aria-pressed="false" title="Filter by color: blue"></button>
+          <button class="color-swatch swatch-green" type="button" data-color-filter="green" aria-label="Filter by color: green" aria-pressed="false" title="Filter by color: green"></button>
+          <button id="gallery-favorite-filter" class="favorite-filter-button" type="button" aria-label="Show favorite images only" aria-pressed="false" title="Show favorite images only">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35 10.55 20C5.4 15.24 2 12.09 2 8.25 2 5.3 4.3 3 7.25 3c1.67 0 3.27.77 4.3 1.98A5.71 5.71 0 0 1 15.85 3C18.8 3 21.1 5.3 21.1 8.25c0 3.84-3.4 6.99-8.55 11.76L12 21.35Z"/></svg>
           </button>
         </div>
       </div>
       <div class="gallery-tools-right">
-        <div class="gallery-density" aria-label="Images per row">
+        <div class="gallery-density" aria-label="Thumbnail size" title="Change thumbnail size. More per row makes thumbnails smaller">
           <span class="gallery-density-icon gallery-density-icon-large" aria-hidden="true">
             <svg viewBox="0 0 24 24" focusable="false">
               <rect x="4" y="4" width="16" height="16"></rect>
             </svg>
           </span>
-          <input id="gallery-density-slider" class="gallery-density-slider" type="range" min="3" max="8" step="1" value="4" aria-label="Images per row">
+          <input id="gallery-density-slider" class="gallery-density-slider" type="range" min="3" max="8" step="1" value="4" aria-label="Thumbnail size" title="Change thumbnail size. More per row makes thumbnails smaller">
           <span class="gallery-density-icon gallery-density-icon-small" aria-hidden="true">
             <svg viewBox="0 0 24 24" focusable="false">
               <rect x="6" y="6" width="5" height="5"></rect>

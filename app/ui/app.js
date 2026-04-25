@@ -265,6 +265,20 @@ const CLIENT_JOB_POLL_INTERVAL_MS = 1500;
 const CLIENT_QUEUE_STORAGE_VERSION = 3;
 const RPLUS_UI_STEPS = 20;
 const GALLERY_COLOR_FILTERS = ["black", "white", "red", "yellow", "blue", "green"];
+const SETTINGS_OPEN_TOOLTIP = "Open generation settings";
+const SETTINGS_CLOSE_TOOLTIP = "Close generation settings";
+const FREEZE_SEED_OFF_TOOLTIP = "Keep the same starting number so results are easier to repeat";
+const FREEZE_SEED_ON_TOOLTIP = "Let each image use a new starting number";
+const PROMPT_ENHANCE_OFF_TOOLTIP = "Add more detail to your prompt before generating";
+const PROMPT_ENHANCE_ON_TOOLTIP = "Use your prompt as written";
+const CREATIVE_MODE_TOOLTIP = "Higher adds more surprise and changes the result more";
+const CREATIVE_MODE_LOCKED_TOOLTIP = "Creative Mode is off while image reference is active";
+const RPLUS_MODE_TOOLTIP = "R+ makes results more vivid and punchy";
+const RPLUS_MODE_LOCKED_TOOLTIP = "R+ is off while image reference is active";
+const RPLUS_VIBRANCE_TOOLTIP = "Higher makes colors stronger. Lower keeps colors calmer";
+const RPLUS_BIAS_TOOLTIP = "Higher pushes contrast harder. Lower keeps the image softer";
+const FAVORITE_FILTER_TOOLTIP = "Show favorite images only";
+const FAVORITE_FILTER_ACTIVE_TOOLTIP = "Show all images";
 const GALLERY_COLOR_CACHE_STATUS_MESSAGE = "Updating gallery color cache...";
 const GALLERY_COLOR_CACHE_POLL_INTERVAL_MS = 2500;
 const LORA_LIBRARY_POLL_INTERVAL_MS = 2500;
@@ -370,6 +384,14 @@ function normalizeRplusControlValue(rawValue) {
   const clamped = Math.max(-2, Math.min(2, value));
   const snapped = Math.round(clamped * 4) / 4;
   return Math.abs(snapped) < 0.0001 ? 0 : snapped;
+}
+
+function colorFilterTooltip(color) {
+  return `Filter by color: ${color}`;
+}
+
+function galleryDensityTooltip(count) {
+  return `Thumbnail size: ${count} per row. More per row makes thumbnails smaller`;
 }
 
 const state = {
@@ -2991,6 +3013,9 @@ function setSettingsVisible(visible) {
   settingsPanelEl.classList.toggle("open", visible);
   settingsPanelEl.setAttribute("aria-hidden", String(!visible));
   settingsButtonEl.setAttribute("aria-expanded", String(visible));
+  const tooltip = visible ? SETTINGS_CLOSE_TOOLTIP : SETTINGS_OPEN_TOOLTIP;
+  settingsButtonEl.title = tooltip;
+  settingsButtonEl.setAttribute("aria-label", tooltip);
   if (visible) {
     positionSettingsPanel();
   }
@@ -3903,9 +3928,14 @@ function cancelZipDownload() {
 function setGalleryColumns(count, options = {}) {
   const next = Math.max(3, Math.min(8, Number(count) || 4));
   const animate = Boolean(options.animate);
+  const tooltip = galleryDensityTooltip(next);
   state.galleryColumns = next;
   state.pendingGalleryColumns = next;
   galleryDensitySliderEl.value = String(next);
+  galleryDensitySliderEl.title = tooltip;
+  if (galleryDensitySliderEl.parentElement) {
+    galleryDensitySliderEl.parentElement.title = tooltip;
+  }
   document.documentElement.style.setProperty("--gallery-columns", String(next));
   try {
     window.localStorage.setItem(GALLERY_COLUMNS_STORAGE_KEY, String(next));
@@ -3916,7 +3946,12 @@ function setGalleryColumns(count, options = {}) {
 
 function scheduleGalleryColumns(count) {
   state.pendingGalleryColumns = Math.max(3, Math.min(8, Number(count) || 4));
+  const tooltip = galleryDensityTooltip(state.pendingGalleryColumns);
   galleryDensitySliderEl.value = String(state.pendingGalleryColumns);
+  galleryDensitySliderEl.title = tooltip;
+  if (galleryDensitySliderEl.parentElement) {
+    galleryDensitySliderEl.parentElement.title = tooltip;
+  }
   if (state.galleryColumnFrame !== null) {
     return;
   }
@@ -4016,6 +4051,13 @@ function isImg2ImgItem(item) {
   return mode === "img2img";
 }
 
+function resolveUpscaleContentLabel(item) {
+  const mode = String(item?.upscale_auto_content_mode || "").trim().toLowerCase();
+  if (mode === "photo") return "Photo upscale";
+  if (mode === "art" || mode === "illustration") return "Illustration upscale";
+  return "";
+}
+
 function canUpscaleItem(item) {
   return !isUpscaledItem(item);
 }
@@ -4107,15 +4149,21 @@ function updateColorSwatches() {
   for (const button of buttons) {
     const color = String(button.dataset.colorFilter || "").trim().toLowerCase();
     const active = color && color === state.activeColorFilter;
+    const tooltip = colorFilterTooltip(color);
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
+    button.title = tooltip;
+    button.setAttribute("aria-label", tooltip);
   }
 }
 
 function updateFavoriteFilterButton() {
   const active = state.favoritesOnly;
+  const tooltip = active ? FAVORITE_FILTER_ACTIVE_TOOLTIP : FAVORITE_FILTER_TOOLTIP;
   galleryFavoriteFilterButtonEl.classList.toggle("active", active);
   galleryFavoriteFilterButtonEl.setAttribute("aria-pressed", String(active));
+  galleryFavoriteFilterButtonEl.title = tooltip;
+  galleryFavoriteFilterButtonEl.setAttribute("aria-label", tooltip);
 }
 
 async function setActiveColorFilter(color) {
@@ -4219,9 +4267,11 @@ function updateFreezeSeedButton() {
   if (state.freezeSeed) {
     freezeSeedButtonEl.textContent = `FREEZE SEED: ON (${state.currentSeed})`;
     freezeSeedButtonEl.classList.add("active");
+    freezeSeedButtonEl.title = FREEZE_SEED_ON_TOOLTIP;
   } else {
     freezeSeedButtonEl.textContent = "FREEZE SEED: OFF";
     freezeSeedButtonEl.classList.remove("active");
+    freezeSeedButtonEl.title = FREEZE_SEED_OFF_TOOLTIP;
   }
 }
 
@@ -4243,9 +4293,12 @@ function describeRplusSliderPolarity(value) {
 function updateProceduralLatentControls() {
   const creativeLocked = hasReferenceImage();
   const effectiveLevel = creativeLocked ? 0 : state.proceduralCreativity;
+  const tooltip = creativeLocked ? CREATIVE_MODE_LOCKED_TOOLTIP : CREATIVE_MODE_TOOLTIP;
   proceduralLatentSliderEl.value = String(effectiveLevel);
   proceduralLatentSliderEl.disabled = creativeLocked;
   proceduralLatentSettingEl.classList.toggle("disabled", creativeLocked);
+  proceduralLatentSettingEl.title = tooltip;
+  proceduralLatentSliderEl.title = tooltip;
   proceduralLatentValueEl.textContent = creativeLocked
     ? "CREATIVE MODE: LOCKED OFF"
     : `CREATIVE MODE: ${describeProceduralCreativity(state.proceduralCreativity)}`;
@@ -4263,9 +4316,11 @@ function updatePromptEnhanceButton() {
   if (state.promptEnhance) {
     promptEnhanceButtonEl.textContent = "PROMPT ENHANCER: ON";
     promptEnhanceButtonEl.classList.add("active");
+    promptEnhanceButtonEl.title = PROMPT_ENHANCE_ON_TOOLTIP;
   } else {
     promptEnhanceButtonEl.textContent = "PROMPT ENHANCER: OFF";
     promptEnhanceButtonEl.classList.remove("active");
+    promptEnhanceButtonEl.title = PROMPT_ENHANCE_OFF_TOOLTIP;
   }
 }
 
@@ -4275,6 +4330,9 @@ function updateRplusControls() {
   state.rplusBias = normalizeRplusControlValue(state.rplusBias);
   rplusSettingGroupEl.classList.toggle("disabled", locked);
   rplusSettingGroupEl.setAttribute("aria-disabled", String(locked));
+  const modeTooltip = locked ? RPLUS_MODE_LOCKED_TOOLTIP : RPLUS_MODE_TOOLTIP;
+  rplusSettingGroupEl.title = modeTooltip;
+  rplusToggleButtonEl.title = modeTooltip;
   rplusToggleButtonEl.textContent = state.rplusEnabled ? "R+ MODE: ON" : "R+ MODE: OFF";
   rplusToggleButtonEl.classList.toggle("active", state.rplusEnabled);
   rplusToggleButtonEl.disabled = locked;
@@ -4283,6 +4341,14 @@ function updateRplusControls() {
   rplusSlidersEl.setAttribute("aria-hidden", String(!state.rplusEnabled));
   rplusVibranceSliderEl.value = String(state.rplusVibrance);
   rplusBiasSliderEl.value = String(state.rplusBias);
+  rplusVibranceSliderEl.title = RPLUS_VIBRANCE_TOOLTIP;
+  rplusBiasSliderEl.title = RPLUS_BIAS_TOOLTIP;
+  if (rplusVibranceSliderEl.parentElement) {
+    rplusVibranceSliderEl.parentElement.title = RPLUS_VIBRANCE_TOOLTIP;
+  }
+  if (rplusBiasSliderEl.parentElement) {
+    rplusBiasSliderEl.parentElement.title = RPLUS_BIAS_TOOLTIP;
+  }
   rplusVibranceValueEl.textContent = `VIBRANCE: ${describeRplusSliderPolarity(state.rplusVibrance)}`;
   rplusBiasValueEl.textContent = `BIAS: ${describeRplusSliderPolarity(state.rplusBias)}`;
   rplusVibranceValueEl.classList.toggle("active", state.rplusVibrance !== 0);
@@ -4389,8 +4455,9 @@ function applyViewerItemMeta(item) {
     const sourceFilename = resolveSourceFilename(item);
     const compareAvailable = Boolean(sourceFilename);
     const label = upscaled ? "Upscaled from" : "Clarity from";
+    const upscaleContentLabel = upscaled ? resolveUpscaleContentLabel(item) : "";
     viewerMetaEl.classList.remove("expanded");
-    viewerMetaEl.innerHTML = [
+    const parts = [
       '<div class="viewer-meta-main-row">',
       `<span class="viewer-meta-source">${label} ${escapeHtml(sourceFilename || "unknown image")}</span>`,
       '<span class="viewer-meta-sep">|</span>',
@@ -4399,8 +4466,13 @@ function applyViewerItemMeta(item) {
       }>${compareAvailable ? "HOLD TO SEE ORIGINAL" : "ORIGINAL NOT AVAILABLE"}</button>`,
       '<span class="viewer-meta-sep">|</span>',
       `<span>${escapeHtml(resolution)}</span>`,
-      "</div>",
-    ].join("");
+    ];
+    if (upscaleContentLabel) {
+      parts.push('<span class="viewer-meta-sep">|</span>');
+      parts.push(`<span>${escapeHtml(upscaleContentLabel)}</span>`);
+    }
+    parts.push("</div>");
+    viewerMetaEl.innerHTML = parts.join("");
   } else if (img2img) {
     const sourceFilename = resolveSourceFilename(item) || "reference image";
     const timestamp = item.timestamp || item.created_at;

@@ -1585,6 +1585,7 @@ class InferenceService:
                 image_row["resource_tier"] = resource_tier.name
                 image_row["execution_mode"] = effective_engine
                 image_row["upscale_engine"] = effective_engine
+                image_row["upscale_auto_content_mode"] = telemetry.get("upscale_auto_content_mode")
                 image_row["job_id"] = job_id
                 LOGGER.info(
                     "Image upscaled: owner=%s source=%s engine=%s scale=2 file=%s size=%dx%d seed=%s duration_ms=%s",
