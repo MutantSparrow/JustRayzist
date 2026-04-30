@@ -1382,6 +1382,7 @@ def generate(
         prompt=result.prompt_effective,
         settings=settings,
         output_path=output,
+        meta_mode="generate",
         extra_metadata={
             "prompt_original": result.prompt_original,
             "prompt_effective": result.prompt_effective,
@@ -1481,9 +1482,10 @@ def img2img(
 
     saved_path = save_png_with_metadata(
         image=result.image,
-        prompt=result.prompt_effective_base or result.prompt_effective,
+        prompt=result.prompt_effective,
         settings=settings,
         output_path=output,
+        meta_mode="img2img",
         extra_metadata={
             "mode": "img2img",
             "prompt_original": result.prompt_original,

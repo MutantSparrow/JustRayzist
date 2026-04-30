@@ -60,9 +60,8 @@ Quick acceptance checks after launch:
 - `GET /model-packs` returns only public packs
 - `/API` loads current examples from the internal manifest-backed tester
 
-## 7. Optional packaged build
+## 7. Create a release package
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
 powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Lane cu128 -Version v0.1.0 -Clean
 ```

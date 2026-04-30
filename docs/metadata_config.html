@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PNG Metadata Config — JustRayzist</title>
+<style>
+:root {
+  --bg:       #0d1117;
+  --surface:  #161b22;
+  --surface2: #1c2128;
+  --border:   #30363d;
+  --text:     #e6edf3;
+  --muted:    #7d8590;
+  --accent:   #58a6ff;
+  --green:    #3fb950;
+  --red:      #f85149;
+  --hover:    #1c2128;
+  --cat-bg:   #0d1117;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12.5px;
+  min-height: 100vh;
+}
+
+/* ── Top bar ─────────────────────────────────────────── */
+.topbar {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 20px;
+  display: flex; align-items: center; gap: 10px;
+}
+.topbar-title { font-size: 13px; font-weight: 700; color: var(--text); }
+.topbar-title span { color: var(--muted); font-weight: 400; }
+.topbar-stats { font-size: 11px; color: var(--muted); flex: 1; margin-left: 6px; }
+
+.btn {
+  padding: 5px 13px; border-radius: 6px; border: 1px solid var(--border);
+  cursor: pointer; font-family: inherit; font-size: 11.5px; font-weight: 500;
+  transition: background 0.12s, color 0.12s, opacity 0.12s;
+  white-space: nowrap;
+}
+.btn-ghost { background: transparent; color: var(--muted); }
+.btn-ghost:hover { background: var(--surface2); color: var(--text); }
+.btn-primary { background: var(--accent); color: #0d1117; border-color: var(--accent); font-weight: 700; }
+.btn-primary:hover { opacity: 0.85; }
+.btn-danger { background: transparent; color: var(--red); border-color: var(--red); }
+.btn-danger:hover { background: rgba(248,81,73,0.1); }
+
+/* ── Table ───────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; padding-bottom: 60px; }
+
+table { width: 100%; border-collapse: collapse; }
+
+thead {
+  position: sticky; top: 45px; z-index: 50;
+  background: var(--surface);
+  border-bottom: 2px solid var(--border);
+}
+thead tr th {
+  padding: 7px 10px;
+  font-size: 10.5px; font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  user-select: none;
+}
+th.col-key  { text-align: left; width: 280px; padding-left: 20px; }
+th.col-notes { text-align: left; width: auto; }
+th.col-mode  {
+  width: 58px;
+  cursor: pointer;
+  transition: color 0.12s;
+}
+th.col-mode:hover { color: var(--accent); }
+.mode-hdr { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.mode-hdr-letter { font-size: 12px; color: var(--text); }
+.mode-hdr-name   { font-size: 9px; color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.mode-hdr-count  { font-size: 9px; color: var(--green); font-weight: 700; min-height: 11px; }
+
+/* Category rows */
+tr.cat-row td {
+  background: var(--cat-bg);
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 12px 20px 4px;
+  border-bottom: none;
+  border-top: 1px solid var(--border);
+}
+tr.cat-row:first-child td { border-top: none; }
+
+/* Data rows */
+tr.data-row td {
+  padding: 3px 10px;
+  border-bottom: 1px solid rgba(48,54,61,0.6);
+  vertical-align: middle;
+}
+tr.data-row:hover { background: var(--hover); }
+tr.data-row td.col-key {
+  color: var(--text);
+  padding-left: 28px;
+  font-size: 12px;
+}
+tr.data-row td.col-mode { text-align: center; }
+tr.data-row td.col-notes { color: var(--muted); font-size: 11px; padding-right: 20px; }
+
+/* Checkbox */
+.cb-wrap {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 28px; cursor: pointer; border-radius: 5px;
+  transition: background 0.1s;
+}
+.cb-wrap:hover { background: rgba(88,166,255,0.12); }
+.cb-wrap input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  width: 14px; height: 14px; border-radius: 3px;
+  border: 1.5px solid var(--border);
+  background: var(--surface2);
+  cursor: pointer;
+  transition: all 0.1s;
+  position: relative; flex-shrink: 0;
+}
+.cb-wrap input[type="checkbox"]:checked {
+  background: var(--green);
+  border-color: var(--green);
+}
+.cb-wrap input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  left: 3px; top: 0px;
+  width: 5px; height: 8px;
+  border: 1.5px solid #0d1117;
+  border-top: none; border-left: none;
+  transform: rotate(45deg);
+  display: block;
+}
+.na-cell {
+  color: var(--border);
+  font-size: 12px;
+  user-select: none;
+  display: inline-block;
+  width: 32px;
+  text-align: center;
+}
+
+/* ── Export modal ────────────────────────────────────── */
+.modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.75); z-index: 200;
+  align-items: center; justify-content: center;
+  padding: 20px;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: 100%; max-width: 820px;
+  max-height: 88vh;
+  display: flex; flex-direction: column;
+}
+.modal-hdr {
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+}
+.modal-hdr h2 { font-size: 13px; font-weight: 700; flex: 1; }
+.modal-body { flex: 1; overflow: hidden; padding: 14px; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.export-format-row { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--muted); }
+.export-format-row .tab-btn {
+  padding: 4px 10px; border-radius: 5px; border: 1px solid var(--border);
+  cursor: pointer; background: transparent; color: var(--muted);
+  font-family: inherit; font-size: 11px; transition: all 0.1s;
+}
+.export-format-row .tab-btn.active { background: var(--accent); color: #0d1117; border-color: var(--accent); font-weight: 700; }
+
+.export-textarea {
+  flex: 1; min-height: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  overflow: auto;
+  white-space: pre;
+}
+.modal-ftr {
+  padding: 11px 18px;
+  border-top: 1px solid var(--border);
+  display: flex; justify-content: flex-end; align-items: center; gap: 8px;
+}
+.copy-ok { font-size: 11px; color: var(--green); opacity: 0; transition: opacity 0.3s; flex: 1; }
+.copy-ok.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-title">PNG Metadata Config <span>— JustRayzist</span></div>
+  <div class="topbar-stats" id="stats"></div>
+  <button class="btn btn-ghost" onclick="resetDefaults()">Reset defaults</button>
+  <button class="btn btn-danger" onclick="setAll(false)">All off</button>
+  <button class="btn btn-ghost" onclick="setAll(true)">All on</button>
+  <button class="btn btn-primary" onclick="openExport()">⬆ Export</button>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th class="col-key">Key</th>
+        <th class="col-mode" onclick="toggleMode(0)" title="Toggle all Generate">
+          <div class="mode-hdr">
+            <span class="mode-hdr-letter">G</span>
+            <span class="mode-hdr-name">Generate</span>
+            <span class="mode-hdr-count" id="cnt-0"></span>
+          </div>
+        </th>
+        <th class="col-mode" onclick="toggleMode(1)" title="Toggle all Img2img">
+          <div class="mode-hdr">
+            <span class="mode-hdr-letter">I</span>
+            <span class="mode-hdr-name">Img2img</span>
+            <span class="mode-hdr-count" id="cnt-1"></span>
+          </div>
+        </th>
+        <th class="col-mode" onclick="toggleMode(2)" title="Toggle all Upscale">
+          <div class="mode-hdr">
+            <span class="mode-hdr-letter">U</span>
+            <span class="mode-hdr-name">Upscale</span>
+            <span class="mode-hdr-count" id="cnt-2"></span>
+          </div>
+        </th>
+        <th class="col-mode" onclick="toggleMode(3)" title="Toggle all Clarity">
+          <div class="mode-hdr">
+            <span class="mode-hdr-letter">C</span>
+            <span class="mode-hdr-name">Clarity</span>
+            <span class="mode-hdr-count" id="cnt-3"></span>
+          </div>
+        </th>
+        <th class="col-notes">Notes</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<!-- Export modal -->
+<div class="modal-overlay" id="modal" onclick="onOverlayClick(event)">
+  <div class="modal">
+    <div class="modal-hdr">
+      <h2>Export metadata selection</h2>
+      <div class="export-format-row">
+        <button class="tab-btn active" id="fmt-table" onclick="setFormat('table')">Table</button>
+        <button class="tab-btn" id="fmt-lists" onclick="setFormat('lists')">Per-mode lists</button>
+      </div>
+      <button class="btn btn-ghost" onclick="closeExport()" style="margin-left:6px">✕</button>
+    </div>
+    <div class="modal-body">
+      <textarea class="export-textarea" id="export-text" readonly spellcheck="false"></textarea>
+    </div>
+    <div class="modal-ftr">
+      <span class="copy-ok" id="copy-ok">Copied to clipboard!</span>
+      <button class="btn btn-ghost" onclick="closeExport()">Close</button>
+      <button class="btn btn-primary" onclick="copyExport()">Copy to clipboard</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// avail: [G, I, U, C] — 1 = currently written by the codebase, 0 = N/A
+const FIELDS = [
+  // key,                                    category,            notes,                                      G  I  U  C
+  { key: 'timestamp',                        cat: 'Fixed',        notes: 'UTC ISO timestamp',                 avail:[1,1,1,1] },
+  { key: 'prompt',                           cat: 'Fixed',        notes: 'Final prompt used for the saved image', avail:[1,1,1,1] },
+  { key: 'application_name',                 cat: 'Fixed',        notes: '',                                  avail:[1,1,1,1] },
+  { key: 'application_version',              cat: 'Fixed',        notes: '',                                  avail:[1,1,1,1] },
+  { key: 'generated_with',                   cat: 'Fixed',        notes: '"Just Rayzist!"',                   avail:[1,1,1,1] },
+  { key: 'model_page',                       cat: 'Fixed',        notes: 'HuggingFace model URL',             avail:[1,1,1,1] },
+
+  { key: 'owner_id',                         cat: 'Identity',     notes: '',                                  avail:[1,1,1,1] },
+  { key: 'mode',                             cat: 'Identity',     notes: 'Generate omits this key',           avail:[0,1,1,1] },
+
+  { key: 'prompt_original',                  cat: 'Prompt',       notes: "User's raw input",                  avail:[1,1,1,1] },
+  { key: 'prompt_wildcard_resolved',         cat: 'Prompt',       notes: 'After wildcard token substitution', avail:[1,1,0,0] },
+  { key: 'prompt_effective_base',            cat: 'Prompt',       notes: 'Before LoRA trigger injection',     avail:[1,1,0,0] },
+  { key: 'prompt_effective',                 cat: 'Prompt',       notes: 'Final prompt sent to pipeline',     avail:[1,1,1,1] },
+  { key: 'prompt_enhanced',                  cat: 'Prompt',       notes: 'Bool — whether enhancement ran',    avail:[1,1,1,1] },
+
+  { key: 'width',                            cat: 'Dimensions',   notes: 'Output image width px',             avail:[1,1,1,1] },
+  { key: 'height',                           cat: 'Dimensions',   notes: 'Output image height px',            avail:[1,1,1,1] },
+  { key: 'working_width',                    cat: 'Dimensions',   notes: 'Internal processing resolution',    avail:[0,0,1,1] },
+  { key: 'working_height',                   cat: 'Dimensions',   notes: 'Internal processing resolution',    avail:[0,0,1,1] },
+
+  { key: 'steps',                            cat: 'Generation',   notes: '0 for upscale / clarity',           avail:[1,1,1,1] },
+  { key: 'guidance_scale',                   cat: 'Generation',   notes: '0.0 for upscale / clarity',         avail:[1,1,1,1] },
+  { key: 'seed',                             cat: 'Generation',   notes: '',                                  avail:[1,1,1,1] },
+  { key: 'scheduler_mode',                   cat: 'Generation',   notes: '',                                  avail:[1,1,1,1] },
+  { key: 'inference_process',                cat: 'Generation',   notes: '',                                  avail:[1,0,0,0] },
+  { key: 'procedural_creativity',            cat: 'Generation',   notes: '0–3',                               avail:[1,0,0,0] },
+  { key: 'duration_ms',                      cat: 'Generation',   notes: 'Total wall time ms',                avail:[1,1,1,1] },
+
+  { key: 'backend',                          cat: 'Model',        notes: '',                                  avail:[1,1,1,1] },
+  { key: 'device',                           cat: 'Model',        notes: '',                                  avail:[1,1,1,1] },
+  { key: 'model_pack',                       cat: 'Model',        notes: '',                                  avail:[1,1,1,1] },
+  { key: 'selected_pack',                    cat: 'Model',        notes: '',                                  avail:[1,1,0,0] },
+  { key: 'effective_pack',                   cat: 'Model',        notes: 'After donor resolution',            avail:[1,1,0,0] },
+  { key: 'derived_strategy',                 cat: 'Model',        notes: 'e.g. auto_fp8_storage',            avail:[1,1,0,0] },
+  { key: 'runtime_profile',                  cat: 'Model',        notes: 'e.g. balanced',                    avail:[1,1,1,1] },
+  { key: 'resource_tier',                    cat: 'Model',        notes: 'high / balanced / constrained',     avail:[1,1,1,1] },
+  { key: 'execution_mode',                   cat: 'Model',        notes: '',                                  avail:[1,1,1,1] },
+
+  { key: 'fp8_checkpoint',                   cat: 'FP8',          notes: '',                                  avail:[1,1,0,0] },
+  { key: 'fp8_fallback_used',                cat: 'FP8',          notes: '',                                  avail:[1,1,0,0] },
+  { key: 'fp8_fallback_reason',              cat: 'FP8',          notes: '',                                  avail:[1,1,0,0] },
+  { key: 'fp8_runtime_mode',                 cat: 'FP8',          notes: '',                                  avail:[1,1,0,0] },
+  { key: 'fp8_normalized_tensor_count',      cat: 'FP8',          notes: '',                                  avail:[1,1,0,0] },
+  { key: 'fp8_storage_preserved_tensor_count', cat: 'FP8',        notes: '',                                  avail:[1,1,0,0] },
+  { key: 'fp8_promoted_tensor_count',        cat: 'FP8',          notes: '',                                  avail:[1,1,0,0] },
+
+  { key: 'loras_json',                       cat: 'LoRA',         notes: 'JSON array of applied LoRAs',       avail:[1,1,0,0] },
+  { key: 'lora_count',                       cat: 'LoRA',         notes: '',                                  avail:[1,1,0,0] },
+
+  { key: 'wildcards_json',                   cat: 'Wildcards',    notes: 'JSON array of expanded wildcards',  avail:[1,1,0,0] },
+  { key: 'wildcard_count',                   cat: 'Wildcards',    notes: '',                                  avail:[1,1,0,0] },
+
+  { key: 'refine_strength',                  cat: 'Img2img',      notes: '',                                  avail:[0,1,0,0] },
+  { key: 'refine_pass_count',                cat: 'Img2img',      notes: '',                                  avail:[0,1,0,0] },
+  { key: 'refine_pass1_steps',               cat: 'Img2img',      notes: '',                                  avail:[0,1,0,0] },
+  { key: 'refine_pass2_steps',               cat: 'Img2img',      notes: '',                                  avail:[0,1,0,0] },
+  { key: 'refine_pass2_strength',            cat: 'Img2img',      notes: '',                                  avail:[0,1,0,0] },
+  { key: 'similarity',                       cat: 'Img2img',      notes: 'Normalized from user input',        avail:[0,1,0,0] },
+  { key: 'source_filename',                  cat: 'Img2img',      notes: '',                                  avail:[0,1,0,0] },
+  { key: 'source_width',                     cat: 'Img2img',      notes: 'Normalized input size',             avail:[0,1,0,0] },
+  { key: 'source_height',                    cat: 'Img2img',      notes: 'Normalized input size',             avail:[0,1,0,0] },
+  { key: 'source_original_width',            cat: 'Img2img',      notes: 'Pre-normalization size',            avail:[0,1,0,0] },
+  { key: 'source_original_height',           cat: 'Img2img',      notes: 'Pre-normalization size',            avail:[0,1,0,0] },
+
+  { key: 'source_image',                     cat: 'Upscale + Clarity', notes: 'Full path to source file',     avail:[0,0,1,1] },
+  { key: 'source_generation_seed',           cat: 'Upscale + Clarity', notes: 'Seed read from source PNG',   avail:[0,0,1,1] },
+  { key: 'request_enhance_prompt',           cat: 'Upscale + Clarity', notes: '',                             avail:[0,0,1,1] },
+  { key: 'step_timings_ms.*',                cat: 'Upscale + Clarity', notes: 'Dynamic per-step timing keys', avail:[0,0,1,1] },
+
+  { key: 'upscale_engine',                   cat: 'Upscale',      notes: '',                                  avail:[0,0,1,0] },
+  { key: 'upscale_duration_ms',              cat: 'Upscale',      notes: '',                                  avail:[0,0,1,0] },
+
+  { key: 'clarity_engine',                   cat: 'Clarity',      notes: '',                                  avail:[0,0,0,1] },
+  { key: 'clarity_variant',                  cat: 'Clarity',      notes: '',                                  avail:[0,0,0,1] },
+  { key: 'clarity_duration_ms',              cat: 'Clarity',      notes: '',                                  avail:[0,0,0,1] },
+  { key: 'clarity_fs_method',                cat: 'Clarity',      notes: 'e.g. linear',                      avail:[0,0,0,1] },
+  { key: 'clarity_fs_type',                  cat: 'Clarity',      notes: 'e.g. gaussian',                    avail:[0,0,0,1] },
+  { key: 'clarity_fs_intensity',             cat: 'Clarity',      notes: '',                                  avail:[0,0,0,1] },
+  { key: 'clarity_unsharp_stage',            cat: 'Clarity',      notes: '',                                  avail:[0,0,0,1] },
+  { key: 'clarity_unsharp_radius',           cat: 'Clarity',      notes: '',                                  avail:[0,0,0,1] },
+  { key: 'clarity_unsharp_percent',          cat: 'Clarity',      notes: '',                                  avail:[0,0,0,1] },
+  { key: 'clarity_unsharp_threshold',        cat: 'Clarity',      notes: '',                                  avail:[0,0,0,1] },
+];
+
+const MODE_LABELS = ['Generate', 'Img2img', 'Upscale', 'Clarity'];
+
+// state[fi][mi] = checked boolean
+let state = FIELDS.map(f => f.avail.map(a => a === 1));
+let exportFormat = 'table';
+
+// ── Table init ──────────────────────────────────────────
+function initTable() {
+  const tbody = document.getElementById('tbody');
+  let lastCat = null;
+
+  FIELDS.forEach((f, fi) => {
+    if (f.cat !== lastCat) {
+      lastCat = f.cat;
+      const tr = document.createElement('tr');
+      tr.className = 'cat-row';
+      tr.innerHTML = `<td colspan="6">${f.cat}</td>`;
+      tbody.appendChild(tr);
+    }
+
+    const tr = document.createElement('tr');
+    tr.className = 'data-row';
+
+    let html = `<td class="col-key">${f.key}</td>`;
+    f.avail.forEach((avail, mi) => {
+      if (avail) {
+        const chk = state[fi][mi] ? 'checked' : '';
+        html += `<td class="col-mode"><label class="cb-wrap"><input type="checkbox" data-fi="${fi}" data-mi="${mi}" ${chk} onchange="toggle(${fi},${mi},this)"></label></td>`;
+      } else {
+        html += `<td class="col-mode"><span class="na-cell">—</span></td>`;
+      }
+    });
+    html += `<td class="col-notes">${f.notes}</td>`;
+
+    tr.innerHTML = html;
+    tbody.appendChild(tr);
+  });
+
+  updateStats();
+}
+
+// ── State mutators ──────────────────────────────────────
+function toggle(fi, mi, el) {
+  state[fi][mi] = el.checked;
+  updateStats();
+}
+
+function toggleMode(mi) {
+  const cbs = document.querySelectorAll(`input[data-mi="${mi}"]`);
+  const allOn = Array.from(cbs).every(cb => cb.checked);
+  cbs.forEach(cb => {
+    cb.checked = !allOn;
+    state[parseInt(cb.dataset.fi)][mi] = !allOn;
+  });
+  updateStats();
+}
+
+function setAll(val) {
+  document.querySelectorAll('input[data-fi]').forEach(cb => {
+    cb.checked = val;
+    state[parseInt(cb.dataset.fi)][parseInt(cb.dataset.mi)] = val;
+  });
+  updateStats();
+}
+
+function resetDefaults() {
+  state = FIELDS.map(f => f.avail.map(a => a === 1));
+  document.querySelectorAll('input[data-fi]').forEach(cb => {
+    cb.checked = state[parseInt(cb.dataset.fi)][parseInt(cb.dataset.mi)];
+  });
+  updateStats();
+}
+
+// ── Stats ───────────────────────────────────────────────
+function updateStats() {
+  let total = 0, on = 0;
+  const modeCounts = [0, 0, 0, 0];
+  const modeAvail  = [0, 0, 0, 0];
+
+  FIELDS.forEach((f, fi) => {
+    f.avail.forEach((a, mi) => {
+      if (!a) return;
+      modeAvail[mi]++;
+      total++;
+      if (state[fi][mi]) { on++; modeCounts[mi]++; }
+    });
+  });
+
+  document.getElementById('stats').textContent = `${on} / ${total} fields enabled`;
+
+  for (let mi = 0; mi < 4; mi++) {
+    document.getElementById(`cnt-${mi}`).textContent = `${modeCounts[mi]}/${modeAvail[mi]}`;
+  }
+}
+
+// ── Export ──────────────────────────────────────────────
+function setFormat(fmt) {
+  exportFormat = fmt;
+  document.getElementById('fmt-table').classList.toggle('active', fmt === 'table');
+  document.getElementById('fmt-lists').classList.toggle('active', fmt === 'lists');
+  document.getElementById('export-text').value = generateExportText();
+}
+
+function generateExportText() {
+  const date = new Date().toISOString().slice(0, 10);
+  const header = `PNG METADATA SELECTION — JustRayzist\nGenerated: ${date}\n\nG = Generate  I = Img2img  U = Upscale  C = Clarity\nON = included  OFF = excluded  N/A = not applicable\n`;
+
+  if (exportFormat === 'table') {
+    return generateTable(header);
+  } else {
+    return generateLists(header);
+  }
+}
+
+function generateTable(header) {
+  const KW = 42; // key column width
+  const pad = (s, n) => String(s).padEnd(n);
+
+  const colHdr = pad('KEY', KW) + '|  G  |  I  |  U  |  C  | NOTES';
+  const divider = '-'.repeat(KW) + '|-----|-----|-----|-----|' + '-'.repeat(36);
+
+  const lines = [header, colHdr, divider];
+  let lastCat = null;
+
+  FIELDS.forEach((f, fi) => {
+    if (f.cat !== lastCat) {
+      lastCat = f.cat;
+      lines.push(`\n[${f.cat}]`);
+    }
+    const cells = f.avail.map((a, mi) => {
+      if (!a) return ' N/A ';
+      return state[fi][mi] ? '  ON ' : ' OFF ';
+    });
+    lines.push(pad('  ' + f.key, KW) + '|' + cells.join('|') + '| ' + f.notes);
+  });
+
+  return lines.join('\n');
+}
+
+function generateLists(header) {
+  const lines = [header];
+
+  for (let mi = 0; mi < 4; mi++) {
+    const available = FIELDS.filter(f => f.avail[mi]);
+    const included  = FIELDS.filter((f, fi) => f.avail[mi] &&  state[fi][mi]);
+    const excluded  = FIELDS.filter((f, fi) => f.avail[mi] && !state[fi][mi]);
+
+    lines.push(`\n${'─'.repeat(52)}`);
+    lines.push(`${MODE_LABELS[mi].toUpperCase()} — ${included.length} of ${available.length} fields included`);
+    lines.push('─'.repeat(52));
+
+    if (included.length) {
+      lines.push('INCLUDE:');
+      included.forEach(f => lines.push(`  + ${f.key}${f.notes ? '  — ' + f.notes : ''}`));
+    } else {
+      lines.push('INCLUDE: (none)');
+    }
+
+    lines.push('');
+
+    if (excluded.length) {
+      lines.push('EXCLUDE:');
+      excluded.forEach(f => lines.push(`  - ${f.key}`));
+    } else {
+      lines.push('EXCLUDE: (none — all available fields enabled)');
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function openExport() {
+  document.getElementById('export-text').value = generateExportText();
+  document.getElementById('modal').classList.add('open');
+}
+
+function closeExport() {
+  document.getElementById('modal').classList.remove('open');
+}
+
+function onOverlayClick(e) {
+  if (e.target === document.getElementById('modal')) closeExport();
+}
+
+function copyExport() {
+  const text = document.getElementById('export-text').value;
+  navigator.clipboard.writeText(text).then(() => {
+    const el = document.getElementById('copy-ok');
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 2000);
+  });
+}
+
+// Keyboard: Escape closes modal
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeExport();
+});
+
+initTable();
+</script>
+</body>
+</html>

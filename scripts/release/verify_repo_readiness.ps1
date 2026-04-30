@@ -14,7 +14,6 @@ $requiredPaths = @(
   "scripts\\fetch_model_assets.ps1",
   "scripts\\setup\\runmefirst.ps1",
   "scripts\\setup\\python_manifest.json",
-  "scripts\\pyinstaller\\build_onedir.ps1",
   "scripts\\release\\package_release.ps1",
   "scripts\\update_release.ps1",
   "requirements\\runtime-lock.txt",

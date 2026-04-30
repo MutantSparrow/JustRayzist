@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -126,6 +125,7 @@ class AppSettings:
     app_version: str
     environment: str
     offline_mode: bool
+    meta_debug: bool
     runtime_profile: RuntimeProfile
     resource_tier: RuntimeProfile
     resource_tier_override: str | None
@@ -139,6 +139,7 @@ class AppSettings:
             "app_version": self.app_version,
             "environment": self.environment,
             "offline_mode": self.offline_mode,
+            "meta_debug": self.meta_debug,
             "runtime_profile": {
                 "name": self.runtime_profile.name,
                 "description": self.runtime_profile.description,
@@ -164,8 +165,6 @@ def _resolve_root() -> Path:
     env_root = os.getenv("JUSTRAYZIST_ROOT")
     if env_root:
         return Path(env_root).expanduser().resolve()
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parents[2]
 
 
@@ -217,6 +216,7 @@ def load_settings(profile_name: str | None = None) -> AppSettings:
         app_version=APP_VERSION,
         environment=os.getenv("JUSTRAYZIST_ENV", "dev"),
         offline_mode=offline_mode,
+        meta_debug=os.getenv("JUSTRAYZIST_METADEBUG", "0") == "1",
         runtime_profile=runtime_profile,
         resource_tier=resource_tier,
         resource_tier_override=override_profile.name if override_profile is not None else None,

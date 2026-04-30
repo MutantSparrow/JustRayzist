@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from uuid import uuid4
@@ -8,6 +9,9 @@ import pytest
 
 from app.config.profiles import RUNTIME_PROFILES
 from app.config.settings import AppPaths, AppSettings, ResourceTierController
+
+# All tests run with full metadata so assertions on PNG chunks are not broken by filtering.
+os.environ.setdefault("JUSTRAYZIST_METADEBUG", "1")
 
 
 @pytest.fixture
@@ -72,6 +76,7 @@ def make_app_settings():
             app_version="test",
             environment="test",
             offline_mode=True,
+            meta_debug=True,
             runtime_profile=runtime_profile,
             resource_tier=resource_profile,
             resource_tier_override=override_profile.name if override_profile is not None else None,

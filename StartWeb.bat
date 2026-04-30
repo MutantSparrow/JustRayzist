@@ -20,48 +20,36 @@ echo ==============================
 echo Detecting runtime...
 echo.
 
-set "WEB_EXE=%CD%\bin\web\justrayzist-web.exe"
-set "RUN_MODE="
 set "PYTHON_EXE="
-if exist "!WEB_EXE!" (
-  echo Packaged web runtime found:
-  echo   !WEB_EXE!
-  set "RUN_MODE=exe"
-) else (
-  echo Packaged web runtime not found.
-  echo Checking local Python environment. This can take a while on slower hardware...
+echo Checking local Python environment. This can take a while on slower hardware...
+echo.
+if defined JUSTRAYZIST_PYTHON call :try_source_python "%JUSTRAYZIST_PYTHON%" "JUSTRAYZIST_PYTHON"
+if not defined PYTHON_EXE call :try_source_python "%CD%\.venv\Scripts\python.exe" ".venv\\Scripts\\python.exe"
+if not defined PYTHON_EXE call :try_source_python "%CD%\.venv\python.exe" ".venv\\python.exe"
+if not defined PYTHON_EXE call :try_source_python "python" "PATH python"
+if not defined PYTHON_EXE call :try_python_launcher_paths
+if not defined PYTHON_EXE (
   echo.
-  if defined JUSTRAYZIST_PYTHON call :try_source_python "%JUSTRAYZIST_PYTHON%" "JUSTRAYZIST_PYTHON"
-  if not defined PYTHON_EXE call :try_source_python "%CD%\.venv\Scripts\python.exe" ".venv\\Scripts\\python.exe"
-  if not defined PYTHON_EXE call :try_source_python "%CD%\.venv\python.exe" ".venv\\python.exe"
-  if not defined PYTHON_EXE call :try_source_python "python" "PATH python"
-  if not defined PYTHON_EXE call :try_python_launcher_paths
-  if not defined PYTHON_EXE (
-    echo.
-    echo No packaged web executable found with a usable source Python runtime.
-    echo Checked packaged path:
-    echo   !WEB_EXE!
-    echo Checked source interpreter candidates - requires launcher/server dependencies and core model packages:
-    if defined JUSTRAYZIST_PYTHON echo   JUSTRAYZIST_PYTHON=!JUSTRAYZIST_PYTHON!
-    echo   %CD%\.venv\Scripts\python.exe
-    echo   %CD%\.venv\python.exe
-    echo   PATH python
-    echo.
-    echo Setup or repair the environment first:
-    echo   .\RunMeFirst.bat
-    echo.
-    echo Manual fallback:
-    echo   powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1
-    echo.
-    echo The delay before this message came from validating Python startup dependencies.
-    set "EXIT_CODE=1"
-    goto :after_run
-  )
+  echo No usable Python runtime found.
+  echo Checked source interpreter candidates - requires launcher/server dependencies and core model packages:
+  if defined JUSTRAYZIST_PYTHON echo   JUSTRAYZIST_PYTHON=!JUSTRAYZIST_PYTHON!
+  echo   %CD%\.venv\Scripts\python.exe
+  echo   %CD%\.venv\python.exe
+  echo   PATH python
   echo.
-  echo Source Python runtime ready:
-  echo   !PYTHON_EXE!
-  set "RUN_MODE=python"
+  echo Setup or repair the environment first:
+  echo   .\RunMeFirst.bat
+  echo.
+  echo Manual fallback:
+  echo   powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1
+  echo.
+  echo The delay before this message came from validating Python startup dependencies.
+  set "EXIT_CODE=1"
+  goto :after_run
 )
+echo.
+echo Python runtime ready:
+echo   !PYTHON_EXE!
 
 if exist "launch\ascii_logo_blockier.ans" (
   type "launch\ascii_logo_blockier.ans"
@@ -149,30 +137,6 @@ if /I "%JUSTRAYZIST_LISTEN%"=="1" (
   )
 )
 
-set "RELEASE_LANE=cu128"
-if exist "%CD%\release_lane.txt" (
-  set /p RELEASE_LANE=<"%CD%\release_lane.txt"
-  if not defined RELEASE_LANE set "RELEASE_LANE=cu128"
-)
-
-if /I "!RUN_MODE!"=="exe" (
-  if /I "%JUSTRAYZIST_SKIP_GPU_PREFLIGHT%"=="1" (
-    echo GPU preflight skipped due to JUSTRAYZIST_SKIP_GPU_PREFLIGHT=1.
-  ) else (
-    call :validate_gpu_lane
-    if errorlevel 1 (
-      echo.
-      echo GPU preflight reported a lane/driver mismatch.
-      choice /c YN /n /m "Continue launch anyway? [Y/N]: "
-      if errorlevel 2 (
-        set "EXIT_CODE=1"
-        goto :after_run
-      )
-    )
-  )
-) else (
-  echo GPU preflight skipped in source mode.
-)
 
 call :find_listening_pid !PORT! PORT_PID
 if defined PORT_PID (
@@ -207,7 +171,6 @@ if defined PORT_PID (
 echo.
 echo Starting web server with automatic resource-tier detection.
 echo Using model pack: !PACK!
-echo Runtime lane: !RELEASE_LANE!
 echo Bind address: !HOST!:!PORT!
 if /I "!NETWORK_MODE!"=="lan" (
   echo Local URL: http://127.0.0.1:!PORT!/
@@ -217,11 +180,7 @@ if /I "!NETWORK_MODE!"=="lan" (
 )
 echo.
 
-if /I "!RUN_MODE!"=="exe" (
-  "!WEB_EXE!" --host !HOST! --port !PORT!
-) else (
-  "!PYTHON_EXE!" -m app.cli.main serve --host !HOST! --port !PORT!
-)
+"!PYTHON_EXE!" -m app.cli.main serve --host !HOST! --port !PORT!
 set "EXIT_CODE=%ERRORLEVEL%"
 
 :after_run
@@ -266,31 +225,6 @@ for /f "tokens=* delims=" %%L in ('py -0p 2^>nul') do (
   )
 )
 goto :eof
-
-:validate_gpu_lane
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='Stop';" ^
-  "$lane='%RELEASE_LANE%'.Trim().ToLowerInvariant();" ^
-  "$floors=@{cu126=[version]'561.17';cu128=[version]'572.61'};" ^
-  "$cmd=Get-Command nvidia-smi -ErrorAction SilentlyContinue;" ^
-  "if(-not $cmd){ Write-Host 'GPU preflight: nvidia-smi not found; skipping lane gate.'; exit 0 };" ^
-  "$rows=& nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>$null;" ^
-  "if(-not $rows){ Write-Host 'GPU preflight: no NVIDIA GPU detected; continuing.'; exit 0 };" ^
-  "$first=@($rows)[0].ToString();" ^
-  "$parts=$first.Split(',',2);" ^
-  "if($parts.Count -lt 2){ Write-Host ('GPU preflight: unexpected nvidia-smi row: ' + $first); exit 2 };" ^
-  "$gpu=$parts[0].Trim();" ^
-  "$driverText=$parts[1].Trim();" ^
-  "try { $driver=[version]$driverText } catch { Write-Host ('GPU preflight: unable to parse driver version: ' + $driverText); exit 2 };" ^
-  "$is50=$gpu -match 'RTX\s*50';" ^
-  "if($lane -eq 'cu126' -and $is50){ Write-Host ('GPU preflight failed: ' + $gpu + ' requires cu128 lane and driver >= 572.61.'); exit 2 };" ^
-  "$required=$floors[$lane];" ^
-  "if(-not $required){ Write-Host ('GPU preflight: unknown lane ' + $lane + '; skipping lane gate.'); exit 0 };" ^
-  "if($driver -lt $required){ Write-Host ('GPU preflight failed: GPU=' + $gpu + ', driver=' + $driver + ', lane=' + $lane + ', required>=' + $required); exit 2 };" ^
-  "Write-Host ('GPU preflight OK: GPU=' + $gpu + ', driver=' + $driver + ', lane=' + $lane + ', required>=' + $required); exit 0"
-if errorlevel 2 exit /b 1
-if errorlevel 1 exit /b 1
-exit /b 0
 
 :ensure_default_pack_assets
 set "PACK_ROOT=%CD%\models\packs\Rayzist_bf16"

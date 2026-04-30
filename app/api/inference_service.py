@@ -1049,9 +1049,10 @@ class InferenceService:
 
                 saved_path = save_png_with_metadata(
                     image=result.image,
-                    prompt=result.prompt_effective_base or result.prompt_effective,
+                    prompt=result.prompt_effective,
                     settings=self._settings,
                     output_path=output_path,
+                    meta_mode="generate",
                     extra_metadata={
                         "owner_id": safe_owner_id,
                         "prompt_original": result.prompt_original,
@@ -1262,9 +1263,10 @@ class InferenceService:
                 final_width, final_height = result.image.size
                 saved_path = save_png_with_metadata(
                     image=result.image,
-                    prompt=result.prompt_effective_base or result.prompt_effective,
+                    prompt=result.prompt_effective,
                     settings=self._settings,
                     output_path=output_path,
+                    meta_mode="img2img",
                     extra_metadata={
                         "owner_id": safe_owner_id,
                         "prompt_original": result.prompt_original,
@@ -1556,6 +1558,7 @@ class InferenceService:
                     prompt=prompt_effective,
                     settings=self._settings,
                     output_path=output_path,
+                    meta_mode="upscale",
                     extra_metadata=metadata_payload,
                 )
                 if cancel_event.is_set():
@@ -1764,6 +1767,7 @@ class InferenceService:
                     prompt=prompt_effective,
                     settings=self._settings,
                     output_path=output_path,
+                    meta_mode="clarity",
                     extra_metadata=metadata_payload,
                 )
                 if cancel_event.is_set():

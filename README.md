@@ -6,11 +6,11 @@ JustRayzist is a local-first image generation app built around the Rayzist Z-Ima
 
 The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
 
-## New in v1.8.4
+## New in v1.8.5
 
-- Adds concise, plain-language tooltips for generation settings, R+ controls, image reference, gallery color filters, and thumbnail sizing.
-- Shows whether an upscaled image used the photo or illustration route in fullscreen metadata next to the resolution.
-- Persists the detected upscale route in gallery metadata so fullscreen labels survive reloads and gallery rebuilds.
+- Moves Windows launch and restart flow fully onto the Python runtime path and removes the old frozen executable entrypoints.
+- Adds default compact PNG metadata for final outputs while keeping gallery fields, prompt text, and `JUSTRAYZIST_METADEBUG=1` diagnostic metadata.
+- Removes the legacy PyInstaller one-dir build path from docs and release readiness checks in favor of bootstrap release packaging.
 
 ![Wildcard library preview](readme_images/wildcards_preview.png)
 
@@ -237,7 +237,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.4",
+  "version": "1.8.5",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -268,7 +268,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.4",
+  "app_version": "1.8.5",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
@@ -904,7 +904,6 @@ app/
   cli/           Typer commands and engineering workflows
   config/        settings, runtime profiles, root/path resolution
   core/          backend integration, pipelines, worker sessions, upscaling
-  entrypoints/   frozen/launcher entry points
   storage/       gallery index, PNG metadata, LoRA and wildcard libraries
   ui/            browser UI assets
 
@@ -933,7 +932,6 @@ Useful additional commands:
 ```powershell
 python -m app.cli.main --help
 powershell -ExecutionPolicy Bypass -File scripts\release\verify_repo_readiness.ps1
-powershell -ExecutionPolicy Bypass -File scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
 ```
 
 ## Testing Notes

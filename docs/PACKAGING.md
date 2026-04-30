@@ -21,20 +21,6 @@ The packaged UX now matches source mode:
 - `scripts\release\clean_legacy_artifacts.ps1`
 - `scripts\update_release.ps1`
 
-## Engineering-Only One-Dir Builds
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\pyinstaller\build_onedir.ps1 -Lane cu128 -Clean
-```
-
-Useful flags:
-
-- `-Lane cu126|cu128`
-- `-PythonExe C:\Path\To\python.exe`
-- `-SkipDependencyInstall`
-
-These outputs are for engineering validation only and are not shipped as release artifacts.
-
 ## Create a Release
 
 ```powershell
@@ -70,16 +56,9 @@ powershell -ExecutionPolicy Bypass -File scripts\release\clean_legacy_artifacts.
 
 ## Packaged Update Expectations
 
-- `UpdateApp.bat` preserves `models/`, `outputs/`, `data/`, `.venv/`, and `release_lane.txt`
+- `UpdateApp.bat` preserves `models/`, `outputs/`, `data/`, and `.venv/`
 - packaged updates should not overwrite local user outputs or model assets
 - after update, `StartWeb.bat` should still present the no-profile startup flow and public-pack-only selection
-
-## CUDA / Driver Baseline
-
-- `cu126`: driver `>= 561.17`
-- `cu128`: driver `>= 572.61`
-
-`StartWeb.bat` reads `release_lane.txt` when present and applies lane-specific GPU preflight checks.
 
 ## Expected Outputs
 
@@ -87,4 +66,3 @@ Typical packaging outputs are written under `dist/`, including:
 
 - release folders such as `dist\JustRayzist_win64_cu128_v0.1.0_bootstrap`
 - optional zip archives for release distribution
-- optional engineering-only PyInstaller build folders under `dist\pyinstaller\`

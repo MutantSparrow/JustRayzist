@@ -737,19 +737,6 @@ def test_build_server_restart_exec_args_source_mode(monkeypatch) -> None:
     assert env["JUSTRAYZIST_ROOT"] == root_dir
 
 
-def test_build_server_restart_exec_args_frozen_mode(monkeypatch) -> None:
-    executable = r"C:\JustRayzist\bin\web\justrayzist-web.exe"
-    monkeypatch.delenv("JUSTRAYZIST_SERVER_HOST", raising=False)
-    monkeypatch.delenv("JUSTRAYZIST_SERVER_PORT", raising=False)
-    monkeypatch.delenv("JUSTRAYZIST_SERVER_VERBOSE_LOGS", raising=False)
-    monkeypatch.setattr(api_main.sys, "executable", executable)
-    monkeypatch.setattr(api_main.sys, "frozen", True, raising=False)
-
-    resolved_executable, args, env, root_dir = api_main._build_server_restart_exec_args()
-
-    assert resolved_executable == executable
-    assert args == [executable, "--host", "127.0.0.1", "--port", "37717"]
-    assert env["JUSTRAYZIST_ROOT"] == root_dir
 
 
 

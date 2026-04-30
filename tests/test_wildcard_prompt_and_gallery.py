@@ -104,7 +104,7 @@ def test_inference_generate_persists_wildcard_metadata(monkeypatch, temp_app_pat
                 duration_ms=123,
                 prompt_original="portrait __picturesque-locations__",
                 prompt_wildcard_resolved="portrait a chalet in the French Alps",
-                prompt_effective="portrait a chalet in the French Alps",
+                prompt_effective="portrait a chalet in the French Alps, cinematic style",
                 prompt_enhanced=False,
                 prompt_effective_base="portrait a chalet in the French Alps",
                 wildcards=(
@@ -125,6 +125,7 @@ def test_inference_generate_persists_wildcard_metadata(monkeypatch, temp_app_pat
             return {"backend": "diffusers_zimage"}
 
     def fake_save_png_with_metadata(**kwargs):
+        saved_metadata["prompt"] = kwargs["prompt"]
         saved_metadata["extra_metadata"] = kwargs["extra_metadata"]
         return kwargs["output_path"]
 
@@ -150,6 +151,7 @@ def test_inference_generate_persists_wildcard_metadata(monkeypatch, temp_app_pat
     )
 
     metadata = dict(saved_metadata["extra_metadata"])
+    assert saved_metadata["prompt"] == "portrait a chalet in the French Alps, cinematic style"
     assert metadata["prompt_wildcard_resolved"] == "portrait a chalet in the French Alps"
     assert metadata["wildcard_count"] == 1
     assert '"selected_entry": "a chalet in the French Alps"' in metadata["wildcards_json"]

@@ -111,10 +111,7 @@ def _build_server_restart_exec_args() -> tuple[str, list[str], dict[str, str], s
     env = os.environ.copy()
     env["JUSTRAYZIST_ROOT"] = root_dir
     executable = sys.executable
-    if getattr(sys, "frozen", False):
-        args = [executable, "--host", host, "--port", port]
-    else:
-        args = [executable, "-m", "app.cli.main", "serve", "--host", host, "--port", port]
+    args = [executable, "-m", "app.cli.main", "serve", "--host", host, "--port", port]
     if verbose_logs:
         args.append("--verbose-logs")
     return executable, args, env, root_dir

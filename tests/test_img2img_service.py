@@ -68,6 +68,7 @@ def test_inference_img2img_persists_lineage(monkeypatch, temp_app_paths, make_ap
             return {"backend": "diffusers_zimage"}
 
     def fake_save_png_with_metadata(**kwargs):
+        saved_metadata["prompt"] = kwargs["prompt"]
         saved_metadata["extra_metadata"] = kwargs["extra_metadata"]
         return kwargs["output_path"]
 
@@ -100,6 +101,7 @@ def test_inference_img2img_persists_lineage(monkeypatch, temp_app_paths, make_ap
     assert captured["input_size"][0] % 32 == 0
     assert captured["input_size"][1] % 32 == 0
     metadata = dict(saved_metadata["extra_metadata"])
+    assert saved_metadata["prompt"] == "hello from enhancer, cinematic"
     assert metadata["mode"] == "img2img"
     assert metadata["source_filename"] == "reference.png"
     assert metadata["similarity"] == 0.8
