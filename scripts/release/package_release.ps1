@@ -64,7 +64,7 @@ function Copy-CommonReleaseContent {
   )
 
   Invoke-RobocopySafe -Source (Join-Path $RootDir "app") -Destination (Join-Path $ReleaseDir "app")
-  Invoke-RobocopySafe -Source (Join-Path $RootDir "docs") -Destination (Join-Path $ReleaseDir "docs")
+  Invoke-RobocopySafe -Source (Join-Path $RootDir "docs") -Destination (Join-Path $ReleaseDir "docs") -ExtraArgs @("/XF", "metadata_config.html")
   Invoke-RobocopySafe -Source (Join-Path $RootDir "img") -Destination (Join-Path $ReleaseDir "img")
   Invoke-RobocopySafe -Source (Join-Path $RootDir "launch") -Destination (Join-Path $ReleaseDir "launch")
   Invoke-RobocopySafe -Source (Join-Path $RootDir "readme_images") -Destination (Join-Path $ReleaseDir "readme_images")
