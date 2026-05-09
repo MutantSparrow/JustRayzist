@@ -325,11 +325,11 @@ class DiffusersZImageBackend:
     _PROCEDURAL_LATENT_NOISE_MIX_LEVEL3 = 0.91
     _PROCEDURAL_LATENT_PREPROCESS = "procedural_normalize_mix"
     _PROCEDURAL_LATENT_RECIPE_VERSION = "proc_v4"
-    _PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS = 4000
     _PROMPT_ENHANCEMENT_PRIMARY_MAX_NEW_TOKENS = 120
     _PROMPT_ENHANCEMENT_RETRY_MAX_NEW_TOKENS = 160
     _PROMPT_ENHANCEMENT_PIPELINE_MAX_SEQUENCE_LENGTH = 512
     _PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET = 480
+    _PROMPT_ENHANCEMENT_COMPRESSION_TARGET_TOKENS = 440
     _PROMPT_STYLE_PATTERNS: tuple[str, ...] = (
         r"\banime\b",
         r"\bmanga\b",
@@ -1176,8 +1176,8 @@ class DiffusersZImageBackend:
         add_noise_stage3 = bool(sigmas3 and original_sigmas3 and sigmas3[0] == original_sigmas3[0])
         return sigmas1, sigmas2, sigmas3, add_noise_stage3
 
-    @staticmethod
-    def _rplus_prepare_prompt_embeds(pipe: Any, prompt: str, device: Any) -> list[Any]:
+    @classmethod
+    def _rplus_prepare_prompt_embeds(cls, pipe: Any, prompt: str, device: Any) -> list[Any]:
         prompt_embeds, _negative_prompt_embeds = pipe.encode_prompt(
             prompt=prompt,
             negative_prompt=None,
@@ -1185,7 +1185,10 @@ class DiffusersZImageBackend:
             prompt_embeds=None,
             negative_prompt_embeds=None,
             device=device,
-            max_sequence_length=512,
+            max_sequence_length=cls._resolve_pipeline_max_sequence_length(
+                getattr(pipe, "tokenizer", None),
+                prompt,
+            ),
         )
         return prompt_embeds
 
@@ -2415,11 +2418,61 @@ class DiffusersZImageBackend:
         return f"{system}\n\n{user_message}\n\nRewritten prompt:"
 
     @staticmethod
+    def _build_compression_prompt(
+        tokenizer: Any,
+        prompt: str,
+        *,
+        target_tokens: int | None = None,
+    ) -> str:
+        target = int(target_tokens or DiffusersZImageBackend._PROMPT_ENHANCEMENT_COMPRESSION_TARGET_TOKENS)
+        system = (
+            "Compress the input into one compact image generation prompt under "
+            f"{target} tokens. Keep subject, count, identity, style, camera, lighting, setting, spatial "
+            "relations, named labels, and rare concrete details. Remove filler, repeated atmosphere, duplicate "
+            "material detail, weak adjectives, and low priority background texture. Use complete sentences only. "
+            "Output the compressed prompt only, with no analysis or explanation."
+        )
+        user_message = (
+            "Compress this image prompt while preserving its visual intent.\n\n"
+            f"Original prompt: {prompt}"
+        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_message},
+        ]
+        if hasattr(tokenizer, "apply_chat_template"):
+            try:
+                rendered = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+                if isinstance(rendered, str) and rendered.strip():
+                    return rendered
+            except TypeError:
+                try:
+                    rendered = tokenizer.apply_chat_template(
+                        messages,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                    )
+                    if isinstance(rendered, str) and rendered.strip():
+                        return rendered
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return f"{system}\n\n{user_message}\n\nCompressed prompt:"
+
+    @staticmethod
     def _extract_rewritten_prompt(full_text: str, input_text: str) -> str:
         candidate = full_text[len(input_text) :].strip() if full_text.startswith(input_text) else full_text.strip()
         candidate = re.sub(r"<think>.*?</think>\s*", "", candidate, flags=re.DOTALL).strip()
         if "Rewritten prompt:" in candidate:
             candidate = candidate.split("Rewritten prompt:", 1)[-1].strip()
+        if "Compressed prompt:" in candidate:
+            candidate = candidate.split("Compressed prompt:", 1)[-1].strip()
         candidate = candidate.splitlines()[0].strip() if candidate else ""
         return candidate
 
@@ -2497,6 +2550,16 @@ class DiffusersZImageBackend:
             raise ValueError("Tokenizer did not return input_ids while measuring prompt length.")
         return int(input_ids.shape[-1])
 
+    @classmethod
+    def _resolve_pipeline_max_sequence_length(cls, tokenizer: Any, prompt: str) -> int:
+        baseline = int(cls._PROMPT_ENHANCEMENT_PIPELINE_MAX_SEQUENCE_LENGTH)
+        if tokenizer is None:
+            return baseline
+        try:
+            return max(baseline, cls._pipeline_prompt_token_length(tokenizer, prompt))
+        except Exception:
+            return baseline
+
     @staticmethod
     def _split_prompt_clauses(text: str) -> list[str]:
         if not text:
@@ -2514,6 +2577,33 @@ class DiffusersZImageBackend:
             seen.add(key)
             cleaned.append(normalized)
         return cleaned
+
+    @staticmethod
+    def _trim_to_complete_sentences(text: str) -> str | None:
+        normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+        normalized = normalized.strip("`\"' ")
+        normalized = re.sub(
+            r"^(?:rewritten|compressed)\s+prompt:\s*",
+            "",
+            normalized,
+            flags=re.IGNORECASE,
+        ).strip()
+        if not normalized:
+            return None
+
+        boundary_matches = list(re.finditer(r"[.!?][\"')\]]*", normalized))
+        if boundary_matches:
+            last_boundary = boundary_matches[-1]
+            trimmed = normalized[: last_boundary.end()].strip()
+            return trimmed or None
+
+        if normalized != normalized.rstrip(" ,;:"):
+            return None
+
+        words = re.findall(r"[A-Za-z0-9_'-]+", normalized)
+        if "," in normalized and 3 <= len(words) <= 80:
+            return normalized
+        return None
 
     @classmethod
     def _extract_style_constraints(cls, text: str) -> tuple[str, ...]:
@@ -2576,11 +2666,12 @@ class DiffusersZImageBackend:
         return ", ".join(seeded)
 
     @classmethod
-    def _truncate_prompt_to_token_budget(
+    def _fit_complete_clauses_to_budget(
         cls,
         *,
         tokenizer: Any,
         candidate_prompt: str,
+        original_prompt: str | None = None,
         max_tokens: int | None = None,
     ) -> str | None:
         budget = int(max_tokens or cls._PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET)
@@ -2588,21 +2679,65 @@ class DiffusersZImageBackend:
         if not normalized:
             return None
 
-        words = re.findall(r"\S+", normalized)
-        if not words:
+        complete_candidate = cls._trim_to_complete_sentences(normalized)
+        if complete_candidate is not None:
+            try:
+                if cls._pipeline_prompt_token_length(tokenizer, complete_candidate) <= budget:
+                    return complete_candidate
+            except Exception:
+                return complete_candidate
+
+        source = complete_candidate or normalized
+        clauses = cls._split_prompt_clauses(source)
+        if not clauses:
             return None
+
+        sentence_style = bool(re.search(r"[.!?]", source))
+        style_constraints = cls._extract_style_constraints(original_prompt or source)
+        style_clauses = [
+            clause
+            for clause in clauses
+            if cls._clause_contains_style_constraint(clause, style_constraints)
+        ]
+        prioritized: list[str] = []
+        seen: set[str] = set()
+
+        def push(part: str) -> None:
+            normalized_part = part.strip(" ,;:.")
+            if not normalized_part:
+                return
+            key = normalized_part.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            prioritized.append(normalized_part)
+
+        push(clauses[0])
+        for clause in style_clauses:
+            push(clause)
+        for clause in clauses[1:]:
+            clause_lower = clause.lower()
+            if any(keyword in clause_lower for keyword in cls._PROMPT_PRIORITY_KEYWORDS):
+                push(clause)
+        for clause in clauses[1:]:
+            push(clause)
+
+        def join_parts(parts: list[str]) -> str:
+            if sentence_style:
+                return ". ".join(part.rstrip(".!?") for part in parts).strip() + "."
+            return ", ".join(parts).strip()
 
         assembled: list[str] = []
         best: str | None = None
-        for word in words:
-            trial = " ".join(assembled + [word]).strip()
+        for part in prioritized:
+            trial = join_parts(assembled + [part])
             try:
                 token_length = cls._pipeline_prompt_token_length(tokenizer, trial)
             except Exception:
                 return trial
             if token_length > budget:
-                break
-            assembled.append(word)
+                continue
+            assembled.append(part)
             best = trial
         return best
 
@@ -2619,6 +2754,7 @@ class DiffusersZImageBackend:
         candidate = re.sub(r"\s+", " ", candidate_prompt).strip()
         if not candidate:
             return None
+        candidate = cls._trim_to_complete_sentences(candidate) or candidate
         try:
             if cls._pipeline_prompt_token_length(tokenizer, candidate) <= budget:
                 return candidate
@@ -2635,7 +2771,12 @@ class DiffusersZImageBackend:
 
         clauses = cls._split_prompt_clauses(candidate)
         if not clauses:
-            return None
+            return cls._fit_complete_clauses_to_budget(
+                tokenizer=tokenizer,
+                candidate_prompt=candidate,
+                original_prompt=original_prompt,
+                max_tokens=budget,
+            )
         style_clauses = [
             clause
             for clause in clauses
@@ -2669,9 +2810,15 @@ class DiffusersZImageBackend:
 
         assembled: list[str] = []
         best: str | None = None
-        separator = ", "
+        sentence_style = bool(re.search(r"[.!?]", candidate))
+
+        def join_parts(parts: list[str]) -> str:
+            if sentence_style:
+                return ". ".join(part.rstrip(".!?") for part in parts).strip() + "."
+            return ", ".join(parts).strip()
+
         for part in prioritized:
-            trial = separator.join(assembled + [part]).strip()
+            trial = join_parts(assembled + [part])
             try:
                 token_length = cls._pipeline_prompt_token_length(tokenizer, trial)
             except Exception:
@@ -2681,7 +2828,12 @@ class DiffusersZImageBackend:
                 best = trial
 
         if best is None:
-            return None
+            return cls._fit_complete_clauses_to_budget(
+                tokenizer=tokenizer,
+                candidate_prompt=candidate,
+                original_prompt=original_prompt,
+                max_tokens=budget,
+            )
 
         for style in style_constraints:
             if style.lower() not in best.lower():
@@ -2702,7 +2854,7 @@ class DiffusersZImageBackend:
             candidate_prompt=enhanced_prompt,
         )
         if fitted is not None and cls._rewrite_quality_ok(original_prompt, fitted):
-            return fitted[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], True
+            return fitted, True
 
         fallback_original = cls._compress_prompt_to_token_budget(
             tokenizer=tokenizer,
@@ -2710,7 +2862,7 @@ class DiffusersZImageBackend:
             candidate_prompt=original_prompt,
         )
         if fallback_original is not None:
-            return fallback_original[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
+            return fallback_original, False
 
         seeded_original = cls._build_style_preserving_prompt_seed(original_prompt)
         if seeded_original is not None:
@@ -2720,23 +2872,25 @@ class DiffusersZImageBackend:
                 candidate_prompt=seeded_original,
             )
             if fallback_seeded is not None:
-                return fallback_seeded[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
-            truncated_seeded = cls._truncate_prompt_to_token_budget(
+                return fallback_seeded, False
+            fallback_seeded_clauses = cls._fit_complete_clauses_to_budget(
                 tokenizer=tokenizer,
                 candidate_prompt=seeded_original,
+                original_prompt=original_prompt,
             )
-            if truncated_seeded is not None:
-                return truncated_seeded[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
+            if fallback_seeded_clauses is not None:
+                return fallback_seeded_clauses, False
 
-        truncated_original = cls._truncate_prompt_to_token_budget(
+        fitted_original_clauses = cls._fit_complete_clauses_to_budget(
             tokenizer=tokenizer,
             candidate_prompt=original_prompt,
+            original_prompt=original_prompt,
         )
-        if truncated_original is not None:
-            return truncated_original[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
+        if fitted_original_clauses is not None:
+            return fitted_original_clauses, False
 
         normalized_original = re.sub(r"\s+", " ", original_prompt).strip()
-        return normalized_original[: cls._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS], False
+        return normalized_original, False
 
     @staticmethod
     @contextmanager
@@ -3056,7 +3210,7 @@ class DiffusersZImageBackend:
             enhancement_seed=seed,
         )
         if rejection_reason == "ok":
-            return rewritten[: self._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS]
+            return rewritten
 
         retryable_reasons = {
             "repeated_characters",
@@ -3084,7 +3238,7 @@ class DiffusersZImageBackend:
                 enhancement_seed=seed,
             )
             if retry_reason == "ok":
-                return rewritten_retry[: self._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS]
+                return rewritten_retry
             rejection_reason = retry_reason
 
         if rejection_reason in {"empty", "too_short", "unchanged"}:
@@ -3098,6 +3252,99 @@ class DiffusersZImageBackend:
                 rejection_reason,
             )
         return prompt
+
+    def _compress_long_prompt(
+        self,
+        pipe: Any,
+        prompt: str,
+        torch_module: Any,
+        *,
+        seed: int | None = None,
+    ) -> str:
+        tokenizer = getattr(pipe, "tokenizer", None)
+        text_encoder = getattr(pipe, "text_encoder", None)
+        if tokenizer is None or text_encoder is None:
+            LOGGER.debug("Prompt compression skipped: text_encoder/tokenizer unavailable.")
+            return prompt
+
+        safe_budget = int(self._PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET)
+        primary_target = min(
+            int(self._PROMPT_ENHANCEMENT_COMPRESSION_TARGET_TOKENS),
+            safe_budget,
+        )
+        retry_target = max(1, min(int(primary_target * 0.82), safe_budget))
+        pad_token_id = getattr(tokenizer, "pad_token_id", None)
+        eos_token_id = getattr(tokenizer, "eos_token_id", None)
+        best_candidate: str | None = None
+
+        for attempt_index, target_tokens in enumerate((primary_target, retry_target)):
+            compression_input = self._build_compression_prompt(
+                tokenizer,
+                prompt,
+                target_tokens=target_tokens,
+            )
+            try:
+                encoded = tokenizer(compression_input, return_tensors="pt")
+            except Exception as exc:
+                LOGGER.warning("Prompt compression tokenizer failed; using fallback. %s", exc)
+                break
+
+            encoded = self._move_encoded_to_module_device(encoded, text_encoder)
+            generate_kwargs: dict[str, Any] = {
+                "max_new_tokens": target_tokens,
+                "do_sample": attempt_index > 0,
+            }
+            if attempt_index > 0:
+                generate_kwargs["temperature"] = 0.72
+                generate_kwargs["top_p"] = 0.92
+            if pad_token_id is not None:
+                generate_kwargs["pad_token_id"] = pad_token_id
+            if eos_token_id is not None:
+                generate_kwargs["eos_token_id"] = eos_token_id
+
+            rewritten, rejection_reason = self._run_rewrite_attempt(
+                tokenizer=tokenizer,
+                text_encoder=text_encoder,
+                encoded=encoded,
+                prompt=prompt,
+                torch_module=torch_module,
+                generate_kwargs=generate_kwargs,
+                enhancement_seed=seed,
+            )
+            if rejection_reason not in {"ok", "too_long"}:
+                continue
+
+            trimmed = self._trim_to_complete_sentences(rewritten)
+            if trimmed is None:
+                continue
+
+            fitted = self._compress_prompt_to_token_budget(
+                tokenizer=tokenizer,
+                original_prompt=prompt,
+                candidate_prompt=trimmed,
+                max_tokens=safe_budget,
+            )
+            if fitted is None or not self._rewrite_quality_ok(prompt, fitted):
+                continue
+
+            if best_candidate is None:
+                best_candidate = fitted
+
+            normalized_rewritten = re.sub(r"\s+", " ", rewritten).strip().strip("`\"' ")
+            if attempt_index == 0 and fitted != normalized_rewritten:
+                continue
+            return fitted
+
+        if best_candidate is not None:
+            return best_candidate
+
+        fallback = self._fit_complete_clauses_to_budget(
+            tokenizer=tokenizer,
+            candidate_prompt=prompt,
+            original_prompt=prompt,
+            max_tokens=safe_budget,
+        )
+        return fallback or prompt
 
     def _prepare_pipe_for_prompt_enhancement(self, pipe: Any) -> bool:
         profile = self._resource_profile()
@@ -3145,22 +3392,40 @@ class DiffusersZImageBackend:
         if not enhance_prompt:
             return prompt_original, prompt_effective, prompt_enhanced
 
+        tokenizer = getattr(pipe, "tokenizer", None)
+        prompt_over_budget = False
+        if tokenizer is not None:
+            try:
+                prompt_over_budget = (
+                    self._pipeline_prompt_token_length(tokenizer, prompt_original)
+                    > self._PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET
+                )
+            except Exception as exc:
+                LOGGER.debug("Prompt length measurement failed before enhancement. %s", exc)
+
         restore_sequential = False
         loaded = self._ensure_loaded()
         if loaded.device == "cuda":
             restore_sequential = self._prepare_pipe_for_prompt_enhancement(pipe)
         try:
-            enhanced_candidate = self._enhance_prompt(
-                pipe,
-                prompt_original,
-                torch_module,
-                seed=seed,
-            )
+            if prompt_over_budget:
+                enhanced_candidate = self._compress_long_prompt(
+                    pipe,
+                    prompt_original,
+                    torch_module,
+                    seed=seed,
+                )
+            else:
+                enhanced_candidate = self._enhance_prompt(
+                    pipe,
+                    prompt_original,
+                    torch_module,
+                    seed=seed,
+                )
         finally:
             if restore_sequential:
                 self._restore_pipe_after_prompt_enhancement(pipe)
 
-        tokenizer = getattr(pipe, "tokenizer", None)
         if self._rewrite_quality_ok(prompt_original, enhanced_candidate):
             if tokenizer is not None:
                 prompt_effective, prompt_enhanced = self._fit_prompt_to_budget(
@@ -3169,8 +3434,9 @@ class DiffusersZImageBackend:
                     enhanced_prompt=enhanced_candidate,
                 )
             else:
-                prompt_effective = enhanced_candidate[: self._PROMPT_ENHANCEMENT_MAX_OUTPUT_CHARS]
-                prompt_enhanced = True
+                trimmed_candidate = self._trim_to_complete_sentences(enhanced_candidate)
+                prompt_effective = trimmed_candidate or enhanced_candidate
+                prompt_enhanced = bool(trimmed_candidate or enhanced_candidate.strip())
         else:
             if enhanced_candidate.strip() != prompt_original.strip():
                 LOGGER.warning(
@@ -3218,7 +3484,8 @@ class DiffusersZImageBackend:
             return base_prompt, ()
         if not base_prompt:
             return ", ".join(additions), tuple(additions)
-        return f"{base_prompt}, {', '.join(additions)}", tuple(additions)
+        trigger_base = base_prompt.rstrip(" ,;:.")
+        return f"{trigger_base}, {', '.join(additions)}", tuple(additions)
 
     @staticmethod
     def _split_zimage_lora_key(key: str) -> tuple[str, str]:
@@ -4030,6 +4297,10 @@ class DiffusersZImageBackend:
                 num_inference_steps=steps,
                 guidance_scale=guidance_scale,
                 generator=generator,
+                max_sequence_length=self._resolve_pipeline_max_sequence_length(
+                    getattr(pipe, "tokenizer", None),
+                    prompt,
+                ),
             )
         return output.images[0]
 
@@ -4432,6 +4703,10 @@ class DiffusersZImageBackend:
                             guidance_scale=guidance_scale,
                             generator=generator,
                             latents=procedural_latents,
+                            max_sequence_length=self._resolve_pipeline_max_sequence_length(
+                                getattr(pipe, "tokenizer", None),
+                                prompt_effective,
+                            ),
                         )
                     except (RuntimeError, ValueError, FloatingPointError) as exc:
                         retry_mode = self._resolve_scheduler_retry_mode(scheduler_mode, exc)
@@ -4454,6 +4729,10 @@ class DiffusersZImageBackend:
                             guidance_scale=guidance_scale,
                             generator=generator,
                             latents=procedural_latents,
+                            max_sequence_length=self._resolve_pipeline_max_sequence_length(
+                                getattr(pipe, "tokenizer", None),
+                                prompt_effective,
+                            ),
                         )
         finally:
             if active_lora_ids:

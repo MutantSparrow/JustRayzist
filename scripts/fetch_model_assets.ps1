@@ -1,5 +1,6 @@
 param(
-  [switch]$Force
+  [switch]$Force,
+  [switch]$IncludeQwen3Fp8Encoder
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,6 +42,9 @@ if (-not $pythonExe) {
 $arguments = @($helperScript, "--project-root", $projectRoot, "--platform", "windows")
 if ($Force) {
   $arguments += "--force"
+}
+if ($IncludeQwen3Fp8Encoder) {
+  $arguments += "--include-qwen3-4b-fp8-encoder"
 }
 
 & $pythonExe @arguments

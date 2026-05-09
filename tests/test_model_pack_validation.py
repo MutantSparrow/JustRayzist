@@ -43,4 +43,3 @@ def test_model_pack_loads_with_local_files(workspace_tmp_path: Path) -> None:
     assert model_pack.name == "test_pack"
     assert model_pack.pipeline_config_dir == config_dir.resolve()
     assert "transformer" in model_pack.components
-

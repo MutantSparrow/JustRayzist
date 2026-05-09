@@ -168,7 +168,8 @@ Important:
 - only public enabled packs appear in `StartWeb.bat`, `StartWeb.sh`, and `GET /model-packs`
 - when exactly one public enabled pack exists, `StartWeb.bat` and `StartWeb.sh` auto-select it and skip the pack prompt
 - hidden packs can still be loaded explicitly for engineering workflows
-- bundled setup provisions only `Rayzist_bf16`; any additional pack is a local custom or engineering addition
+- bundled setup provisions `Rayzist_bf16` and can optionally fetch `Rayzist_qwen3_4b_fp8`
+- optional `Rayzist_qwen3_4b_fp8` downloads from [MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8](https://huggingface.co/MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8), reuses `Rayzist_bf16` transformer and VAE weights, and replaces only the text encoder
 
 - `fp8_storage` is not a user pack anymore; constrained conditions may derive `<base>__auto_fp8_storage` automatically
 - native FP8 inference is not implemented yet

@@ -106,6 +106,7 @@ Normal runs no longer ask the user to choose `high`, `balanced`, or `constrained
 - The app can downgrade or re-upgrade the internal resource tier between requests as available VRAM changes.
 - Public pack lists (`StartWeb.bat`, `StartWeb.sh`, `GET /model-packs`) show only public enabled packs.
 - Setup and asset fetch provision the bundled `Rayzist_bf16` pack.
+- Setup can also fetch optional `Rayzist_qwen3_4b_fp8` from [MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8](https://huggingface.co/MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8); it reuses `Rayzist_bf16` model weights and replaces only the text encoder.
 - Derived FP8 storage remains an internal constrained-memory strategy; native FP8 inference is not implemented in the current release.
 
 - In constrained conditions, compatible safetensors packs may auto-derive an internal FP8-storage runtime variant such as `Rayzist_bf16__auto_fp8_storage`.
@@ -272,7 +273,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.5",
+  "version": "1.8.6",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -303,7 +304,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.5",
+  "app_version": "1.8.6",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {

@@ -56,9 +56,11 @@ required_configs:
 - Packs can stay installed but unavailable to normal users by setting `enabled: false`.
 - Hidden or disabled packs are still valid for engineering and benchmark workflows when explicitly named.
 - The bundled app ships with `Rayzist_bf16` as the default public enabled pack.
+- Setup can optionally create `Rayzist_qwen3_4b_fp8` from [MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8](https://huggingface.co/MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8); it reuses `Rayzist_bf16` transformer and VAE weights and swaps only the text encoder.
+- Scaled FP8 text-encoder tensors are converted to BF16 at runtime before loading.
 - Derived FP8 storage is an internal runtime strategy; it does not provide native FP8 inference.
 - `GET /model-packs`, `StartWeb.bat`, and `StartWeb.sh` show only public enabled packs.
-- Install-time asset fetch provisions the bundled `Rayzist_bf16` pack.
+- Install-time asset fetch provisions the bundled `Rayzist_bf16` pack and can optionally fetch the `Rayzist_qwen3_4b_fp8` encoder pack.
 
 ## Supported component formats
 

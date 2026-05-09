@@ -6,11 +6,11 @@ JustRayzist is a local-first image generation app built around the Rayzist Z-Ima
 
 The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
 
-## New in v1.8.5
+## New in v1.8.6
 
-- Moves Windows launch and restart flow fully onto the Python runtime path and removes the old frozen executable entrypoints.
-- Adds default compact PNG metadata for final outputs while keeping gallery fields, prompt text, and `JUSTRAYZIST_METADEBUG=1` diagnostic metadata.
-- Removes the legacy PyInstaller one-dir build path from docs and release readiness checks in favor of bootstrap release packaging.
+- Adds the optional `Rayzist_qwen3_4b_fp8` encoder pack using [MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8](https://huggingface.co/MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8).
+- Converts scaled FP8 Qwen3 text-encoder tensors to BF16 at runtime so the pack can use the normal Z-Image Turbo pipeline.
+- Adds installer prompts and manual fetch flags for the optional encoder while keeping default installs on `Rayzist_bf16`.
 
 ![Wildcard library preview](readme_images/wildcards_preview.png)
 
@@ -56,7 +56,7 @@ CUDA lane baseline:
 - `cu126`: NVIDIA driver `>= 561.17`
 - `cu128`: NVIDIA driver `>= 572.61`
 
-The current bundled public pack is `Rayzist_bf16`. Derived FP8 storage remains an internal constrained-memory runtime strategy; native FP8 inference is not implemented in the current release.
+The bundled default public pack is `Rayzist_bf16`. Setup can also fetch `Rayzist_qwen3_4b_fp8`, which reuses the `Rayzist_bf16` transformer and VAE and replaces only the text encoder with [Qwen3 4B FP8 Rayzist](https://huggingface.co/MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8). Scaled FP8 text-encoder tensors are converted to BF16 at runtime. Important: native FP8 inference is not implemented in the current release.
 
 ## Installation
 
@@ -80,6 +80,7 @@ What setup does:
 - Installs runtime, SeedVR2, and development dependencies.
 - Installs Hugging Face CLI with XET support.
 - Fetches the bundled default model assets.
+- Offers the optional `Rayzist_qwen3_4b_fp8` encoder pack download.
 - Fetches the SeedVR2 runtime repository.
 - Runs `doctor` and `validate-models` sanity checks.
 
@@ -88,12 +89,14 @@ Manual alternatives:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\bootstrap_env.ps1 -PythonExe C:\Path\To\python.exe -Lane cu128
 powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1
+powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1 -IncludeQwen3Fp8Encoder
 powershell -ExecutionPolicy Bypass -File scripts\fetch_seedvr2_runtime.ps1
 ```
 
 ```bash
 python3 scripts/portable/bootstrap_env.py --python-exe python3 --lane auto
 python3 scripts/portable/fetch_model_assets.py
+python3 scripts/portable/fetch_model_assets.py --include-qwen3-4b-fp8-encoder
 python3 scripts/portable/fetch_seedvr2_runtime.py
 ```
 
@@ -141,6 +144,7 @@ Environment variables used by launchers, source mode, or diagnostics:
 - `JUSTRAYZIST_LISTEN`: set to `1` to force LAN listen mode from `StartWeb.bat` or `StartWeb.sh`.
 - `JUSTRAYZIST_PYTHON`: optional interpreter override for source-mode launchers.
 - `JUSTRAYZIST_SKIP_GPU_PREFLIGHT`: set to `1` to bypass packaged GPU lane preflight.
+- `JUSTRAYZIST_INCLUDE_QWEN3_FP8_ENCODER`: set to `1` to include the optional Qwen3 FP8 encoder pack during setup without prompting.
 - `JUSTRAYZIST_PROFILE`: engineering-only runtime tier override for diagnostics and benchmark workflows.
 
 Normal startup does not ask users to choose `high`, `balanced`, or `constrained`. The stable `runtime_profile` baseline remains `balanced`; the mutable `resource_tier` reports the memory strategy the app selected for the current hardware state.
@@ -237,7 +241,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.5",
+  "version": "1.8.6",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -268,7 +272,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.5",
+  "app_version": "1.8.6",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {

@@ -25,6 +25,7 @@ The packaged UX now matches source mode:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Lane cu128 -Version v0.1.0 -Clean
+powershell -ExecutionPolicy Bypass -File scripts\release\package_release.ps1 -Lane cu126 -Version v0.1.0 -Clean
 ```
 
 Useful flags:
@@ -48,6 +49,7 @@ powershell -ExecutionPolicy Bypass -File scripts\release\clean_legacy_artifacts.
 - `RunMeFirst.bat` is the primary setup and repair path
 - `StartWeb.bat` can auto-fetch the selected default pack assets when they are missing
 - install/setup provisions `Rayzist_bf16` as the bundled default enabled pack
+- install/setup can optionally fetch `Rayzist_qwen3_4b_fp8` from [MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8](https://huggingface.co/MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8)
 - `StartWeb.bat` now asks users only for pack selection when more than one public enabled pack exists, plus local/LAN listen mode
 - `StartWeb.bat` shows only public enabled packs and keeps hidden/experimental/disabled packs out of the normal packaged launcher flow
 - release packaging copies tracked pack metadata only, so local custom packs and local weight files are left to the installer/local machine

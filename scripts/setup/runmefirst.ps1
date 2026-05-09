@@ -15,6 +15,8 @@ $releaseLanePath = Join-Path $projectRoot "release_lane.txt"
 $seedVr2RuntimeScript = Join-Path $projectRoot "models\\seedvr2\\runtime\\ComfyUI-SeedVR2_VideoUpscaler\\inference_cli.py"
 $seedVr2DitPath = Join-Path $projectRoot "models\\seedvr2\\seedvr2_ema_3b_fp8_e4m3fn.safetensors"
 $seedVr2VaePath = Join-Path $projectRoot "models\\seedvr2\\ema_vae_fp16.safetensors"
+$qwen3Fp8EncoderPath = Join-Path $projectRoot "models\\packs\\Rayzist_qwen3_4b_fp8\\config\\text_encoder\\model.safetensors"
+$qwen3Fp8PackManifestPath = Join-Path $projectRoot "models\\packs\\Rayzist_qwen3_4b_fp8\\modelpack.yaml"
 
 $script:StepCurrent = 0
 $script:StepTotal = 0
@@ -382,6 +384,39 @@ function Ensure-ReleaseLaneFile {
   Set-Content -Path $releaseLanePath -Value $Lane -Encoding ascii
 }
 
+function Test-TruthyString {
+  param([string]$Value)
+  return ($Value.Trim() -match "^(1|true|yes|y)$")
+}
+
+function Test-InteractiveConsole {
+  try {
+    return ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)
+  } catch {
+    return $false
+  }
+}
+
+function Resolve-OptionalQwen3Fp8EncoderInstall {
+  if ($env:JUSTRAYZIST_INCLUDE_QWEN3_FP8_ENCODER) {
+    return (Test-TruthyString -Value $env:JUSTRAYZIST_INCLUDE_QWEN3_FP8_ENCODER)
+  }
+  if ((Test-Path $qwen3Fp8EncoderPath) -and (Test-Path $qwen3Fp8PackManifestPath)) {
+    return $false
+  }
+  if (Test-Path $qwen3Fp8EncoderPath) {
+    return $true
+  }
+  if (-not (Test-InteractiveConsole)) {
+    return $false
+  }
+
+  Write-Host "Optional model pack available: Rayzist_qwen3_4b_fp8 (adds about 4.1 GB)." -ForegroundColor Cyan
+  $answer = Read-Host "Download optional Qwen3 4B FP8 encoder pack now? [y/N]"
+  Write-Host ""
+  return (Test-TruthyString -Value $answer)
+}
+
 Set-Location $projectRoot
 Write-Banner
 
@@ -401,10 +436,15 @@ try {
   $laneSelection = Get-LaneSelection
   Write-Host $laneSelection.Message -ForegroundColor Cyan
   Write-Host ""
+  $script:InstallOptionalQwen3Fp8Encoder = Resolve-OptionalQwen3Fp8EncoderInstall
 
   $existingHealth = Test-EnvironmentHealth
   if ($existingHealth.Healthy -and -not $ForceRepair) {
-    Set-StepTotal -Total 3
+    $healthyStepTotal = 3
+    if ($script:InstallOptionalQwen3Fp8Encoder) {
+      $healthyStepTotal += 2
+    }
+    Set-StepTotal -Total $healthyStepTotal
 
     Invoke-Step -Title "Sanity check existing environment" -Action {
       Write-Host ".venv, dependencies, and model validation checks are healthy." -ForegroundColor Gray
@@ -413,6 +453,21 @@ try {
     Invoke-Step -Title "Refresh runtime lane marker" -Action {
       Ensure-ReleaseLaneFile -Lane $laneSelection.Lane
       Write-Host ("release_lane.txt updated to {0}" -f $laneSelection.Lane) -ForegroundColor Gray
+    }
+
+    if ($script:InstallOptionalQwen3Fp8Encoder) {
+      Invoke-Step -Title "Download optional Qwen3 FP8 encoder pack" -Action {
+        Invoke-External -Executable "powershell" -Arguments @(
+          "-NoProfile",
+          "-ExecutionPolicy", "Bypass",
+          "-File", $fetchScript,
+          "-IncludeQwen3Fp8Encoder"
+        )
+      }
+
+      Invoke-Step -Title "Run model validation" -Action {
+        Invoke-External -Executable $venvPython -Arguments @("-m", "app.cli.main", "validate-models")
+      }
     }
 
     Invoke-Step -Title "Ensure StartWeb shortcut" -Action {
@@ -462,11 +517,15 @@ try {
     )
   }
   Invoke-Step -Title "Download default model assets" -Action {
-    Invoke-External -Executable "powershell" -Arguments @(
+    $fetchArguments = @(
       "-NoProfile",
       "-ExecutionPolicy", "Bypass",
       "-File", $fetchScript
     )
+    if ($script:InstallOptionalQwen3Fp8Encoder) {
+      $fetchArguments += "-IncludeQwen3Fp8Encoder"
+    }
+    Invoke-External -Executable "powershell" -Arguments $fetchArguments
   }
 
   Invoke-Step -Title "Fetch SeedVR2 runtime scripts" -Action {

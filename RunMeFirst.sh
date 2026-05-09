@@ -41,7 +41,29 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
   exit 1
 fi
 
-"$VENV_PYTHON" "$ROOT_DIR/scripts/portable/fetch_model_assets.py" --project-root "$ROOT_DIR" --platform "$(uname -s)"
+FETCH_MODEL_ARGS=(--project-root "$ROOT_DIR" --platform "$(uname -s)")
+QWEN3_FP8_ENCODER_PATH="$ROOT_DIR/models/packs/Rayzist_qwen3_4b_fp8/config/text_encoder/model.safetensors"
+QWEN3_FP8_PACK_MANIFEST_PATH="$ROOT_DIR/models/packs/Rayzist_qwen3_4b_fp8/modelpack.yaml"
+
+case "${JUSTRAYZIST_INCLUDE_QWEN3_FP8_ENCODER:-}" in
+  1|true|TRUE|yes|YES|y|Y)
+    FETCH_MODEL_ARGS+=(--include-qwen3-4b-fp8-encoder)
+    ;;
+  *)
+    if [[ -f "$QWEN3_FP8_ENCODER_PATH" && ! -f "$QWEN3_FP8_PACK_MANIFEST_PATH" ]]; then
+      FETCH_MODEL_ARGS+=(--include-qwen3-4b-fp8-encoder)
+    elif [[ ! -f "$QWEN3_FP8_ENCODER_PATH" && -t 0 ]]; then
+      read -r -p "Download optional Qwen3 4B FP8 encoder pack, about 4.1 GB? [y/N] " answer
+      case "$answer" in
+        y|Y|yes|YES|Yes)
+          FETCH_MODEL_ARGS+=(--include-qwen3-4b-fp8-encoder)
+          ;;
+      esac
+    fi
+    ;;
+esac
+
+"$VENV_PYTHON" "$ROOT_DIR/scripts/portable/fetch_model_assets.py" "${FETCH_MODEL_ARGS[@]}"
 "$VENV_PYTHON" "$ROOT_DIR/scripts/portable/fetch_seedvr2_runtime.py" --project-root "$ROOT_DIR"
 "$VENV_PYTHON" -m app.cli.main doctor
 "$VENV_PYTHON" -m app.cli.main validate-models

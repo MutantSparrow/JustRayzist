@@ -186,11 +186,93 @@ ASSETS = [
 ]
 
 
+QWEN3_4B_FP8_PACK_NAME = "Rayzist_qwen3_4b_fp8"
+QWEN3_4B_FP8_ENCODER_RELATIVE_PATH = (
+    "models/packs/Rayzist_qwen3_4b_fp8/config/text_encoder/model.safetensors"
+)
+
+OPTIONAL_QWEN3_4B_FP8_ENCODER_ASSETS = [
+    AssetSpec(
+        name="Qwen3 4B FP8 Rayzist text encoder",
+        repo_id="MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8",
+        repo_file="qwen3_4b_Rayzist_v1.0_fp8.safetensors",
+        relative_output_path=QWEN3_4B_FP8_ENCODER_RELATIVE_PATH,
+        sha256="61fdc05e9ce80e82397f41f5f0cb80e4eda402629bb892d42c4b51ec74e80c1c",
+    ),
+]
+
+OPTIONAL_ASSETS = OPTIONAL_QWEN3_4B_FP8_ENCODER_ASSETS
+
+
+def selected_assets(*, include_qwen3_4b_fp8_encoder: bool = False) -> list[AssetSpec]:
+    assets = list(ASSETS)
+    if include_qwen3_4b_fp8_encoder:
+        assets.extend(OPTIONAL_QWEN3_4B_FP8_ENCODER_ASSETS)
+    return assets
+
+
+def ensure_qwen3_4b_fp8_pack(project_root: Path) -> None:
+    source_config_dir = project_root / "models" / "packs" / "Rayzist_bf16" / "config"
+    target_pack_dir = project_root / "models" / "packs" / QWEN3_4B_FP8_PACK_NAME
+    target_config_dir = target_pack_dir / "config"
+    if not source_config_dir.exists():
+        raise RuntimeError(f"Base Rayzist_bf16 config directory not found: {source_config_dir}")
+
+    for source_path in source_config_dir.rglob("*"):
+        if source_path.is_dir():
+            continue
+        relative_path = source_path.relative_to(source_config_dir)
+        if relative_path.as_posix() == "text_encoder/model.safetensors":
+            continue
+        target_path = target_config_dir / relative_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+
+    manifest_path = target_pack_dir / "modelpack.yaml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "name: Rayzist_qwen3_4b_fp8",
+                "user_visible: true",
+                "enabled: true",
+                "architecture: z_image_turbo",
+                "backend_preference:",
+                "  - diffusers",
+                "pipeline_config_dir: ./config",
+                "components:",
+                "  transformer:",
+                "    path: ../Rayzist_bf16/weights/Rayzist.v1.0.safetensors",
+                "    format: safetensors",
+                "  vae:",
+                "    path: ../Rayzist_bf16/weights/diffusion_pytorch_model.safetensors",
+                "    format: safetensors",
+                "  text_encoder:",
+                "    path: ./config/text_encoder/model.safetensors",
+                "    format: safetensors",
+                "required_configs:",
+                "  - ./config/model_index.json",
+                "  - ./config/scheduler/scheduler_config.json",
+                "  - ./config/tokenizer/tokenizer.json",
+                "  - ./config/transformer/config.json",
+                "  - ./config/vae/config.json",
+                "  - ./config/text_encoder/config.json",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch bundled JustRayzist model assets.")
     parser.add_argument("--project-root", default=str(REPO_ROOT))
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--platform", default="")
+    parser.add_argument(
+        "--include-qwen3-4b-fp8-encoder",
+        action="store_true",
+        help="Also fetch the optional Rayzist_qwen3_4b_fp8 text encoder pack asset.",
+    )
     return parser.parse_args()
 
 
@@ -215,7 +297,7 @@ def main() -> int:
     env.pop("HF_HUB_DISABLE_XET", None)
 
     ensure_hf_cli_prerequisites(hf_exe)
-    for asset in ASSETS:
+    for asset in selected_assets(include_qwen3_4b_fp8_encoder=args.include_qwen3_4b_fp8_encoder):
         download_asset(
             project_root=project_root,
             hf_exe=hf_exe,
@@ -223,6 +305,9 @@ def main() -> int:
             overwrite=args.force,
             env=env,
         )
+    if args.include_qwen3_4b_fp8_encoder:
+        ensure_qwen3_4b_fp8_pack(project_root)
+        print(f"[ok] Optional model pack ready: {QWEN3_4B_FP8_PACK_NAME}")
 
     deprecated_vae_path = project_root / "models/packs/Rayzist_bf16/weights/ultrafluxVAEImproved_v10.safetensors"
     if deprecated_vae_path.exists():
@@ -232,6 +317,8 @@ def main() -> int:
     print("")
     print("Model asset fetch complete (HF CLI + XET).")
     print("Selected model pack: Rayzist_bf16")
+    if args.include_qwen3_4b_fp8_encoder:
+        print(f"Optional model pack installed: {QWEN3_4B_FP8_PACK_NAME}")
     print("Next step:")
     print("  python -m app.cli.main validate-models")
     return 0

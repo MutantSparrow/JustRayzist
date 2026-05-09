@@ -6,6 +6,7 @@ Use these commands from repository root.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Lane cu128 -Version vX.Y.Z -Clean
+powershell -ExecutionPolicy Bypass -File .\scripts\release\package_release.ps1 -Lane cu126 -Version vX.Y.Z -Clean
 ```
 
 ## Repository Readiness Check
@@ -35,5 +36,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\release\clean_legacy_artifact
 ## Packaging Notes
 
 - packaged releases are bootstrap-only
+- optional `Rayzist_qwen3_4b_fp8` is fetched by setup from [MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8](https://huggingface.co/MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8), not bundled in release zips
 - hidden packs remain engineering-only and should not appear in the normal launcher flow
 - `UpdateApp.bat` is the packaged in-place update path and should preserve local models, outputs, and data
