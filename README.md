@@ -2,15 +2,15 @@
 
 ![JustRayzist gallery overview](readme_images/gallery_view.png)
 
-JustRayzist is a local-first image generation app built around the Rayzist Z-Image Turbo fine-tune. It ships a FastAPI backend, a browser UI, a Typer CLI, bundled launch scripts, model-pack metadata, and supporting workflows for gallery management, LoRA libraries, wildcard libraries, prompt enhancement, and x2 SeedVR2 upscaling.
+JustRayzist is a local-first image generation app built around the Rayzist Z-Image Turbo fine-tune. It ships a FastAPI backend, a browser UI, a Typer CLI, bundled launch scripts, model-pack metadata, and supporting workflows for gallery management, LoRA libraries, wildcard libraries, Rayzist Chat, prompt enhancement, and x2 SeedVR2 upscaling.
 
 The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
 
-## New in v1.8.6
+## New in v1.8.7
 
-- Adds the optional `Rayzist_qwen3_4b_fp8` encoder pack using [MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8](https://huggingface.co/MutantSparrow/qwen3_4b_Rayzist_v1.0_fp8).
-- Converts scaled FP8 Qwen3 text-encoder tensors to BF16 at runtime so the pack can use the normal Z-Image Turbo pipeline.
-- Adds installer prompts and manual fetch flags for the optional encoder while keeping default installs on `Rayzist_bf16`.
+- Adds the right-side Rayzist Chat drawer with numbered local history, busy queue feedback, and app action buttons.
+- Grounds chat answers with Rayzist documentation for image inference, Creative Mode, R+, Clarity, Wildcards, and gallery migration workflows.
+- Splits Qwen helper text inference into a dedicated backend while keeping Z Image image inference and prompt encoding in the image backend.
 
 ![Wildcard library preview](readme_images/wildcards_preview.png)
 
@@ -19,6 +19,7 @@ The project is designed to run offline after setup. Normal user flows stay on a 
 ## Features
 
 - Local web UI, local API, and CLI in one repository.
+- Rayzist Chat with per-client history, documentation-grounded help, prompt actions, generation actions, and API links.
 - Auto resource-tier detection with stable normal-user defaults.
 - Model-pack based runtime with public, hidden, disabled, and derived runtime pack behavior.
 - Multi-LoRA workflow with draft upload, trigger detection, thumbnails, and per-request weights.
@@ -244,7 +245,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.6",
+  "version": "1.8.7",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -275,7 +276,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.6",
+  "app_version": "1.8.7",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {

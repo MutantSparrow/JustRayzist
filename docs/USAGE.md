@@ -276,7 +276,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.6",
+  "version": "1.8.7",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -307,7 +307,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.6",
+  "app_version": "1.8.7",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
