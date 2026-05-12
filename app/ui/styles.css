@@ -386,6 +386,26 @@ select {
   color: currentColor;
 }
 
+.chat-drawer-toggle {
+  right: 59px;
+  border-color: #185062;
+  color: var(--cyan);
+}
+
+.chat-drawer-toggle:hover {
+  background: #081419;
+  color: #c8f7ff;
+}
+
+.chat-drawer-toggle[aria-expanded="true"] {
+  background: #081a20;
+  color: #d8fbff;
+}
+
+.chat-drawer-toggle-label {
+  color: currentColor;
+}
+
 .settings-panel {
   position: fixed;
   top: calc(var(--topbar-offset) + 2px);
@@ -521,6 +541,15 @@ select {
     linear-gradient(-45deg, rgba(255, 44, 182, 0.02) 12.5%, transparent 12.5%, transparent 50%, rgba(255, 44, 182, 0.02) 50%, rgba(255, 44, 182, 0.02) 62.5%, transparent 62.5%, transparent);
 }
 
+.rayzist-chat-drawer {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  border-color: #185062;
+  background:
+    linear-gradient(180deg, rgba(8, 13, 15, 0.99), rgba(10, 18, 22, 0.98)),
+    linear-gradient(45deg, rgba(69, 224, 255, 0.035) 12.5%, transparent 12.5%, transparent 50%, rgba(69, 224, 255, 0.035) 50%, rgba(69, 224, 255, 0.035) 62.5%, transparent 62.5%, transparent),
+    linear-gradient(-45deg, rgba(255, 44, 182, 0.02) 12.5%, transparent 12.5%, transparent 50%, rgba(255, 44, 182, 0.02) 50%, rgba(255, 44, 182, 0.02) 62.5%, transparent 62.5%, transparent);
+}
+
 .lora-drawer-header {
   margin: 0 -14px;
 }
@@ -539,6 +568,227 @@ select {
 
 .lora-drawer-title.wildcard-drawer-title {
   background: var(--lime);
+}
+
+.lora-drawer-title.chat-drawer-title {
+  background: var(--cyan);
+}
+
+.chat-encoder-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+}
+
+.chat-encoder-name {
+  min-width: 0;
+  color: #c8f7ff;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chat-clear-button {
+  flex: 0 0 auto;
+  border: 1px solid #185062;
+  background: #071217;
+  color: var(--cyan);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 7px 10px;
+  text-transform: uppercase;
+}
+
+.chat-clear-button:hover:not(:disabled) {
+  background: var(--cyan);
+  color: #001014;
+}
+
+.chat-clear-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.chat-transcript {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px 6px;
+}
+
+.chat-empty {
+  margin: auto;
+  color: #779197;
+  font-size: 0.84rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chat-bubble-row {
+  display: flex;
+  width: 100%;
+}
+
+.chat-bubble-row.user {
+  justify-content: flex-end;
+}
+
+.chat-bubble-row.assistant {
+  justify-content: flex-start;
+}
+
+.chat-bubble {
+  max-width: min(82%, 320px);
+  min-width: 72px;
+  border: 1px solid currentColor;
+  background: #0b0b0b;
+  color: var(--text);
+  padding: 8px 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+}
+
+.chat-bubble.user {
+  color: var(--lime);
+  background: rgba(34, 52, 0, 0.84);
+}
+
+.chat-bubble.assistant {
+  color: var(--magenta);
+  background: rgba(48, 9, 35, 0.86);
+}
+
+.chat-bubble.error {
+  color: var(--danger);
+  background: rgba(55, 10, 10, 0.9);
+}
+
+.chat-bubble-number {
+  margin-bottom: 5px;
+  color: currentColor;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  opacity: 0.88;
+}
+
+.chat-bubble-body {
+  color: #fff;
+  font-size: 0.92rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.chat-bubble.user .chat-bubble-body {
+  color: #f8ffd9;
+}
+
+.chat-bubble.assistant .chat-bubble-body {
+  color: #ffe0f5;
+}
+
+.chat-bubble-body a {
+  color: #95f2ff;
+  font-weight: 900;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.chat-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.chat-action-button {
+  max-width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid var(--cyan);
+  background: rgba(7, 45, 52, 0.82);
+  color: #d9fbff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  padding: 5px 8px;
+  overflow-wrap: anywhere;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: normal;
+}
+
+.chat-action-button:hover,
+.chat-action-button:focus-visible {
+  background: rgba(12, 70, 80, 0.94);
+  outline: none;
+}
+
+.chat-thinking-spinner {
+  position: relative;
+  min-height: 30px;
+  min-width: 56px;
+}
+
+.chat-thinking-spinner .tile-spinner {
+  position: static;
+  min-height: 30px;
+  color: var(--cyan);
+}
+
+.chat-thinking-spinner .tile-spinner::before {
+  border-color: rgba(10, 76, 88, 0.92);
+  border-top-color: var(--cyan);
+}
+
+.chat-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.chat-input {
+  width: 100%;
+  min-height: 40px;
+  max-height: 132px;
+  resize: none;
+  overflow-y: auto;
+  border: 1px solid #294046;
+  background: rgba(8, 8, 8, 0.96);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.3;
+  padding: 10px 12px;
+  outline: none;
+}
+
+.chat-input:focus {
+  border-color: var(--lime);
+  box-shadow: 0 0 0 1px rgba(183, 255, 0, 0.2);
+}
+
+.chat-input:disabled {
+  color: #8c8c8c;
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.chat-send-button {
+  min-width: 76px;
+  height: 40px;
 }
 
 .lora-drawer-save {
@@ -1881,7 +2131,9 @@ body.lora-drawer-open .gallery-area {
 body.lora-drawer-open .topbar,
 body.lora-drawer-open .gallery-area,
 body.wildcard-drawer-open .topbar,
-body.wildcard-drawer-open .gallery-area {
+body.wildcard-drawer-open .gallery-area,
+body.chat-drawer-open .topbar,
+body.chat-drawer-open .gallery-area {
   margin-right: 0;
 }
 
@@ -3805,7 +4057,9 @@ body.wildcard-drawer-open .gallery-area {
   body.lora-drawer-open .topbar,
   body.lora-drawer-open .gallery-area,
   body.wildcard-drawer-open .topbar,
-  body.wildcard-drawer-open .gallery-area {
+  body.wildcard-drawer-open .gallery-area,
+  body.chat-drawer-open .topbar,
+  body.chat-drawer-open .gallery-area {
     margin-right: 0;
   }
 
@@ -3896,6 +4150,10 @@ body.wildcard-drawer-open .gallery-area {
 
   .wildcard-drawer-toggle {
     right: 29px;
+  }
+
+  .chat-drawer-toggle {
+    right: 59px;
   }
 
   .lora-drawer-toggle[aria-expanded="true"] {

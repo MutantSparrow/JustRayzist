@@ -7,6 +7,7 @@ import pytest
 import torch
 from PIL import Image
 
+from app.core.backends.diffusers_qwen import DiffusersQwenInference
 from app.core.backends.diffusers_zimage import DiffusersZImageBackend
 from app.core.worker.types import GenerationRequest
 
@@ -22,8 +23,17 @@ def _make_backend(temp_app_paths, make_app_settings) -> DiffusersZImageBackend:
     return DiffusersZImageBackend(settings=settings, model_pack=model_pack)
 
 
+def _make_qwen() -> DiffusersQwenInference:
+    return DiffusersQwenInference(
+        tokenizer=object(),
+        text_encoder=object(),
+        torch_module=torch,
+        encoder_label="text_encoder",
+    )
+
+
 def test_prompt_enhancement_prefers_base_model_decode(monkeypatch, caplog, temp_app_paths, make_app_settings) -> None:
-    backend = _make_backend(temp_app_paths, make_app_settings)
+    backend = _make_qwen()
     tokenizer = _HelperTokenizer()
     encoded = {"input_ids": torch.tensor([[1, 2]]), "attention_mask": torch.tensor([[1, 1]])}
     calls: dict[str, object] = {}
@@ -39,7 +49,7 @@ def test_prompt_enhancement_prefers_base_model_decode(monkeypatch, caplog, temp_
     monkeypatch.setattr(backend, "_generate_with_base_model", _fake_base_model)
     monkeypatch.setattr(backend, "_extract_rewritten_prompt", lambda full_text, input_text: "enhanced prompt")
     monkeypatch.setattr(backend, "_rewrite_rejection_reason", lambda original, rewritten: "ok")
-    caplog.set_level(logging.DEBUG, logger="app.core.backends.diffusers_zimage")
+    caplog.set_level(logging.DEBUG, logger="app.core.backends.diffusers_qwen")
 
     rewritten, reason = backend._run_rewrite_attempt(
         tokenizer=tokenizer,
@@ -67,7 +77,7 @@ def test_prompt_enhancement_prefers_base_model_decode(monkeypatch, caplog, temp_
 
 
 def test_wildcard_suggestion_prefers_base_model_decode(monkeypatch, caplog, temp_app_paths, make_app_settings) -> None:
-    backend = _make_backend(temp_app_paths, make_app_settings)
+    backend = _make_qwen()
     tokenizer = _HelperTokenizer()
     encoded = {"input_ids": torch.tensor([[1, 2]]), "attention_mask": torch.tensor([[1, 1]])}
     calls: dict[str, object] = {}
@@ -82,7 +92,7 @@ def test_wildcard_suggestion_prefers_base_model_decode(monkeypatch, caplog, temp
 
     monkeypatch.setattr(backend, "_generate_with_base_model", _fake_base_model)
     monkeypatch.setattr(backend, "_extract_generated_completion_text", lambda full_text, input_text: "mountain village")
-    caplog.set_level(logging.DEBUG, logger="app.core.backends.diffusers_zimage")
+    caplog.set_level(logging.DEBUG, logger="app.core.backends.diffusers_qwen")
 
     generated = backend._run_text_generation_attempt(
         tokenizer=tokenizer,
@@ -113,7 +123,7 @@ def test_helper_text_generation_falls_back_to_generate_when_base_decode_is_unava
     temp_app_paths,
     make_app_settings,
 ) -> None:
-    backend = _make_backend(temp_app_paths, make_app_settings)
+    backend = _make_qwen()
     tokenizer = _HelperTokenizer()
     encoded = {"input_ids": torch.tensor([[1, 2]]), "attention_mask": torch.tensor([[1, 1]])}
 
@@ -132,7 +142,7 @@ def test_helper_text_generation_falls_back_to_generate_when_base_decode_is_unava
         lambda **_kwargs: (_ for _ in ()).throw(ValueError("missing base-model decode support")),
     )
     monkeypatch.setattr(backend, "_extract_generated_completion_text", lambda full_text, input_text: "fallback text")
-    caplog.set_level(logging.DEBUG, logger="app.core.backends.diffusers_zimage")
+    caplog.set_level(logging.DEBUG, logger="app.core.backends.diffusers_qwen")
 
     generated = backend._run_text_generation_attempt(
         tokenizer=tokenizer,
@@ -149,7 +159,7 @@ def test_helper_text_generation_falls_back_to_generate_when_base_decode_is_unava
 
 
 def test_move_encoded_to_module_device_uses_embedding_weight_device(temp_app_paths, make_app_settings) -> None:
-    backend = _make_backend(temp_app_paths, make_app_settings)
+    backend = _make_qwen()
 
     class _FakeTensor:
         def __init__(self, label: str) -> None:
@@ -187,7 +197,7 @@ def test_prompt_enhancement_fallback_sanitizes_greedy_generation_config(
     temp_app_paths,
     make_app_settings,
 ) -> None:
-    backend = _make_backend(temp_app_paths, make_app_settings)
+    backend = _make_qwen()
     tokenizer = _HelperTokenizer()
     encoded = {"input_ids": torch.tensor([[1, 2]]), "attention_mask": torch.tensor([[1, 1]])}
     captured: dict[str, object] = {}
@@ -212,7 +222,7 @@ def test_prompt_enhancement_fallback_sanitizes_greedy_generation_config(
     )
     monkeypatch.setattr(backend, "_extract_rewritten_prompt", lambda full_text, input_text: "enhanced prompt")
     monkeypatch.setattr(backend, "_rewrite_rejection_reason", lambda original, rewritten: "ok")
-    caplog.set_level(logging.DEBUG, logger="app.core.backends.diffusers_zimage")
+    caplog.set_level(logging.DEBUG, logger="app.core.backends.diffusers_qwen")
 
     rewritten, reason = backend._run_rewrite_attempt(
         tokenizer=tokenizer,
@@ -245,7 +255,7 @@ def test_helper_text_generation_fallback_builds_explicit_sampled_generation_conf
     temp_app_paths,
     make_app_settings,
 ) -> None:
-    backend = _make_backend(temp_app_paths, make_app_settings)
+    backend = _make_qwen()
     tokenizer = _HelperTokenizer()
     encoded = {"input_ids": torch.tensor([[1, 2]]), "attention_mask": torch.tensor([[1, 1]])}
     captured: dict[str, object] = {}
@@ -300,6 +310,237 @@ def test_helper_text_generation_fallback_builds_explicit_sampled_generation_conf
     assert "top_p" not in kwargs
     assert "top_k" not in kwargs
     assert "repetition_penalty" not in kwargs
+
+
+def test_helper_text_generation_falls_back_when_base_decode_is_blank(
+    monkeypatch,
+    caplog,
+    temp_app_paths,
+    make_app_settings,
+) -> None:
+    backend = _make_qwen()
+    encoded = {"input_ids": torch.tensor([[1, 2]]), "attention_mask": torch.tensor([[1, 1]])}
+
+    class _Tokenizer:
+        def decode(self, token_ids, skip_special_tokens: bool = True) -> str:
+            values = token_ids.tolist() if hasattr(token_ids, "tolist") else list(token_ids)
+            if values == [1, 2]:
+                return "prompt"
+            if values == [1, 2, 4, 5]:
+                return "prompt fallback answer"
+            if values == [4, 5]:
+                return "fallback answer"
+            return ""
+
+    class _TextEncoder:
+        def __init__(self) -> None:
+            self.generate_called = False
+
+        def generate(self, **_kwargs):
+            self.generate_called = True
+            return torch.tensor([[1, 2, 4, 5]])
+
+    text_encoder = _TextEncoder()
+    monkeypatch.setattr(backend, "_generate_with_base_model", lambda **_kwargs: torch.tensor([[1, 2]]))
+    caplog.set_level(logging.DEBUG, logger="app.core.backends.diffusers_qwen")
+
+    generated = backend._run_text_generation_attempt(
+        tokenizer=_Tokenizer(),
+        text_encoder=text_encoder,
+        encoded=encoded,
+        torch_module=torch,
+        generate_kwargs={"max_new_tokens": 16, "do_sample": True},
+        generation_seed=789,
+    )
+
+    assert generated == "fallback answer"
+    assert text_encoder.generate_called is True
+    assert any("returned no completion" in record.getMessage() for record in caplog.records)
+
+
+def test_chat_prompt_uses_tokenizer_chat_template() -> None:
+    class _ChatTokenizer:
+        def __init__(self) -> None:
+            self.messages: list[dict[str, str]] = []
+
+        def apply_chat_template(self, messages, **_kwargs):
+            self.messages = messages
+            return "rendered chat"
+
+    tokenizer = _ChatTokenizer()
+    rendered = DiffusersQwenInference._build_chat_prompt(
+        tokenizer,
+        [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "user", "content": "help"},
+        ],
+    )
+
+    assert rendered == "rendered chat"
+    assert tokenizer.messages[0]["role"] == "system"
+    assert "Visible state" in DiffusersQwenInference._build_chat_prompt(object(), [{"role": "user", "content": "hello"}], app_context="Visible state")
+    assert tokenizer.messages[-1] == {"role": "user", "content": "help"}
+
+
+def test_chat_response_extraction_removes_template_continuation() -> None:
+    text = "<think>hidden</think>\nAssistant: Use stronger side light.\nUser: thanks"
+    assert DiffusersQwenInference._extract_chat_response_text(text) == "Use stronger side light."
+
+
+def test_chat_fallback_handles_blank_greeting() -> None:
+    assert DiffusersQwenInference._extract_chat_response_parts("Assistant:")[0] == ""
+    assert (
+        DiffusersQwenInference._fallback_chat_response([{"role": "user", "content": "hi"}])
+        == "Ask for prompt help, workflow help, or a prompt draft. I can also offer buttons to use a prompt or open /API."
+    )
+
+
+def test_chat_action_only_response_uses_prompt_as_visible_text() -> None:
+    assert (
+        DiffusersQwenInference._chat_response_from_actions(
+            [{"type": "set_prompt", "label": "Use Prompt", "prompt": "rainy neon alley"}]
+        )
+        == "Prompt ready:\nrainy neon alley"
+    )
+
+
+def test_chat_response_extraction_returns_valid_actions_only() -> None:
+    text = (
+        "Assistant: Use this prompt.\n"
+        "<rayzist-actions>{\"actions\":["
+        "{\"type\":\"set_prompt\",\"label\":\"Use\",\"prompt\":\"rainy neon alley\"},"
+        "{\"type\":\"open_route\",\"href\":\"/API\"},"
+        "{\"type\":\"open_route\",\"href\":\"https://example.com\"}"
+        "]}</rayzist-actions>"
+    )
+
+    response, actions = DiffusersQwenInference._extract_chat_response_parts(text)
+
+    assert response == "Use this prompt."
+    assert actions == [
+        {"type": "set_prompt", "prompt": "rainy neon alley", "label": "Use"},
+        {"type": "open_route", "href": "/API", "label": "Open API"},
+    ]
+
+
+def test_chat_response_extraction_strips_dangling_action_json() -> None:
+    text = (
+        "Clarity is an image refinement step.\n\n"
+        "<rayzist-actions>{\"actions\":["
+        "{\"type\":\"set_prompt\",\"label\":\"Clarity Definition (Final)\",\"prompt\":\"Clarity is post generation\"},"
+        "{\"type\":\"set_prompt\",\"label\":\"Clarity Usage Notes\",\"prompt\":\"Use it on gallery images\"}"
+        "]}"
+    )
+
+    response, actions = DiffusersQwenInference._extract_chat_response_parts(text)
+
+    assert response == "Clarity is an image refinement step."
+    assert actions == [
+        {
+            "type": "set_prompt",
+            "prompt": "Clarity is post generation",
+            "label": "Clarity Definition (Final)",
+        },
+        {
+            "type": "set_prompt",
+            "prompt": "Use it on gallery images",
+            "label": "Clarity Usage Notes",
+        },
+    ]
+
+
+def test_chat_action_filter_drops_prompt_buttons_for_help_answers() -> None:
+    actions = [
+        {
+            "type": "set_prompt",
+            "label": "Clarify Image Refinement",
+            "prompt": "Clarity refines image detail on existing gallery images after generation.",
+        },
+        {"type": "open_route", "label": "Open API", "href": "/API"},
+    ]
+
+    assert DiffusersQwenInference._filter_chat_actions_for_turn(
+        actions,
+        messages=[{"role": "user", "content": "what does clarity do?"}],
+    ) == [{"type": "open_route", "label": "Open API", "href": "/API"}]
+
+
+def test_chat_action_filter_keeps_real_image_prompt_when_requested() -> None:
+    actions = [
+        {
+            "type": "set_prompt",
+            "label": "Use Prompt",
+            "prompt": "fantasy babe with glowing eyes, mystical forest, moonlight, medium shot, cinematic lighting",
+        }
+    ]
+
+    assert DiffusersQwenInference._filter_chat_actions_for_turn(
+        actions,
+        messages=[{"role": "user", "content": "write me a prompt about a fantasy babe"}],
+    ) == actions
+
+
+def test_zimage_chat_delegates_to_qwen_runtime(monkeypatch, temp_app_paths, make_app_settings) -> None:
+    backend = _make_backend(temp_app_paths, make_app_settings)
+    pipe = SimpleNamespace(tokenizer="tokenizer", text_encoder="encoder")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(backend, "_ensure_loaded", lambda: SimpleNamespace(pipeline=pipe, device="cpu"))
+
+    def fake_chat(self, *, messages, max_new_tokens, seed, app_context, temperature):
+        captured["tokenizer"] = self._tokenizer
+        captured["text_encoder"] = self._text_encoder
+        captured["messages"] = messages
+        captured["max_new_tokens"] = max_new_tokens
+        captured["seed"] = seed
+        captured["app_context"] = app_context
+        captured["temperature"] = temperature
+        return {"text": "ok", "actions": [], "encoder": self.encoder_label}
+
+    monkeypatch.setattr(DiffusersQwenInference, "chat", fake_chat)
+
+    result = backend.chat(
+        [{"role": "user", "content": "hello"}],
+        max_new_tokens=17,
+        seed=5,
+        app_context="Visible state",
+        temperature=0.25,
+    )
+
+    assert result == {"text": "ok", "actions": [], "encoder": "Rayzist_bf16"}
+    assert captured == {
+        "tokenizer": "tokenizer",
+        "text_encoder": "encoder",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_new_tokens": 17,
+        "seed": 5,
+        "app_context": "Visible state",
+        "temperature": 0.25,
+    }
+
+
+def test_zimage_prompt_enhancement_delegates_to_qwen_runtime(monkeypatch, temp_app_paths, make_app_settings) -> None:
+    backend = _make_backend(temp_app_paths, make_app_settings)
+    pipe = SimpleNamespace(tokenizer="tokenizer", text_encoder="encoder")
+    captured: dict[str, object] = {}
+
+    def fake_enhance_prompt(self, prompt, *, seed):
+        captured["tokenizer"] = self._tokenizer
+        captured["text_encoder"] = self._text_encoder
+        captured["prompt"] = prompt
+        captured["seed"] = seed
+        return "enhanced"
+
+    monkeypatch.setattr(DiffusersQwenInference, "enhance_prompt", fake_enhance_prompt)
+
+    assert backend._enhance_prompt(pipe, "portrait", torch, seed=9) == "enhanced"
+    assert captured == {
+        "tokenizer": "tokenizer",
+        "text_encoder": "encoder",
+        "prompt": "portrait",
+        "seed": 9,
+    }
 
 
 def test_refine_image_uses_effective_prompt_for_img2img(monkeypatch, temp_app_paths, make_app_settings) -> None:

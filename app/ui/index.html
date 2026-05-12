@@ -66,6 +66,17 @@
       >
         <span class="drawer-toggle-label lora-drawer-toggle-label" aria-hidden="true">LORA</span>
       </button>
+      <button
+        id="chat-drawer-toggle"
+        class="lora-drawer-toggle chat-drawer-toggle"
+        type="button"
+        aria-label="Open Rayzist Chat drawer"
+        aria-controls="chat-drawer"
+        aria-expanded="false"
+        title="Rayzist Chat"
+      >
+        <span class="drawer-toggle-label chat-drawer-toggle-label" aria-hidden="true">CHAT</span>
+      </button>
     </div>
   </header>
 
@@ -252,6 +263,28 @@
     <div id="wildcard-drawer-capability" class="lora-drawer-capability" aria-live="polite"></div>
     <p id="wildcard-drawer-empty" class="lora-drawer-empty hidden">No wildcards installed.</p>
     <section id="wildcard-list" class="lora-list wildcard-list"></section>
+  </aside>
+
+  <div id="chat-drawer-backdrop" class="lora-drawer-backdrop hidden" aria-hidden="true"></div>
+  <aside id="chat-drawer" class="lora-drawer rayzist-chat-drawer" aria-hidden="true">
+    <div class="lora-drawer-header chat-drawer-header">
+      <h2 class="lora-drawer-title chat-drawer-title">RAYZIST CHAT</h2>
+    </div>
+    <div class="chat-encoder-row">
+      <div id="chat-encoder-name" class="chat-encoder-name">Encoder unavailable</div>
+      <button id="chat-clear-button" class="chat-clear-button" type="button">Clear</button>
+    </div>
+    <section id="chat-transcript" class="chat-transcript" aria-live="polite"></section>
+    <form id="chat-form" class="chat-composer">
+      <textarea
+        id="chat-input"
+        class="chat-input"
+        maxlength="4000"
+        rows="1"
+        placeholder="Message Rayzist Chat"
+      ></textarea>
+      <button id="chat-send-button" class="chat-send-button btn btn-hfill btn-hfill-lime" type="submit">Send</button>
+    </form>
   </aside>
 
   <main class="gallery-area">
@@ -493,6 +526,6 @@
     <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
   </section>
 
-  <script src="/ui/app.js?v=20260424_01"></script>
+  <script src="/ui/app.js?v=20260511_chat_actions"></script>
 </body>
 </html>

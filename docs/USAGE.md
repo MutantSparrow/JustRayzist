@@ -237,6 +237,9 @@ $headers = @{ "X-JustRayzist-Client" = "desktop-client" }
 - `PATCH /wildcards/{wildcard_id}`
 - `DELETE /wildcards/{wildcard_id}`
 - `POST /wildcards/suggestions`
+- `GET /chat/history`
+- `DELETE /chat/history`
+- `POST /chat`
 - `POST /lora-drafts`
 - `POST /lora-drafts/{draft_id}/detect-triggers`
 - `POST /loras`
@@ -559,6 +562,162 @@ Sample response:
   "max_words": 5,
   "partial": true,
   "message": "Returned a partial set because the example-length filter was restrictive."
+}
+```
+
+### `GET /chat/history`
+
+Load the per-client Rayzist Chat history and active encoder label.
+
+Requires `X-JustRayzist-Client`.
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "history": {
+    "owner_id": "example-client",
+    "next_number": 3,
+    "exchange_count": 1,
+    "exchanges": [
+      {
+        "user": {
+          "number": 1,
+          "role": "user",
+          "content": "Help me make this prompt moodier.",
+          "created_at": "2026-04-08T12:00:00+00:00",
+          "error": false
+        },
+        "assistant": {
+          "number": 2,
+          "role": "assistant",
+          "content": "Add stronger lighting contrast, specific weather, and camera framing.",
+          "created_at": "2026-04-08T12:00:05+00:00",
+          "error": false,
+          "actions": [
+            {
+              "type": "set_prompt",
+              "label": "Use Prompt",
+              "prompt": "rainy neon city street, reflected signs, low camera angle"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "capabilities": {
+    "supported": true,
+    "active_pack": "Rayzist_bf16",
+    "encoder": "text_encoder.gguf"
+  }
+}
+```
+
+### `DELETE /chat/history`
+
+Clear the per-client Rayzist Chat JSON history.
+
+Requires `X-JustRayzist-Client`.
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "history": {
+    "owner_id": "example-client",
+    "next_number": 1,
+    "exchange_count": 0,
+    "exchanges": []
+  },
+  "capabilities": {
+    "supported": true,
+    "active_pack": "Rayzist_bf16",
+    "encoder": "text_encoder.gguf"
+  }
+}
+```
+
+### `POST /chat`
+
+Send one Rayzist Chat message through the active text encoder and append the numbered exchange to local JSON history.
+
+Requires `X-JustRayzist-Client`.
+
+Sample request body:
+
+```json
+{
+  "message": "Give me three ways to improve a rainy city prompt.",
+  "app_state": {
+    "current_prompt": "rainy city street",
+    "resolution": "1024x1024",
+    "prompt_enhance": true,
+    "queue_status": "0/5"
+  },
+  "max_new_tokens": 256,
+  "temperature": 0.75
+}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "exchange": {
+    "user": {
+      "number": 1,
+      "role": "user",
+      "content": "Give me three ways to improve a rainy city prompt.",
+      "created_at": "2026-04-08T12:00:00+00:00",
+      "error": false
+    },
+    "assistant": {
+      "number": 2,
+      "role": "assistant",
+      "content": "Specify rain intensity, reflected neon, street materials, and camera height.",
+      "created_at": "2026-04-08T12:00:08+00:00",
+      "error": false,
+      "actions": [
+        {
+          "type": "set_prompt",
+          "label": "Use Prompt",
+          "prompt": "rainy neon city street, wet asphalt, reflected signs, low camera angle"
+        },
+        {
+          "type": "open_route",
+          "label": "Open API",
+          "href": "/API"
+        }
+      ]
+    }
+  },
+  "history": {
+    "owner_id": "example-client",
+    "next_number": 3,
+    "exchange_count": 1
+  },
+  "capabilities": {
+    "supported": true,
+    "active_pack": "Rayzist_bf16",
+    "encoder": "text_encoder.gguf"
+  },
+  "seed": 123456,
+  "encoder": "text_encoder.gguf",
+  "actions": [
+    {
+      "type": "set_prompt",
+      "label": "Use Prompt",
+      "prompt": "rainy neon city street, wet asphalt, reflected signs, low camera angle"
+    },
+    {
+      "type": "open_route",
+      "label": "Open API",
+      "href": "/API"
+    }
+  ]
 }
 ```
 
