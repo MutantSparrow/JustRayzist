@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from app.core.pipeline_factory.zimage import _convert_scaled_fp8_text_encoder_state_dict
+from app.core.pipeline_factory.qwen import _convert_scaled_fp8_text_encoder_state_dict
 
 
 def test_convert_scaled_fp8_text_encoder_state_dict_dequantizes_weights() -> None:

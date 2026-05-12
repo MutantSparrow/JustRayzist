@@ -91,6 +91,27 @@ class GenerationSession:
             target_count=target_count,
         )
 
+    def chat(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        app_context: str | None = None,
+        seed: int | None = None,
+        max_new_tokens: int | None = None,
+        temperature: float = 0.75,
+    ) -> dict[str, object]:
+        backend = self._ensure_backend()
+        chat = getattr(backend, "chat", None)
+        if not callable(chat):
+            raise AttributeError("Active backend does not support Rayzist Chat.")
+        return chat(
+            messages=messages,
+            app_context=app_context,
+            seed=seed,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+        )
+
     def cancel_active(self) -> None:
         if self._backend is None:
             return

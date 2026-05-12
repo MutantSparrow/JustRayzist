@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import torch
 
+from app.core.backends.diffusers_qwen import DiffusersQwenInference
 from app.core.backends.diffusers_zimage import DiffusersZImageBackend
 from app.core.worker.types import LoraSelection
 
@@ -28,7 +29,7 @@ class _FakeTokenizer:
 
 
 def test_build_rewrite_prompt_preserves_explicit_style_instructions() -> None:
-    prompt = DiffusersZImageBackend._build_rewrite_prompt(_FakeTokenizer(), "anime portrait of a warrior")
+    prompt = DiffusersQwenInference._build_rewrite_prompt(_FakeTokenizer(), "anime portrait of a warrior")
 
     assert "preserve any explicit medium or style exactly" in prompt
     assert "If the user says anime, keep it anime." in prompt
@@ -36,7 +37,7 @@ def test_build_rewrite_prompt_preserves_explicit_style_instructions() -> None:
 
 
 def test_build_compression_prompt_requests_complete_sentence_output() -> None:
-    prompt = DiffusersZImageBackend._build_compression_prompt(
+    prompt = DiffusersQwenInference._build_compression_prompt(
         _FakeTokenizer(),
         "a long prompt",
         target_tokens=440,
@@ -49,25 +50,25 @@ def test_build_compression_prompt_requests_complete_sentence_output() -> None:
 def test_resolve_pipeline_max_sequence_length_expands_for_actual_prompt_tokens() -> None:
     prompt = " ".join(f"detail{i}" for i in range(530))
 
-    max_sequence_length = DiffusersZImageBackend._resolve_pipeline_max_sequence_length(
+    max_sequence_length = DiffusersQwenInference._resolve_pipeline_max_sequence_length(
         _FakeTokenizer(),
         prompt,
     )
 
-    assert max_sequence_length > DiffusersZImageBackend._PROMPT_ENHANCEMENT_PIPELINE_MAX_SEQUENCE_LENGTH
-    assert max_sequence_length == DiffusersZImageBackend._pipeline_prompt_token_length(_FakeTokenizer(), prompt)
+    assert max_sequence_length > DiffusersQwenInference._PROMPT_ENHANCEMENT_PIPELINE_MAX_SEQUENCE_LENGTH
+    assert max_sequence_length == DiffusersQwenInference._pipeline_prompt_token_length(_FakeTokenizer(), prompt)
 
 
 def test_rewrite_rejection_allows_shorter_but_valid_rewrites() -> None:
     original = "anime portrait of a silver-haired swordswoman standing in moonlit rain with neon reflections and dramatic rim lighting"
     rewritten = "anime portrait of a silver-haired swordswoman in moonlit rain, neon reflections, dramatic rim lighting"
 
-    assert DiffusersZImageBackend._rewrite_rejection_reason(original, rewritten) == "ok"
+    assert DiffusersQwenInference._rewrite_rejection_reason(original, rewritten) == "ok"
 
 
 def test_fit_prompt_to_budget_compresses_and_preserves_style_constraints(monkeypatch) -> None:
     monkeypatch.setattr(
-        DiffusersZImageBackend,
+        DiffusersQwenInference,
         "_PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET",
         14,
     )
@@ -78,7 +79,7 @@ def test_fit_prompt_to_budget_compresses_and_preserves_style_constraints(monkeyp
         "dramatic rim lighting, low-angle composition, cel-shaded wet fabric"
     )
 
-    fitted, enhanced_used = DiffusersZImageBackend._fit_prompt_to_budget(
+    fitted, enhanced_used = DiffusersQwenInference._fit_prompt_to_budget(
         tokenizer=tokenizer,
         original_prompt=original,
         enhanced_prompt=enhanced,
@@ -87,12 +88,12 @@ def test_fit_prompt_to_budget_compresses_and_preserves_style_constraints(monkeyp
     assert enhanced_used is True
     assert "anime" in fitted.lower()
     assert "cel" in fitted.lower()
-    assert DiffusersZImageBackend._pipeline_prompt_token_length(tokenizer, fitted) <= 14
+    assert DiffusersQwenInference._pipeline_prompt_token_length(tokenizer, fitted) <= 14
 
 
 def test_fit_prompt_to_budget_falls_back_to_original_when_candidate_cannot_fit(monkeypatch) -> None:
     monkeypatch.setattr(
-        DiffusersZImageBackend,
+        DiffusersQwenInference,
         "_PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET",
         6,
     )
@@ -100,7 +101,7 @@ def test_fit_prompt_to_budget_falls_back_to_original_when_candidate_cannot_fit(m
     original = "anime portrait hero"
     enhanced = "highly detailed hyper elaborate cinematic anime portrait hero with layered atmospheric storytelling and intricate material rendering"
 
-    fitted, enhanced_used = DiffusersZImageBackend._fit_prompt_to_budget(
+    fitted, enhanced_used = DiffusersQwenInference._fit_prompt_to_budget(
         tokenizer=tokenizer,
         original_prompt=original,
         enhanced_prompt=enhanced,
@@ -112,7 +113,7 @@ def test_fit_prompt_to_budget_falls_back_to_original_when_candidate_cannot_fit(m
 
 def test_fit_prompt_to_budget_prioritizes_late_style_clauses(monkeypatch) -> None:
     monkeypatch.setattr(
-        DiffusersZImageBackend,
+        DiffusersQwenInference,
         "_PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET",
         9,
     )
@@ -126,7 +127,7 @@ def test_fit_prompt_to_budget_prioritizes_late_style_clauses(monkeypatch) -> Non
         "extra detail four, dramatic rim lighting, anime illustration, cel shading"
     )
 
-    fitted, enhanced_used = DiffusersZImageBackend._fit_prompt_to_budget(
+    fitted, enhanced_used = DiffusersQwenInference._fit_prompt_to_budget(
         tokenizer=tokenizer,
         original_prompt=original,
         enhanced_prompt=enhanced,
@@ -135,7 +136,7 @@ def test_fit_prompt_to_budget_prioritizes_late_style_clauses(monkeypatch) -> Non
     assert enhanced_used is True
     assert "anime" in fitted.lower()
     assert "cel" in fitted.lower()
-    assert DiffusersZImageBackend._pipeline_prompt_token_length(tokenizer, fitted) <= 9
+    assert DiffusersQwenInference._pipeline_prompt_token_length(tokenizer, fitted) <= 9
 
 
 def test_fit_prompt_to_budget_uses_style_seed_when_compression_fails(monkeypatch) -> None:
@@ -161,12 +162,12 @@ def test_fit_prompt_to_budget_uses_style_seed_when_compression_fails(monkeypatch
         raise AssertionError(f"Unexpected candidate prompt: {candidate_prompt}")
 
     monkeypatch.setattr(
-        DiffusersZImageBackend,
+        DiffusersQwenInference,
         "_compress_prompt_to_token_budget",
         classmethod(_fake_compress),
     )
 
-    fitted, enhanced_used = DiffusersZImageBackend._fit_prompt_to_budget(
+    fitted, enhanced_used = DiffusersQwenInference._fit_prompt_to_budget(
         tokenizer=tokenizer,
         original_prompt=original,
         enhanced_prompt=enhanced,
@@ -179,7 +180,7 @@ def test_fit_prompt_to_budget_uses_style_seed_when_compression_fails(monkeypatch
 
 def test_fit_prompt_to_budget_preserves_whole_clause_when_over_budget(monkeypatch) -> None:
     monkeypatch.setattr(
-        DiffusersZImageBackend,
+        DiffusersQwenInference,
         "_PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET",
         5,
     )
@@ -187,7 +188,7 @@ def test_fit_prompt_to_budget_preserves_whole_clause_when_over_budget(monkeypatc
     original = "hero portrait. atmospheric fog and rain. neon reflections."
     enhanced = "hero portrait. atmospheric fog and rain. neon reflections. cinematic detail storybook framing."
 
-    fitted, enhanced_used = DiffusersZImageBackend._fit_prompt_to_budget(
+    fitted, enhanced_used = DiffusersQwenInference._fit_prompt_to_budget(
         tokenizer=tokenizer,
         original_prompt=original,
         enhanced_prompt=enhanced,
@@ -196,7 +197,7 @@ def test_fit_prompt_to_budget_preserves_whole_clause_when_over_budget(monkeypatc
     assert enhanced_used is True
     assert fitted == "hero portrait. neon reflections."
     assert fitted != original
-    assert DiffusersZImageBackend._pipeline_prompt_token_length(tokenizer, fitted) <= 5
+    assert DiffusersQwenInference._pipeline_prompt_token_length(tokenizer, fitted) <= 5
 
 
 def test_resolve_effective_prompt_keeps_long_prompt_exact_when_enhancement_off() -> None:
@@ -285,7 +286,7 @@ def test_trim_to_complete_sentences_removes_incomplete_clothing_fragment() -> No
     )
 
     assert (
-        DiffusersZImageBackend._trim_to_complete_sentences(text)
+        DiffusersQwenInference._trim_to_complete_sentences(text)
         == "A young woman stands in a bright bookstore with sale boxes and browsing customers."
     )
 
@@ -297,18 +298,18 @@ def test_trim_to_complete_sentences_removes_incomplete_depth_fragment() -> None:
     )
 
     assert (
-        DiffusersZImageBackend._trim_to_complete_sentences(text)
+        DiffusersQwenInference._trim_to_complete_sentences(text)
         == "A vast hangar laboratory contains machinery, cables, and a distant saucer on a raised platform."
     )
 
 
 def test_fit_complete_clauses_to_budget_never_returns_partial_clause(monkeypatch) -> None:
     monkeypatch.setattr(
-        DiffusersZImageBackend,
+        DiffusersQwenInference,
         "_PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET",
         5,
     )
-    fitted = DiffusersZImageBackend._fit_complete_clauses_to_budget(
+    fitted = DiffusersQwenInference._fit_complete_clauses_to_budget(
         tokenizer=_FakeTokenizer(),
         candidate_prompt="First complete sentence. Second complete sentence with many details.",
         max_tokens=5,
@@ -319,16 +320,16 @@ def test_fit_complete_clauses_to_budget_never_returns_partial_clause(monkeypatch
 
 def test_compress_long_prompt_retries_after_incomplete_sentence(monkeypatch) -> None:
     monkeypatch.setattr(
-        DiffusersZImageBackend,
+        DiffusersQwenInference,
         "_PROMPT_ENHANCEMENT_PIPELINE_SAFE_TOKEN_BUDGET",
         12,
     )
     monkeypatch.setattr(
-        DiffusersZImageBackend,
+        DiffusersQwenInference,
         "_PROMPT_ENHANCEMENT_COMPRESSION_TARGET_TOKENS",
         10,
     )
-    backend = object.__new__(DiffusersZImageBackend)
+    backend = object.__new__(DiffusersQwenInference)
     calls: list[int] = []
 
     def fake_run_rewrite_attempt(**kwargs):

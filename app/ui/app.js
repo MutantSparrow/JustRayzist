@@ -4,6 +4,7 @@ const generateButtonEl = document.getElementById("generate-button");
 const generateButtonLabelEl = document.getElementById("generate-button-label");
 const wildcardDrawerToggleEl = document.getElementById("wildcard-drawer-toggle");
 const loraDrawerToggleEl = document.getElementById("lora-drawer-toggle");
+const chatDrawerToggleEl = document.getElementById("chat-drawer-toggle");
 const settingsButtonEl = document.getElementById("settings-button");
 const settingsPanelEl = document.getElementById("settings-panel");
 const settingsSummaryEl = document.getElementById("settings-summary");
@@ -97,6 +98,14 @@ const wildcardSuggestionMessageEl = document.getElementById("wildcard-suggestion
 const wildcardSuggestionListEl = document.getElementById("wildcard-suggestion-list");
 const wildcardSuggestionCloseEl = document.getElementById("wildcard-suggestion-close");
 const wildcardSuggestionApplyEl = document.getElementById("wildcard-suggestion-apply");
+const chatDrawerBackdropEl = document.getElementById("chat-drawer-backdrop");
+const chatDrawerEl = document.getElementById("chat-drawer");
+const chatEncoderNameEl = document.getElementById("chat-encoder-name");
+const chatClearButtonEl = document.getElementById("chat-clear-button");
+const chatTranscriptEl = document.getElementById("chat-transcript");
+const chatFormEl = document.getElementById("chat-form");
+const chatInputEl = document.getElementById("chat-input");
+const chatSendButtonEl = document.getElementById("chat-send-button");
 const viewerModalEl = document.getElementById("viewer-modal");
 const viewerMetaEl = document.getElementById("viewer-meta");
 const viewerImageEl = document.getElementById("viewer-image");
@@ -129,6 +138,7 @@ const requiredUi = [
   ["generate-button-label", generateButtonLabelEl],
   ["wildcard-drawer-toggle", wildcardDrawerToggleEl],
   ["lora-drawer-toggle", loraDrawerToggleEl],
+  ["chat-drawer-toggle", chatDrawerToggleEl],
   ["settings-button", settingsButtonEl],
   ["settings-panel", settingsPanelEl],
   ["settings-summary", settingsSummaryEl],
@@ -219,6 +229,14 @@ const requiredUi = [
   ["wildcard-suggestion-list", wildcardSuggestionListEl],
   ["wildcard-suggestion-close", wildcardSuggestionCloseEl],
   ["wildcard-suggestion-apply", wildcardSuggestionApplyEl],
+  ["chat-drawer-backdrop", chatDrawerBackdropEl],
+  ["chat-drawer", chatDrawerEl],
+  ["chat-encoder-name", chatEncoderNameEl],
+  ["chat-clear-button", chatClearButtonEl],
+  ["chat-transcript", chatTranscriptEl],
+  ["chat-form", chatFormEl],
+  ["chat-input", chatInputEl],
+  ["chat-send-button", chatSendButtonEl],
   ["viewer-modal", viewerModalEl],
   ["viewer-meta", viewerMetaEl],
   ["viewer-image", viewerImageEl],
@@ -283,6 +301,8 @@ const GALLERY_COLOR_CACHE_STATUS_MESSAGE = "Updating gallery color cache...";
 const GALLERY_COLOR_CACHE_POLL_INTERVAL_MS = 2500;
 const LORA_LIBRARY_POLL_INTERVAL_MS = 2500;
 const WILDCARD_LIBRARY_POLL_INTERVAL_MS = 2500;
+const CHAT_ALLOWED_ROUTES = new Set(["/API"]);
+const CHAT_ROUTE_ALIASES = { "/api": "/API" };
 const WILDCARD_CARD_DOUBLE_CLICK_DELAY_MS = 280;
 const LORA_MASONRY_SINGLE_COLUMN_BREAKPOINT_PX = 600;
 const GALLERY_SOFT_REMOVAL_DURATION_MS = 240;
@@ -522,6 +542,17 @@ const state = {
   wildcardSuggestionSeed: null,
   wildcardSuggestionMessage: "",
   wildcardSuggestionMessageIsError: false,
+  chatDrawerOpen: false,
+  chatBusy: false,
+  chatHistoryLoaded: false,
+  chatExchanges: [],
+  chatNextNumber: 1,
+  chatCapabilities: {
+    supported: false,
+    active_pack: null,
+    encoder: null,
+  },
+  chatDraft: "",
 };
 
 function hasReferenceImage() {
@@ -1125,6 +1156,9 @@ function setLoraDrawerOpen(open) {
   const mobileOverlay = window.innerWidth <= 960;
   if (next && state.wildcardDrawerOpen) {
     setWildcardDrawerOpen(false);
+  }
+  if (next && state.chatDrawerOpen) {
+    setChatDrawerOpen(false);
   }
   state.loraDrawerOpen = next;
   document.body.classList.toggle("lora-drawer-open", next && !mobileOverlay);
@@ -2211,6 +2245,87 @@ function appendTextToPromptEnd(value) {
   return true;
 }
 
+function setPromptTextFromChat(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  promptInputEl.value = text;
+  updateTopbarOffset();
+  promptInputEl.focus();
+  if (typeof promptInputEl.setSelectionRange === "function") {
+    const end = text.length;
+    promptInputEl.setSelectionRange(end, end);
+  }
+  return true;
+}
+
+function buildChatAppState() {
+  const dimensions = parseResolution(resolutionSelectEl.value);
+  const activeLoras = state.loraAppliedSelections.map((selection) => {
+    const item = getLoraById(selection.id);
+    return {
+      id: selection.id,
+      display_name: item?.display_name || item?.name || selection.id,
+      weight: selection.weight,
+    };
+  });
+  const wildcardExamples = state.wildcardLibrary
+    .slice(0, 8)
+    .map((item) => item?.placeholder || item?.display_name || item?.token || "")
+    .filter(Boolean);
+  return {
+    current_prompt: String(promptInputEl.value || "").trim(),
+    resolution: `${dimensions.width}x${dimensions.height}`,
+    prompt_enhance: Boolean(state.promptEnhance),
+    rplus_enabled: Boolean(state.rplusEnabled),
+    creative_mode: Number(state.proceduralCreativity) || 0,
+    reference_image_active: hasReferenceImage(),
+    active_loras: activeLoras,
+    wildcard_examples: wildcardExamples,
+    queue_status: `${totalOutstandingJobs()}/${state.maxQueuedGenerations}`,
+  };
+}
+
+function executeChatAction(rawAction) {
+  const action = normalizeChatAction(rawAction);
+  if (!action) {
+    setStatus("Rayzist Chat action was blocked.", true);
+    return false;
+  }
+  if (action.type === "set_prompt") {
+    const applied = setPromptTextFromChat(action.prompt);
+    if (applied) setStatus("Prompt updated from Rayzist Chat.");
+    return applied;
+  }
+  if (action.type === "append_prompt") {
+    const applied = appendTextToPromptEnd(action.prompt);
+    if (applied) setStatus("Prompt appended from Rayzist Chat.");
+    return applied;
+  }
+  if (action.type === "start_generation") {
+    const run = () => {
+      if (setPromptTextFromChat(action.prompt)) {
+        enqueueGenerationFromPrompt();
+      }
+    };
+    if (action.requires_confirm) {
+      showConfirmModal("Start generation from this Rayzist Chat prompt?", run, "Generate", "Cancel");
+    } else {
+      run();
+    }
+    return true;
+  }
+  if (action.type === "open_route") {
+    const href = normalizeChatRoute(action.href);
+    if (!CHAT_ALLOWED_ROUTES.has(href)) {
+      setStatus("Rayzist Chat link was blocked.", true);
+      return false;
+    }
+    window.open(href, "_blank", "noopener,noreferrer");
+    return true;
+  }
+  return false;
+}
+
 async function copyWildcardPlaceholderFromLibraryItem(item, options = {}) {
   const placeholder = String(item?.placeholder || wildcardPlaceholderForUi(item?.token || "")).trim();
   if (!placeholder) {
@@ -2316,6 +2431,9 @@ function setWildcardDrawerOpen(open) {
   if (next && state.loraDrawerOpen) {
     setLoraDrawerOpen(false);
   }
+  if (next && state.chatDrawerOpen) {
+    setChatDrawerOpen(false);
+  }
   state.wildcardDrawerOpen = next;
   document.body.classList.toggle("wildcard-drawer-open", next && !mobileOverlay);
   wildcardDrawerEl.classList.toggle("open", next);
@@ -2340,6 +2458,345 @@ function setWildcardDrawerOpen(open) {
     scheduleWildcardLibraryPoll();
     scheduleWildcardLibraryMasonryRelayout();
   }
+}
+
+function normalizeChatHistoryPayload(history) {
+  const exchanges = Array.isArray(history?.exchanges) ? history.exchanges : [];
+  state.chatExchanges = exchanges
+    .map((exchange) => ({
+      user: normalizeChatBubble(exchange?.user, "user"),
+      assistant: normalizeChatBubble(exchange?.assistant, "assistant"),
+    }))
+    .filter((exchange) => exchange.user && exchange.assistant);
+  state.chatNextNumber = Math.max(1, Number(history?.next_number) || 1);
+}
+
+function normalizeChatBubble(raw, fallbackRole) {
+  if (!raw || typeof raw !== "object") return null;
+  const role = String(raw.role || fallbackRole).trim().toLowerCase();
+  const content = role === "assistant"
+    ? stripChatActionMarkup(raw.content)
+    : String(raw.content || "").trim();
+  const number = Math.max(1, Number(raw.number) || 1);
+  const actions = role === "assistant" ? normalizeChatActions(raw.actions) : [];
+  return {
+    number,
+    role: role === "assistant" ? "assistant" : "user",
+    content,
+    error: Boolean(raw.error),
+    pending: Boolean(raw.pending),
+    actions,
+  };
+}
+
+function stripChatActionMarkup(value) {
+  let text = String(value || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const markerPattern = /<rayzist-actions\b[^>]*>/i;
+  let marker = markerPattern.exec(text);
+  while (marker) {
+    const closePattern = /<\/rayzist-actions>/i;
+    const close = closePattern.exec(text.slice(marker.index + marker[0].length));
+    if (!close) {
+      text = text.slice(0, marker.index).trimEnd();
+      break;
+    }
+    const closeEnd = marker.index + marker[0].length + close.index + close[0].length;
+    text = `${text.slice(0, marker.index)}${text.slice(closeEnd)}`;
+    marker = markerPattern.exec(text);
+  }
+  return text.replace(/```(?:json|rayzist-actions)?\s*\{[\s\S]*?"actions"\s*:\s*\[[\s\S]*?```/gi, "").trim();
+}
+
+function normalizeChatRoute(rawHref) {
+  const href = String(rawHref || "").trim();
+  return CHAT_ROUTE_ALIASES[href.toLowerCase()] || href;
+}
+
+function normalizeChatAction(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const type = String(raw.type || raw.action || "").trim().toLowerCase();
+  const label = String(raw.label || "").trim().slice(0, 48);
+  if (type === "set_prompt" || type === "append_prompt" || type === "start_generation") {
+    const prompt = String(raw.prompt || raw.text || "").trim();
+    if (!prompt) return null;
+    return {
+      type,
+      label: label || (type === "append_prompt" ? "Append Prompt" : type === "start_generation" ? "Generate" : "Use Prompt"),
+      prompt,
+      requires_confirm: type === "start_generation" ? raw.requires_confirm !== false : false,
+    };
+  }
+  if (type === "open_route") {
+    const href = normalizeChatRoute(raw.href || raw.url || raw.route);
+    if (!CHAT_ALLOWED_ROUTES.has(href)) return null;
+    return {
+      type,
+      label: label || "Open API",
+      href,
+    };
+  }
+  return null;
+}
+
+function normalizeChatActions(rawActions) {
+  if (!Array.isArray(rawActions)) return [];
+  const actions = [];
+  const seen = new Set();
+  rawActions.forEach((raw) => {
+    if (actions.length >= 4) return;
+    const action = normalizeChatAction(raw);
+    if (!action) return;
+    const key = `${action.type}:${action.prompt || action.href || ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    actions.push(action);
+  });
+  return actions;
+}
+
+function applyChatCapabilities(capabilities) {
+  state.chatCapabilities = {
+    supported: Boolean(capabilities?.supported),
+    active_pack: String(capabilities?.active_pack || ""),
+    encoder: String(capabilities?.encoder || ""),
+  };
+  chatEncoderNameEl.textContent = state.chatCapabilities.encoder || state.chatCapabilities.active_pack || "Encoder unavailable";
+}
+
+function renderChatTranscript() {
+  chatTranscriptEl.innerHTML = "";
+  const fragment = document.createDocumentFragment();
+  state.chatExchanges.forEach((exchange) => {
+    if (exchange.user) {
+      fragment.append(createChatBubble(exchange.user));
+    }
+    if (exchange.assistant) {
+      fragment.append(createChatBubble(exchange.assistant));
+    }
+  });
+  if (state.chatExchanges.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "chat-empty";
+    empty.textContent = "No chat yet.";
+    fragment.append(empty);
+  }
+  chatTranscriptEl.append(fragment);
+  updateChatComposerState();
+  requestAnimationFrame(() => {
+    chatTranscriptEl.scrollTop = chatTranscriptEl.scrollHeight;
+  });
+}
+
+function appendChatBodyText(body, content) {
+  const text = String(content || "");
+  const routePattern = /\/API\b|\/api\b/g;
+  let lastIndex = 0;
+  let match = routePattern.exec(text);
+  while (match) {
+    if (match.index > lastIndex) {
+      body.append(document.createTextNode(text.slice(lastIndex, match.index)));
+    }
+    const href = normalizeChatRoute(match[0]);
+    if (CHAT_ALLOWED_ROUTES.has(href)) {
+      const link = document.createElement("a");
+      link.href = href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = href;
+      body.append(link);
+    } else {
+      body.append(document.createTextNode(match[0]));
+    }
+    lastIndex = match.index + match[0].length;
+    match = routePattern.exec(text);
+  }
+  if (lastIndex < text.length) {
+    body.append(document.createTextNode(text.slice(lastIndex)));
+  }
+}
+
+function createChatActionButton(action) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "chat-action-button";
+  button.textContent = action.label || "Use";
+  button.addEventListener("click", () => {
+    executeChatAction(action);
+  });
+  return button;
+}
+
+function createChatBubble(bubble) {
+  const row = document.createElement("article");
+  const role = bubble.role === "assistant" ? "assistant" : "user";
+  row.className = `chat-bubble-row ${role}`;
+  const shell = document.createElement("div");
+  shell.className = `chat-bubble ${role}`;
+  shell.classList.toggle("error", Boolean(bubble.error));
+  shell.classList.toggle("pending", Boolean(bubble.pending));
+  const number = document.createElement("div");
+  number.className = "chat-bubble-number";
+  number.textContent = `#${bubble.number}`;
+  const body = document.createElement("div");
+  body.className = "chat-bubble-body";
+  if (bubble.pending) {
+    const spinner = document.createElement("div");
+    spinner.className = "chat-thinking-spinner";
+    const inner = document.createElement("div");
+    inner.className = "tile-spinner";
+    inner.setAttribute("aria-label", "Thinking");
+    spinner.append(inner);
+    body.append(spinner);
+  } else {
+    appendChatBodyText(body, bubble.content || "");
+  }
+  shell.append(number, body);
+  const actions = role === "assistant" && !bubble.pending && !bubble.error ? normalizeChatActions(bubble.actions) : [];
+  if (actions.length > 0) {
+    const actionBar = document.createElement("div");
+    actionBar.className = "chat-action-row";
+    actions.forEach((action) => actionBar.append(createChatActionButton(action)));
+    shell.append(actionBar);
+  }
+  row.append(shell);
+  return row;
+}
+
+function resizeChatInput() {
+  chatInputEl.style.height = "auto";
+  const nextHeight = Math.min(Math.max(chatInputEl.scrollHeight, 40), 132);
+  chatInputEl.style.height = `${nextHeight}px`;
+}
+
+function updateChatComposerState() {
+  const supported = Boolean(state.chatCapabilities?.supported);
+  chatInputEl.disabled = state.chatBusy || !supported;
+  chatSendButtonEl.disabled = state.chatBusy || !supported || !String(chatInputEl.value || "").trim();
+  chatClearButtonEl.disabled = state.chatBusy || state.chatExchanges.length === 0;
+  chatDrawerToggleEl.disabled = false;
+  resizeChatInput();
+}
+
+function setChatDrawerOpen(open) {
+  const next = Boolean(open);
+  const mobileOverlay = window.innerWidth <= 960;
+  if (next && state.loraDrawerOpen) {
+    setLoraDrawerOpen(false);
+  }
+  if (next && state.wildcardDrawerOpen) {
+    setWildcardDrawerOpen(false);
+  }
+  state.chatDrawerOpen = next;
+  document.body.classList.toggle("chat-drawer-open", next && !mobileOverlay);
+  chatDrawerEl.classList.toggle("open", next);
+  chatDrawerEl.setAttribute("aria-hidden", String(!next));
+  chatDrawerBackdropEl.classList.toggle("hidden", !next || !mobileOverlay);
+  chatDrawerBackdropEl.setAttribute("aria-hidden", String(!next || !mobileOverlay));
+  chatDrawerToggleEl.setAttribute("aria-expanded", String(next));
+  updateTopbarOffset();
+  if (next) {
+    if (!state.chatHistoryLoaded) {
+      loadChatHistory({ silent: true }).catch(() => {
+      });
+    }
+    renderChatTranscript();
+    chatInputEl.focus();
+  }
+}
+
+async function loadChatHistory(options = {}) {
+  const silent = Boolean(options.silent);
+  const response = await apiFetch("/chat/history");
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_) {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(formatApiError(payload, "Failed to load Rayzist Chat history."));
+  }
+  normalizeChatHistoryPayload(payload?.history);
+  applyChatCapabilities(payload?.capabilities);
+  state.chatHistoryLoaded = true;
+  renderChatTranscript();
+  if (!silent) {
+    setStatus("Rayzist Chat history loaded.");
+  }
+  return payload;
+}
+
+async function clearChatHistory() {
+  if (state.chatBusy) return false;
+  const response = await apiFetch("/chat/history", { method: "DELETE" });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_) {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(formatApiError(payload, "Failed to clear Rayzist Chat history."));
+  }
+  normalizeChatHistoryPayload(payload?.history);
+  applyChatCapabilities(payload?.capabilities);
+  renderChatTranscript();
+  setStatus("Rayzist Chat history cleared.");
+  return true;
+}
+
+async function sendChatMessage() {
+  if (state.chatBusy) return false;
+  const message = String(chatInputEl.value || "").trim();
+  if (!message) {
+    updateChatComposerState();
+    return false;
+  }
+  const userNumber = Math.max(1, Number(state.chatNextNumber) || 1);
+  const pendingExchange = {
+    user: { number: userNumber, role: "user", content: message, error: false },
+    assistant: { number: userNumber + 1, role: "assistant", content: "", error: false, pending: true },
+  };
+  state.chatExchanges.push(pendingExchange);
+  state.chatNextNumber = userNumber + 2;
+  state.chatBusy = true;
+  chatInputEl.value = "";
+  resizeChatInput();
+  renderChatTranscript();
+  try {
+    const response = await apiFetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, app_state: buildChatAppState() }),
+    });
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (_) {
+      payload = null;
+    }
+    if (!response.ok) {
+      throw new Error(formatApiError(payload, "Rayzist Chat failed."));
+    }
+    normalizeChatHistoryPayload(payload?.history);
+    applyChatCapabilities(payload?.capabilities);
+    state.chatHistoryLoaded = true;
+    if (payload?.status === "error") {
+      setStatus("Rayzist Chat returned an error bubble.", true);
+    }
+  } catch (error) {
+    pendingExchange.assistant.pending = false;
+    pendingExchange.assistant.error = true;
+    pendingExchange.assistant.content = String(error?.message || error || "Rayzist Chat failed.");
+    setStatus(pendingExchange.assistant.content, true);
+  } finally {
+    state.chatBusy = false;
+    renderChatTranscript();
+    if (state.chatDrawerOpen) {
+      chatInputEl.focus();
+    }
+  }
+  return true;
 }
 
 function createWildcardAddTile() {
@@ -6219,6 +6676,19 @@ async function bootstrap() {
       renderWildcardLibrary();
       setStatus(String(error?.message || error), true);
     }
+    try {
+      await loadChatHistory({ silent: true });
+    } catch (error) {
+      state.chatExchanges = [];
+      state.chatCapabilities = {
+        supported: false,
+        active_pack: null,
+        encoder: null,
+      };
+      applyChatCapabilities(state.chatCapabilities);
+      renderChatTranscript();
+      setStatus(String(error?.message || error), true);
+    }
     updateSettingsSummary();
     updateViewerNavState();
     updateGenerateButtonState();
@@ -6253,6 +6723,10 @@ loraDrawerToggleEl.addEventListener("click", () => {
   renderLoraLibrary();
   setLoraDrawerOpen(!state.loraDrawerOpen);
 });
+chatDrawerToggleEl.addEventListener("click", () => {
+  if (chatDrawerToggleEl.disabled) return;
+  setChatDrawerOpen(!state.chatDrawerOpen);
+});
 wildcardDrawerBackdropEl.addEventListener("click", () => {
   setWildcardDrawerOpen(false);
 });
@@ -6265,6 +6739,25 @@ loraDrawerCloseEl.addEventListener("click", () => {
 });
 loraDrawerBackdropEl.addEventListener("click", () => {
   setLoraDrawerOpen(false);
+});
+chatDrawerBackdropEl.addEventListener("click", () => {
+  setChatDrawerOpen(false);
+});
+chatFormEl.addEventListener("submit", (event) => {
+  event.preventDefault();
+  sendChatMessage().catch((error) => setStatus(String(error?.message || error), true));
+});
+chatInputEl.addEventListener("input", () => {
+  state.chatDraft = String(chatInputEl.value || "");
+  updateChatComposerState();
+});
+chatInputEl.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.shiftKey) return;
+  event.preventDefault();
+  sendChatMessage().catch((error) => setStatus(String(error?.message || error), true));
+});
+chatClearButtonEl.addEventListener("click", () => {
+  clearChatHistory().catch((error) => setStatus(String(error?.message || error), true));
 });
 loraFilterInputEl.addEventListener("input", () => {
   state.loraFilter = String(loraFilterInputEl.value || "");
@@ -6466,6 +6959,9 @@ window.addEventListener("resize", () => {
   if (state.loraDrawerOpen) {
     setLoraDrawerOpen(true);
     scheduleLoraLibraryMasonryRelayout();
+  }
+  if (state.chatDrawerOpen) {
+    setChatDrawerOpen(true);
   }
   updateTopbarOffset();
   scheduleGalleryRelayout({ animate: true });
@@ -6702,6 +7198,11 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape" && !loraEditorModalEl.classList.contains("hidden")) {
     event.preventDefault();
+    return;
+  }
+  if (event.key === "Escape" && state.chatDrawerOpen) {
+    event.preventDefault();
+    setChatDrawerOpen(false);
     return;
   }
   const viewerOpen = !viewerModalEl.classList.contains("hidden");

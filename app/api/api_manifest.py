@@ -296,6 +296,120 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
         },
     ),
     ApiExample(
+        method="GET",
+        path="/chat/history",
+        description="Load the per-client Rayzist Chat history and active encoder label.",
+        requires_client=True,
+        request=None,
+        response={
+            "status": "ok",
+            "history": {
+                "owner_id": "example-client",
+                "next_number": 3,
+                "exchange_count": 1,
+                "exchanges": [
+                    {
+                        "user": {
+                            "number": 1,
+                            "role": "user",
+                            "content": "Help me make this prompt moodier.",
+                            "created_at": "2026-04-08T12:00:00+00:00",
+                            "error": False,
+                        },
+                        "assistant": {
+                            "number": 2,
+                            "role": "assistant",
+                            "content": "Add stronger lighting contrast, specific weather, and camera framing.",
+                            "created_at": "2026-04-08T12:00:05+00:00",
+                            "error": False,
+                            "actions": [
+                                {
+                                    "type": "set_prompt",
+                                    "label": "Use Prompt",
+                                    "prompt": "rainy neon city street, reflected signs, low camera angle",
+                                }
+                            ],
+                        },
+                    }
+                ],
+            },
+            "capabilities": {"supported": True, "active_pack": "Rayzist_bf16", "encoder": "text_encoder.gguf"},
+        },
+    ),
+    ApiExample(
+        method="DELETE",
+        path="/chat/history",
+        description="Clear the per-client Rayzist Chat JSON history.",
+        requires_client=True,
+        request=None,
+        response={
+            "status": "ok",
+            "history": {
+                "owner_id": "example-client",
+                "next_number": 1,
+                "exchange_count": 0,
+                "exchanges": [],
+            },
+            "capabilities": {"supported": True, "active_pack": "Rayzist_bf16", "encoder": "text_encoder.gguf"},
+        },
+    ),
+    ApiExample(
+        method="POST",
+        path="/chat",
+        description="Send one Rayzist Chat message through the active text encoder and append the numbered exchange to local JSON history.",
+        requires_client=True,
+        request={
+            "message": "Give me three ways to improve a rainy city prompt.",
+            "app_state": {
+                "current_prompt": "rainy city street",
+                "resolution": "1024x1024",
+                "prompt_enhance": True,
+                "queue_status": "0/5",
+            },
+            "max_new_tokens": 256,
+            "temperature": 0.75,
+        },
+        response={
+            "status": "ok",
+            "exchange": {
+                "user": {
+                    "number": 1,
+                    "role": "user",
+                    "content": "Give me three ways to improve a rainy city prompt.",
+                    "created_at": "2026-04-08T12:00:00+00:00",
+                    "error": False,
+                },
+                "assistant": {
+                    "number": 2,
+                    "role": "assistant",
+                    "content": "Specify rain intensity, reflected neon, street materials, and camera height.",
+                    "created_at": "2026-04-08T12:00:08+00:00",
+                    "error": False,
+                    "actions": [
+                        {
+                            "type": "set_prompt",
+                            "label": "Use Prompt",
+                            "prompt": "rainy neon city street, wet asphalt, reflected signs, low camera angle",
+                        },
+                        {"type": "open_route", "label": "Open API", "href": "/API"},
+                    ],
+                },
+            },
+            "history": {"owner_id": "example-client", "next_number": 3, "exchange_count": 1},
+            "capabilities": {"supported": True, "active_pack": "Rayzist_bf16", "encoder": "text_encoder.gguf"},
+            "seed": 123456,
+            "encoder": "text_encoder.gguf",
+            "actions": [
+                {
+                    "type": "set_prompt",
+                    "label": "Use Prompt",
+                    "prompt": "rainy neon city street, wet asphalt, reflected signs, low camera angle",
+                },
+                {"type": "open_route", "label": "Open API", "href": "/API"},
+            ],
+        },
+    ),
+    ApiExample(
         method="POST",
         path="/lora-drafts",
         description="Upload one `.safetensors` LoRA into draft storage for metadata inspection before saving it into the live library. LoRA uploads are capped at 10 GiB.",

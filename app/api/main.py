@@ -183,6 +183,21 @@ class WildcardSuggestionRequest(BaseModel):
     existing_entries: list[str] = Field(default_factory=list, max_length=5000)
 
 
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
+class ChatRequest(BaseModel):
+    message: str | None = Field(default=None, max_length=4000)
+    messages: list[ChatMessage] = Field(default_factory=list, max_length=40)
+    app_state: dict[str, Any] = Field(default_factory=dict)
+    seed: int | None = Field(default=None)
+    pack: str | None = Field(default=None)
+    max_new_tokens: int | None = Field(default=None, ge=16, le=512)
+    temperature: float = Field(default=0.75, ge=0.0, le=1.5)
+
+
 class UpscaleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -733,6 +748,60 @@ def wildcard_suggestions(payload: WildcardSuggestionRequest) -> dict:
         LOGGER.exception("Unhandled wildcard suggestion error.")
         raise HTTPException(status_code=500, detail="Wildcard suggestion generation failed.") from exc
     return {"status": "ok", **result}
+
+
+@app.get("/chat/history")
+def chat_history(
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> JSONResponse:
+    owner_id = _resolve_owner_id(x_justrayzist_client)
+    return JSONResponse(content=inference.chat_history(owner_id=owner_id), headers=_NO_STORE_HEADERS)
+
+
+@app.delete("/chat/history")
+def chat_history_clear(
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> JSONResponse:
+    owner_id = _resolve_owner_id(x_justrayzist_client)
+    return JSONResponse(content=inference.clear_chat_history(owner_id=owner_id), headers=_NO_STORE_HEADERS)
+
+
+@app.post("/chat")
+def chat(
+    payload: ChatRequest,
+    x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
+) -> JSONResponse:
+    try:
+        owner_id = _resolve_owner_id(x_justrayzist_client)
+        message = str(payload.message or "").strip()
+        if not message:
+            for item in reversed(payload.messages):
+                if item.role == "user" and item.content.strip():
+                    message = item.content.strip()
+                    break
+        if not message:
+            raise ValueError("Chat message is required.")
+        result = inference.chat(
+            owner_id=owner_id,
+            message=message,
+            pack_name=payload.pack,
+            app_state=payload.app_state,
+            seed=payload.seed,
+            max_new_tokens=payload.max_new_tokens,
+            temperature=payload.temperature,
+        )
+    except HTTPException:
+        raise
+    except ModelPackValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=f"Missing dependency: {exc}") from exc
+    except Exception as exc:
+        LOGGER.exception("Unhandled Rayzist Chat error.")
+        raise HTTPException(status_code=500, detail="Rayzist Chat failed.") from exc
+    return JSONResponse(content=result, headers=_NO_STORE_HEADERS)
 
 
 @app.post("/lora-drafts")

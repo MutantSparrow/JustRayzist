@@ -60,6 +60,14 @@ from app.storage.lora_library import (
     preview_path_for_lora,
     update_lora as update_library_lora,
 )
+from app.storage.chat_history import (
+    append_chat_exchange,
+    chat_messages_for_context,
+    clear_chat_history,
+    load_chat_history,
+)
+from app.storage.chat_context import load_chat_context
+from app.storage.chat_rag import build_chat_document_context
 from app.storage.wildcard_library import (
     create_wildcard as create_library_wildcard,
     delete_wildcard as delete_library_wildcard,
@@ -276,6 +284,199 @@ class InferenceService:
             "supported": True,
             "active_pack": active_pack,
             "suggestions_supported": suggestions_supported,
+        }
+
+    @staticmethod
+    def _text_encoder_label_for_pack(model_pack: ModelPack) -> str:
+        component = model_pack.components.get("text_encoder") if model_pack.components else None
+        if component is not None:
+            return str(component.path.name or component.path)
+        return model_pack.base_name or model_pack.name
+
+    def chat_capabilities(self, pack_name: str | None = None) -> dict[str, Any]:
+        active_pack = None
+        encoder = None
+        supported = False
+        try:
+            _base_pack, effective_pack, _resource_tier = self._resolve_runtime_pack(pack_name)
+            active_pack = effective_pack.base_name or effective_pack.name
+            encoder = self._text_encoder_label_for_pack(effective_pack)
+            supported = "text_encoder" in effective_pack.components
+            with self._state_lock:
+                active_session = self._active_session if self._active_pack_name == effective_pack.name else None
+            if active_session is not None:
+                try:
+                    runtime_status = active_session.runtime_status()
+                    supported = bool(runtime_status.get("chat_capable", supported))
+                    encoder = str(runtime_status.get("text_encoder_label") or encoder)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return {
+            "supported": supported,
+            "active_pack": active_pack,
+            "encoder": encoder,
+        }
+
+    def chat_history(self, *, owner_id: str) -> dict[str, Any]:
+        safe_owner_id = self.sanitize_owner_id(owner_id)
+        return {
+            "status": "ok",
+            "history": load_chat_history(self._settings, safe_owner_id),
+            "capabilities": self.chat_capabilities(),
+        }
+
+    def clear_chat_history(self, *, owner_id: str) -> dict[str, Any]:
+        safe_owner_id = self.sanitize_owner_id(owner_id)
+        return {
+            "status": "ok",
+            "history": clear_chat_history(self._settings, safe_owner_id),
+            "capabilities": self.chat_capabilities(),
+        }
+
+    @staticmethod
+    def _chat_context_text(value: Any, *, limit: int = 1200) -> str:
+        text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if len(text) > limit:
+            return text[:limit].rstrip()
+        return text
+
+    @classmethod
+    def _chat_context_list(cls, value: Any, *, limit: int = 8) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        items: list[str] = []
+        for raw in value:
+            if isinstance(raw, dict):
+                text = cls._chat_context_text(
+                    raw.get("display_name") or raw.get("name") or raw.get("id") or raw.get("token"),
+                    limit=120,
+                )
+            else:
+                text = cls._chat_context_text(raw, limit=120)
+            if text:
+                items.append(text)
+            if len(items) >= limit:
+                break
+        return items
+
+    def _build_chat_app_context(
+        self,
+        *,
+        app_state: Any,
+        effective_pack: ModelPack,
+        user_message: str,
+    ) -> str:
+        parts = [load_chat_context(self._settings)]
+        doc_context = build_chat_document_context(self._settings, user_message)
+        if doc_context:
+            parts.append(doc_context)
+        state_payload: dict[str, Any] = {
+            "active_pack": effective_pack.base_name or effective_pack.name,
+            "encoder": self._text_encoder_label_for_pack(effective_pack),
+        }
+        if isinstance(app_state, dict):
+            current_prompt = self._chat_context_text(app_state.get("current_prompt"), limit=1600)
+            if current_prompt:
+                state_payload["current_prompt_box"] = current_prompt
+            for key in (
+                "resolution",
+                "prompt_enhance",
+                "rplus_enabled",
+                "creative_mode",
+                "reference_image_active",
+                "queue_status",
+            ):
+                value = app_state.get(key)
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    state_payload[key] = value
+            active_loras = self._chat_context_list(app_state.get("active_loras"), limit=6)
+            if active_loras:
+                state_payload["active_loras"] = active_loras
+            wildcard_examples = self._chat_context_list(app_state.get("wildcard_examples"), limit=8)
+            if wildcard_examples:
+                state_payload["wildcard_examples"] = wildcard_examples
+        parts.append("Current visible app state:\n" + json.dumps(state_payload, indent=2, ensure_ascii=True))
+        return "\n\n".join(part.strip() for part in parts if str(part or "").strip())
+
+    def chat(
+        self,
+        *,
+        owner_id: str,
+        message: str,
+        pack_name: str | None = None,
+        app_state: Any = None,
+        seed: int | None = None,
+        max_new_tokens: int | None = None,
+        temperature: float = 0.75,
+    ) -> dict[str, Any]:
+        safe_owner_id = self.sanitize_owner_id(owner_id)
+        user_message = str(message or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not user_message:
+            raise ValueError("Chat message is required.")
+        if len(user_message) > 4000:
+            raise ValueError("Chat message is too long.")
+
+        history = load_chat_history(self._settings, safe_owner_id)
+        context_messages = chat_messages_for_context(history, max_exchanges=10)
+        context_messages.append({"role": "user", "content": user_message})
+        with self._state_lock:
+            _base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name)
+            session = self._session_for_pack(effective_pack, resource_tier)
+            effective_seed = int(seed) if seed is not None else random.randint(1, 2_147_483_647)
+            app_context = self._build_chat_app_context(
+                app_state=app_state,
+                effective_pack=effective_pack,
+                user_message=user_message,
+            )
+
+        assistant_error = False
+        try:
+            with self._generation_lock:
+                result = session.chat(
+                    messages=context_messages,
+                    app_context=app_context,
+                    seed=effective_seed,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                )
+                with self._state_lock:
+                    try:
+                        runtime_status = session.runtime_status()
+                        self._active_backend_name = str(runtime_status.get("backend") or self._active_backend_name)
+                    except Exception:
+                        pass
+            assistant_content = str(result.get("response") or "").strip() or "I could not generate a response."
+        except Exception as exc:
+            assistant_error = True
+            assistant_content = f"Rayzist Chat failed: {exc}"
+            result = {
+                "response": assistant_content,
+                "seed": effective_seed,
+                "max_new_tokens": max_new_tokens,
+                "temperature": temperature,
+                "encoder": self.chat_capabilities(pack_name).get("encoder"),
+            }
+
+        assistant_actions = result.get("actions") if not assistant_error else []
+        saved_history = append_chat_exchange(
+            self._settings,
+            safe_owner_id,
+            user_content=user_message,
+            assistant_content=assistant_content,
+            assistant_error=assistant_error,
+            assistant_actions=assistant_actions,
+        )
+        exchange = (saved_history.get("exchanges") or [])[-1] if saved_history.get("exchanges") else None
+        return {
+            "status": "error" if assistant_error else "ok",
+            "exchange": exchange,
+            "history": saved_history,
+            "capabilities": self.chat_capabilities(pack_name),
+            "seed": result.get("seed"),
+            "encoder": result.get("encoder"),
+            "actions": assistant_actions,
         }
 
     def list_loras(self) -> list[dict[str, Any]]:
