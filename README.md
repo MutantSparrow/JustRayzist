@@ -6,11 +6,11 @@ JustRayzist is a local-first image generation app for the Rayzist Z-Image Turbo 
 
 After setup, the app is designed to run offline. Normal user flows stay on the stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking users to choose a memory mode at startup.
 
-## New in v1.8.7
+## New in v1.8.8
 
-- Adds the right-side Rayzist Chat drawer with numbered local history, busy queue feedback, and app action buttons.
-- Grounds chat answers with Rayzist documentation for image inference, Creative Mode, R+, Clarity, Wildcards, and gallery migration workflows.
-- Splits Qwen helper text inference into a dedicated backend while keeping Z Image image inference and prompt encoding in the image backend.
+- Restores Clarity as the fast FS sharpen path instead of routing it through SeedVR2 or image refinement.
+- Fixes Z Image image refinement when prompt tensors and VAE tensors use different floating point types.
+- Gives high resolution SeedVR2 upscale attempts more time before the helper is terminated.
 
 ![Wildcard library preview](readme_images/wildcards_preview.png)
 
@@ -245,7 +245,7 @@ Sample response:
 {
   "status": "ok",
   "app": "JustRayzist",
-  "version": "1.8.7",
+  "version": "1.8.8",
   "runtime_profile": "balanced",
   "resource_tier": "high",
   "active_pack": "Rayzist_bf16",
@@ -276,7 +276,7 @@ Sample response:
 ```json
 {
   "app_name": "JustRayzist",
-  "app_version": "1.8.7",
+  "app_version": "1.8.8",
   "environment": "dev",
   "offline_mode": true,
   "runtime_profile": {
