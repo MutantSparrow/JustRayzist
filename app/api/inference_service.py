@@ -17,6 +17,7 @@ from app.config.profiles import RuntimeProfile
 from app.config.settings import AppSettings
 from app.core.cancellation import GenerationCancelledError
 from app.core.clarity import (
+    CLARITY_ENGINE_NAME,
     CLARITY_FS_INTENSITY,
     CLARITY_FS_METHOD,
     CLARITY_FS_TYPE,
@@ -24,12 +25,11 @@ from app.core.clarity import (
     CLARITY_FINAL_UNSHARP_RADIUS,
     CLARITY_FINAL_UNSHARP_THRESHOLD,
     CLARITY_UNSHARP_STAGE,
+    run_clarity_pipeline,
 )
 from app.core.backends import SUPPORTED_BACKENDS
 from app.core.deblur import (
-    DEFAULT_CLARITY_ENGINE_NAME,
     DEFAULT_UPSCALE_ENGINE_NAME,
-    run_default_clarity_pipeline,
     run_default_upscale_pipeline,
 )
 from app.core.model_registry import (
@@ -795,7 +795,7 @@ class InferenceService:
         def _worker() -> None:
             try:
                 updated = rebuild_gallery_color_cache(self._settings)
-                LOGGER.info("Gallery color cache rebuild completed: updated=%s", updated)
+                LOGGER.debug("Gallery color cache rebuild completed: updated=%s", updated)
             except Exception as exc:
                 LOGGER.exception("Gallery color cache rebuild failed.")
                 with self._state_lock:
@@ -1187,7 +1187,7 @@ class InferenceService:
             session = self._session_for_pack(effective_pack, resource_tier)
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
             retained_lora_ids = self._retain_generation_loras_locked(resolved_loras)
-            LOGGER.info(
+            LOGGER.debug(
                 "Generate request: owner=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s creative_mode=%s inference_process=%s",
                 safe_owner_id,
                 base_pack.name,
@@ -1354,7 +1354,7 @@ class InferenceService:
                 image_row["loras"] = [dict(item) for item in result.loras]
                 image_row["lora_count"] = result.lora_count
                 image_row["job_id"] = job_id
-                LOGGER.info(
+                LOGGER.debug(
                     "Image created: owner=%s file=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s duration_ms=%s creative_mode=%s loras=%s",
                     safe_owner_id,
                     image_row["filename"],
@@ -1405,7 +1405,7 @@ class InferenceService:
             session = self._session_for_pack(effective_pack, resource_tier)
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
             retained_lora_ids = self._retain_generation_loras_locked(resolved_loras)
-            LOGGER.info(
+            LOGGER.debug(
                 "Img2img request: owner=%s pack=%s effective_pack=%s tier=%s ref=%s size=%dx%d seed=%s similarity=%.2f",
                 safe_owner_id,
                 base_pack.name,
@@ -1591,7 +1591,7 @@ class InferenceService:
                 image_row["loras"] = [dict(item) for item in result.loras]
                 image_row["lora_count"] = result.lora_count
                 image_row["job_id"] = job_id
-                LOGGER.info(
+                LOGGER.debug(
                     "Image refined: owner=%s file=%s pack=%s effective_pack=%s tier=%s size=%dx%d seed=%s duration_ms=%s similarity=%.2f",
                     safe_owner_id,
                     image_row["filename"],
@@ -1644,7 +1644,7 @@ class InferenceService:
             session = self._session_for_pack(effective_pack, resource_tier)
             model_pack_name = base_pack.name
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
-            LOGGER.info(
+            LOGGER.debug(
                 "Upscale request: owner=%s source=%s engine=%s scale=2 pack=%s tier=%s seed=%s",
                 safe_owner_id,
                 safe_filename,
@@ -1791,7 +1791,7 @@ class InferenceService:
                 image_row["upscale_engine"] = effective_engine
                 image_row["upscale_auto_content_mode"] = telemetry.get("upscale_auto_content_mode")
                 image_row["job_id"] = job_id
-                LOGGER.info(
+                LOGGER.debug(
                     "Image upscaled: owner=%s source=%s engine=%s scale=2 file=%s size=%dx%d seed=%s duration_ms=%s",
                     safe_owner_id,
                     safe_filename,
@@ -1837,15 +1837,14 @@ class InferenceService:
             source_prompt = str(source_row.get("prompt") or "").strip() or "(missing prompt metadata)"
             source_generation_seed = self._optional_int(source_row.get("seed"))
             preferred_pack = str(source_row.get("model_pack") or "").strip() or None
-            base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name or preferred_pack)
-            session = self._session_for_pack(effective_pack, resource_tier)
-            model_pack_name = base_pack.name
+            model_pack_name = str(pack_name or preferred_pack or "unknown").strip() or "unknown"
+            resource_tier = self.current_resource_tier(refresh=True)
             effective_seed = seed if seed is not None else random.randint(1, 2_147_483_647)
-            LOGGER.info(
+            LOGGER.debug(
                 "Clarity request: owner=%s source=%s engine=%s pack=%s tier=%s seed=%s",
                 safe_owner_id,
                 safe_filename,
-                DEFAULT_CLARITY_ENGINE_NAME,
+                CLARITY_ENGINE_NAME,
                 model_pack_name,
                 resource_tier.name,
                 effective_seed,
@@ -1877,14 +1876,7 @@ class InferenceService:
                 source_width, source_height = source_image.size
                 if cancel_event.is_set():
                     raise GenerationCancelledError("Clarity cancelled.")
-                clarity_result = run_default_clarity_pipeline(
-                    image=source_image,
-                    settings=self._settings,
-                    session=session,
-                    profile_name=self._settings.runtime_profile.name,
-                    seed=effective_seed,
-                    scheduler_mode=scheduler_mode,
-                )
+                clarity_result = run_clarity_pipeline(image=source_image)
                 if cancel_event.is_set():
                     raise GenerationCancelledError("Clarity cancelled.")
 
@@ -2006,11 +1998,11 @@ class InferenceService:
                 image_row["working_height"] = clarity_result.working_height
                 image_row["job_id"] = job_id
                 image_row.update(clarity_telemetry)
-                LOGGER.info(
+                LOGGER.debug(
                     "Image clarified: owner=%s source=%s engine=%s file=%s size=%dx%d seed=%s duration_ms=%s",
                     safe_owner_id,
                     safe_filename,
-                    DEFAULT_CLARITY_ENGINE_NAME,
+                    CLARITY_ENGINE_NAME,
                     image_row["filename"],
                     final_width,
                     final_height,
@@ -2018,7 +2010,7 @@ class InferenceService:
                     duration_ms,
                 )
                 with self._state_lock:
-                    self._active_backend_name = DEFAULT_CLARITY_ENGINE_NAME
+                    self._active_backend_name = CLARITY_ENGINE_NAME
                 return image_row
         finally:
             with self._state_lock:

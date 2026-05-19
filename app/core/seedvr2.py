@@ -643,11 +643,11 @@ def _resolve_attempt_timeout_seconds(timeout_seconds: int, max_dim: int) -> int:
 
     requested = max(1, int(timeout_seconds))
     if max_dim >= 4096:
-        adaptive_default = 90
+        adaptive_default = 180
     elif max_dim >= 3072:
-        adaptive_default = 60
+        adaptive_default = 120
     else:
-        adaptive_default = SEEDVR2_DEFAULT_ATTEMPT_TIMEOUT_SECONDS
+        adaptive_default = 75
     if requested >= SEEDVR2_DEFAULT_TIMEOUT_SECONDS:
         return adaptive_default
     return requested

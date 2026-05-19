@@ -72,7 +72,7 @@ def _build_pack(root: Path, *, components: dict[str, ModelComponent]) -> ModelPa
     )
 
 
-def test_build_zimage_pipeline_uses_torch_dtype_for_pipeline_and_component_loads(
+def test_build_zimage_pipeline_uses_dtype_for_pipeline_and_component_loads(
     monkeypatch,
     workspace_tmp_path: Path,
 ) -> None:
@@ -115,17 +115,18 @@ def test_build_zimage_pipeline_uses_torch_dtype_for_pipeline_and_component_loads
 
     assert loaded.pipeline.progress_disabled is True
     assert _FakePipeline.last_call is not None
-    assert _FakePipeline.last_call["torch_dtype"] == torch.float32
     assert "dtype" not in _FakePipeline.last_call
+    assert "torch_dtype" not in _FakePipeline.last_call
+    assert _FakePipeline.last_call["local_files_only"] is True
     assert _FakePipeline.last_call["text_encoder"]["kind"] == "text_encoder"
 
     assert _FakeTransformerLoader.last_call is not None
-    assert _FakeTransformerLoader.last_call["torch_dtype"] == torch.float32
-    assert "dtype" not in _FakeTransformerLoader.last_call
+    assert _FakeTransformerLoader.last_call["dtype"] == torch.float32
+    assert "torch_dtype" not in _FakeTransformerLoader.last_call
 
     assert _FakeVaeLoader.last_call is not None
-    assert _FakeVaeLoader.last_call["torch_dtype"] == torch.float32
-    assert "dtype" not in _FakeVaeLoader.last_call
+    assert _FakeVaeLoader.last_call["dtype"] == torch.float32
+    assert "torch_dtype" not in _FakeVaeLoader.last_call
 
 
 def test_load_text_encoder_from_local_config_uses_transformers_dtype(monkeypatch, workspace_tmp_path: Path) -> None:

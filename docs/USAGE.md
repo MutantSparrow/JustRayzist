@@ -1035,7 +1035,7 @@ Sample response:
 
 ### `POST /clarity`
 
-Run the multiband clarity pipeline on one gallery image and return it at the original size.
+Run the fast FS clarity pipeline on one gallery image and return it at the original size.
 
 Requires `X-JustRayzist-Client`.
 
@@ -1059,7 +1059,7 @@ Sample response:
   "filename": "justrayzist_YYYYMMDD_hhmmss_002.png",
   "mode": "api_clarity",
   "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-  "clarity_engine": "multiband_chroma_edgeaware_fs_unsharp_downscale",
+  "clarity_engine": "fs_unsharp_downscale",
   "working_width": 2048,
   "working_height": 2048,
   "duration_ms": 16789,
@@ -1331,7 +1331,7 @@ Sample response:
 
 ### `POST /server/kill`
 
-Request local server shutdown from the same machine that is hosting the app.
+Request local server shutdown from the hosting machine and local app origin.
 
 Sample request body:
 
@@ -1350,7 +1350,7 @@ Sample response:
 
 ### `POST /server/restart`
 
-Request local server restart on the same bind host and port so code changes are picked up.
+Request local server restart from the hosting machine and local app origin.
 
 Sample request body:
 

@@ -15,6 +15,7 @@ from email.parser import BytesFeedParser
 from pathlib import Path
 from tempfile import SpooledTemporaryFile
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -47,6 +48,7 @@ _NO_STORE_HEADERS = {
     "Expires": "0",
 }
 _LOCALHOST_CLIENT_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+_ASYNCIO_HANDLER_NOT_INSTALLED = object()
 
 
 class _RevisionBroadcaster:
@@ -76,6 +78,57 @@ _LORA_LIBRARY_EVENTS = _RevisionBroadcaster()
 _WILDCARD_LIBRARY_EVENTS = _RevisionBroadcaster()
 
 
+def _is_connection_reset_error(exc: object) -> bool:
+    if not isinstance(exc, (ConnectionResetError, BrokenPipeError, OSError)):
+        return False
+    if isinstance(exc, ConnectionResetError):
+        return True
+    error_number = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+    return error_number in {32, 104, 10053, 10054, 10058}
+
+
+def _should_suppress_asyncio_connection_lost(context: dict[str, object]) -> bool:
+    exc = context.get("exception")
+    if not _is_connection_reset_error(exc):
+        return False
+    text = f"{context.get('message') or ''} {context.get('handle') or ''}"
+    return "_call_connection_lost" in text or "connection_lost" in text
+
+
+def _install_asyncio_connection_lost_filter() -> object:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return _ASYNCIO_HANDLER_NOT_INSTALLED
+
+    previous_handler = loop.get_exception_handler()
+
+    def _handle_exception(loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
+        if _should_suppress_asyncio_connection_lost(context):
+            LOGGER.debug(
+                "Suppressed client connection reset during asyncio connection cleanup. %s",
+                context.get("exception"),
+            )
+            return
+        if previous_handler is not None:
+            previous_handler(loop, context)
+            return
+        loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_handle_exception)
+    return previous_handler
+
+
+def _restore_asyncio_exception_handler(previous_handler: object) -> None:
+    if previous_handler is _ASYNCIO_HANDLER_NOT_INSTALLED:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.set_exception_handler(previous_handler)
+
+
 def _notify_lora_library_changed() -> None:
     _LORA_LIBRARY_EVENTS.notify()
 
@@ -86,10 +139,14 @@ def _notify_wildcard_library_changed() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    previous_asyncio_handler = _install_asyncio_connection_lost_filter()
     ensure_gallery_schema(settings)
     inference.sync_gallery()
     inference.start_gallery_color_cache_rebuild()
-    yield
+    try:
+        yield
+    finally:
+        _restore_asyncio_exception_handler(previous_asyncio_handler)
 
 
 app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
@@ -570,6 +627,24 @@ def _is_local_request(request: Request) -> bool:
     if client is None:
         return False
     return str(client.host or "").strip().lower() in _LOCALHOST_CLIENT_HOSTS
+
+
+def _is_local_source_header(raw_value: str | None) -> bool:
+    value = str(raw_value or "").strip()
+    if not value:
+        return True
+    parsed = urlparse(value)
+    host = str(parsed.hostname or "").strip().lower()
+    return bool(host) and host in _LOCALHOST_CLIENT_HOSTS
+
+
+def _is_local_server_control_request(request: Request) -> bool:
+    if not _is_local_request(request):
+        return False
+    origin = request.headers.get("origin")
+    if origin:
+        return _is_local_source_header(origin)
+    return _is_local_source_header(request.headers.get("referer"))
 
 
 @app.get("/health")
@@ -1325,16 +1400,22 @@ def gallery_import(
 
 @app.post("/server/kill")
 def server_kill(request: Request, background_tasks: BackgroundTasks) -> dict:
-    if not _is_local_request(request):
-        raise HTTPException(status_code=403, detail="Server shutdown is allowed from the local machine only.")
+    if not _is_local_server_control_request(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Server shutdown is allowed from the local machine and local app origin only.",
+        )
     background_tasks.add_task(_shutdown_server_process)
     return {"status": "ok", "message": "Server shutdown initiated."}
 
 
 @app.post("/server/restart")
 def server_restart(request: Request, background_tasks: BackgroundTasks) -> dict:
-    if not _is_local_request(request):
-        raise HTTPException(status_code=403, detail="Server restart is allowed from the local machine only.")
+    if not _is_local_server_control_request(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Server restart is allowed from the local machine and local app origin only.",
+        )
     background_tasks.add_task(_restart_server_process)
     return {"status": "ok", "message": "Server restart initiated."}
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from PIL import Image
@@ -9,7 +10,28 @@ from app.core.backends.diffusers_zimage import (
     DiffusersZImageBackend,
     VramPreflightResult,
 )
-from app.core.worker.types import GenerationRequest
+from app.core.worker.types import GenerationRequest, LoraSelection
+
+
+class _NamedContext:
+    def __init__(self, probe, name: str) -> None:
+        self._probe = probe
+        self._name = name
+
+    def __enter__(self):
+        self._probe.active = self._name
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self._probe.active = None
+
+
+class _ContextProbe:
+    def __init__(self) -> None:
+        self.active: str | None = None
+
+    def context(self, name: str) -> _NamedContext:
+        return _NamedContext(self, name)
 
 
 def _make_backend(profile_name: str = "high") -> DiffusersZImageBackend:
@@ -249,3 +271,54 @@ def test_generate_preflight_keeps_full_cuda_when_guard_passes(monkeypatch) -> No
     assert result.preflight_cleanup_attempted is False
     assert result.preflight_passed_after_cleanup is True
     assert result.preflight_fallback_triggered is False
+
+
+def test_generate_loads_loras_before_forward_context(monkeypatch) -> None:
+    backend = _make_backend("high")
+    backend._effective_execution_mode = "full_cuda"
+    backend._initial_execution_mode = "full_cuda"
+    probe = _ContextProbe()
+    events: list[str] = []
+
+    class FakePipe:
+        def __call__(self, **kwargs):
+            assert probe.active == "forward"
+            events.append("pipe")
+            return SimpleNamespace(images=[Image.new("RGB", (32, 32), color=(40, 50, 60))])
+
+    fake_pipe = FakePipe()
+    fake_loaded = SimpleNamespace(pipeline=fake_pipe, device="cuda")
+    monkeypatch.setattr(backend, "_ensure_loaded", lambda: fake_loaded)
+    monkeypatch.setattr(backend, "_apply_scheduler_mode", lambda pipe, mode: mode)
+    monkeypatch.setattr(
+        backend,
+        "_resolve_effective_prompt",
+        lambda **kwargs: (kwargs["prompt"], kwargs["prompt"], False),
+    )
+    monkeypatch.setattr(backend, "_build_generator", lambda *args, **kwargs: None)
+    monkeypatch.setattr(backend, "_apply_high_runtime_fallback_if_needed", lambda **kwargs: None)
+    monkeypatch.setattr(
+        backend,
+        "_run_vram_preflight",
+        lambda _torch: VramPreflightResult(True, False, True, True, 13 * 1024**3, 13 * 1024**3, 12 * 1024**3),
+    )
+    monkeypatch.setattr(backend, "_cuda_free_total_snapshot", lambda _torch: (13 * 1024**3, 24 * 1024**3))
+    monkeypatch.setattr(backend, "_pipeline_forward_context", lambda torch_module, pipe: probe.context("forward"))
+
+    def fake_load_lora_adapters(pipe, loras):
+        assert probe.active is None
+        events.append("load_lora")
+
+    monkeypatch.setattr(backend, "_load_lora_adapters", fake_load_lora_adapters)
+    monkeypatch.setattr(backend, "_clear_lora_adapters", lambda pipe, adapter_names=None: events.append("clear_lora"))
+
+    request = GenerationRequest(
+        prompt="test",
+        width=32,
+        height=32,
+        seed=1,
+        loras=(LoraSelection(id="test-lora", path=Path("test-lora.safetensors")),),
+    )
+    backend.generate(request)
+
+    assert events == ["load_lora", "pipe", "clear_lora"]

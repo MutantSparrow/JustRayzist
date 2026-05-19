@@ -99,3 +99,22 @@ def test_build_qwen_pipeline_loads_only_tokenizer_and_text_encoder(
     if expected_gguf_file is not None:
         expected_encoder_call["gguf_file"] = expected_gguf_file
     assert encoder_calls == [expected_encoder_call]
+
+
+def test_text_encoder_config_prefers_dtype_over_torch_dtype() -> None:
+    class Config:
+        dtype = None
+
+        @property
+        def torch_dtype(self):
+            return None
+
+        @torch_dtype.setter
+        def torch_dtype(self, value):
+            raise AssertionError("deprecated torch_dtype setter should not be used")
+
+    config = Config()
+
+    qwen_module._set_transformers_config_dtype(config, torch.bfloat16)
+
+    assert config.dtype == torch.bfloat16

@@ -2,9 +2,9 @@
 
 ![JustRayzist gallery overview](readme_images/gallery_view.png)
 
-JustRayzist is a local-first image generation app built around the Rayzist Z-Image Turbo fine-tune. It ships a FastAPI backend, a browser UI, a Typer CLI, bundled launch scripts, model-pack metadata, and supporting workflows for gallery management, LoRA libraries, wildcard libraries, Rayzist Chat, prompt enhancement, and x2 SeedVR2 upscaling.
+JustRayzist is a local-first image generation app for the Rayzist Z-Image Turbo fine-tune. It ships a FastAPI backend, browser UI, Typer CLI, launch scripts, model-pack metadata, and workflows for gallery management, LoRA libraries, wildcard libraries, Rayzist Chat, prompt enhancement, and x2 SeedVR2 upscaling.
 
-The project is designed to run offline after setup. Normal user flows stay on a stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking the user to pick a memory mode on startup.
+After setup, the app is designed to run offline. Normal user flows stay on the stable `balanced` runtime baseline while the app auto-detects an internal `resource_tier` (`high`, `balanced`, or `constrained`) from current free VRAM and adjusts execution strategy without asking users to choose a memory mode at startup.
 
 ## New in v1.8.7
 
@@ -18,18 +18,18 @@ The project is designed to run offline after setup. Normal user flows stay on a 
 
 ## Features
 
-- Local web UI, local API, and CLI in one repository.
+- Local web UI, API, and CLI in one repository.
 - Rayzist Chat with per-client history, documentation-grounded help, prompt actions, generation actions, and API links.
 - Auto resource-tier detection with stable normal-user defaults.
-- Model-pack based runtime with public, hidden, disabled, and derived runtime pack behavior.
+- Model-pack runtime with public, hidden, disabled, and derived runtime pack behavior.
 - Multi-LoRA workflow with draft upload, trigger detection, thumbnails, and per-request weights.
 - Wildcard library with editable prompt tokens and encoder-assisted suggestion generation.
-- Gallery indexing with favorites, dominant-color filters, bulk download, rebuild, and import-from-source support.
+- Gallery indexing with favorites, dominant-color filters, bulk download, rebuild, and import support.
 - Prompt enhancement and Creative Mode (`procedural_creativity` values `0-3`).
 - `R+` alternate staged inference mode with vibrance and bias controls.
 - Content-aware x2 upscale with photo or illustration routing, tiled seam repair, and photo-only FS finishing.
-- Source-mode launchers for Windows, Linux, and macOS.
-- Windows packaging and in-place packaged update flow.
+- Source launchers for Windows, Linux, and macOS.
+- Windows packaging and in-place update flow.
 
 ![Creative Mode example](readme_images/extra_creative_mode.png)
 
@@ -204,7 +204,7 @@ Key API behavior:
 - `scheduler_mode` remains optional for raw API and CLI usage.
 - `GET /health` and `GET /config` report both `runtime_profile` and `resource_tier`.
 - `GET /model-packs` returns public enabled packs only.
-- `POST /server/kill` and `POST /server/restart` are restricted to the local machine hosting the app.
+- `POST /server/kill` and `POST /server/restart` require the local host plus a local app origin when sent from a browser.
 
 <!-- BEGIN GENERATED API ROUTES -->
 - `GET /health`
@@ -1004,7 +1004,7 @@ Sample response:
 
 ### `POST /clarity`
 
-Run the multiband clarity pipeline on one gallery image and return it at the original size.
+Run the fast FS clarity pipeline on one gallery image and return it at the original size.
 
 Requires `X-JustRayzist-Client`.
 
@@ -1028,7 +1028,7 @@ Sample response:
   "filename": "justrayzist_YYYYMMDD_hhmmss_002.png",
   "mode": "api_clarity",
   "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-  "clarity_engine": "multiband_chroma_edgeaware_fs_unsharp_downscale",
+  "clarity_engine": "fs_unsharp_downscale",
   "working_width": 2048,
   "working_height": 2048,
   "duration_ms": 16789,
@@ -1131,7 +1131,7 @@ Common issues:
 - macOS support is source-mode only and not guaranteed to be accelerated.
 - Native FP8 inference is not implemented; only derived FP8 storage behavior exists for constrained conditions.
 - Large-model local inference still depends heavily on GPU VRAM and system RAM.
-- The shutdown endpoint is intentionally local-only; remote LAN clients cannot stop the host process.
+- Server shutdown and restart endpoints are intentionally local-only; remote LAN clients and foreign browser origins cannot stop or restart the host process.
 
 ## Contributing
 

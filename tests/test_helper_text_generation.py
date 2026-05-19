@@ -17,6 +17,33 @@ class _HelperTokenizer:
         return "decoded text"
 
 
+class _NamedContext:
+    def __init__(self, probe, name: str) -> None:
+        self._probe = probe
+        self._name = name
+
+    def __enter__(self):
+        self._probe.active = self._name
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self._probe.active = None
+
+
+class _TorchContextProbe:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.active: str | None = None
+
+    def inference_mode(self):
+        self.calls.append("inference_mode")
+        return _NamedContext(self, "inference_mode")
+
+    def no_grad(self):
+        self.calls.append("no_grad")
+        return _NamedContext(self, "no_grad")
+
+
 def _make_backend(temp_app_paths, make_app_settings) -> DiffusersZImageBackend:
     settings = make_app_settings(paths=temp_app_paths)
     model_pack = SimpleNamespace(name="Rayzist_bf16", base_name="Rayzist_bf16")
@@ -541,6 +568,90 @@ def test_zimage_prompt_enhancement_delegates_to_qwen_runtime(monkeypatch, temp_a
         "prompt": "portrait",
         "seed": 9,
     }
+
+
+def test_pipeline_forward_context_uses_no_grad_for_accelerate_hooks() -> None:
+    probe = _TorchContextProbe()
+    pipe = SimpleNamespace(transformer=SimpleNamespace(_hf_hook=object()))
+
+    with DiffusersZImageBackend._pipeline_forward_context(probe, pipe):
+        assert probe.active == "no_grad"
+
+    assert probe.calls == ["no_grad"]
+
+
+def test_qwen_forward_context_uses_no_grad_for_accelerate_hooks() -> None:
+    probe = _TorchContextProbe()
+    text_encoder = SimpleNamespace(_hf_hook=object())
+
+    with DiffusersQwenInference._module_forward_context(probe, text_encoder):
+        assert probe.active == "no_grad"
+
+    assert probe.calls == ["no_grad"]
+
+
+def test_forward_context_uses_inference_mode_without_accelerate_hooks() -> None:
+    probe = _TorchContextProbe()
+
+    with DiffusersZImageBackend._pipeline_forward_context(probe, SimpleNamespace(transformer=SimpleNamespace())):
+        assert probe.active == "inference_mode"
+
+    assert probe.calls == ["inference_mode"]
+
+
+def test_img2img_prepare_latents_encodes_with_vae_dtype_when_prompt_dtype_differs() -> None:
+    records: dict[str, torch.dtype] = {}
+
+    class _LatentDist:
+        def __init__(self, tensor: torch.Tensor) -> None:
+            self._tensor = tensor
+
+        def sample(self, generator=None) -> torch.Tensor:
+            return self._tensor
+
+    class _FakeVae:
+        dtype = torch.float32
+        config = SimpleNamespace(shift_factor=0.0, scaling_factor=1.0)
+
+        def encode(self, image: torch.Tensor) -> SimpleNamespace:
+            records["encode_dtype"] = image.dtype
+            latent = torch.zeros(
+                (image.shape[0], 16, 4, 4),
+                dtype=image.dtype,
+                device=image.device,
+            )
+            return SimpleNamespace(latent_dist=_LatentDist(latent))
+
+    class _FakeScheduler:
+        def scale_noise(self, image_latents: torch.Tensor, timestep: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
+            records["image_latents_dtype"] = image_latents.dtype
+            records["noise_dtype"] = noise.dtype
+            return image_latents + noise.to(dtype=image_latents.dtype)
+
+    pipe = SimpleNamespace(
+        prepare_latents=lambda *args, **kwargs: None,
+        vae=_FakeVae(),
+        scheduler=_FakeScheduler(),
+        vae_scale_factor=8,
+    )
+
+    DiffusersZImageBackend._patch_img2img_prepare_latents_vae_dtype(pipe, torch)
+    latents = pipe.prepare_latents(
+        torch.zeros((1, 3, 32, 32), dtype=torch.float32),
+        torch.tensor([1.0]),
+        1,
+        16,
+        32,
+        32,
+        torch.bfloat16,
+        "cpu",
+        None,
+    )
+
+    assert records["encode_dtype"] == torch.float32
+    assert records["image_latents_dtype"] == torch.float32
+    assert records["noise_dtype"] == torch.bfloat16
+    assert latents.dtype == torch.float32
 
 
 def test_refine_image_uses_effective_prompt_for_img2img(monkeypatch, temp_app_paths, make_app_settings) -> None:

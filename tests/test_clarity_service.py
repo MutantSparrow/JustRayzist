@@ -6,10 +6,9 @@ import pytest
 from PIL import Image
 
 from app.api.inference_service import InferenceService
+from app.core.clarity import CLARITY_ENGINE_NAME, ClarityResult
 from app.core.deblur import (
-    DEFAULT_CLARITY_ENGINE_NAME,
     DEFAULT_UPSCALE_ENGINE_NAME,
-    DefaultClarityResult,
     DefaultUpscaleResult,
 )
 
@@ -34,35 +33,21 @@ def test_inference_clarity_persists_lineage(monkeypatch, temp_app_paths, make_ap
             "model_pack": "Rayzist_bf16",
         },
     )
+    monkeypatch.setattr(service, "_resolve_runtime_pack", lambda *args, **kwargs: pytest.fail("model pack not needed"))
+    monkeypatch.setattr(service, "_session_for_pack", lambda *args, **kwargs: pytest.fail("session not needed"))
     monkeypatch.setattr(
-        service,
-        "_resolve_runtime_pack",
-        lambda pack_name, apply_resource_tier_policy=True: (
-            SimpleNamespace(name="Rayzist_bf16"),
-            SimpleNamespace(name="Rayzist_bf16"),
-            settings.runtime_profile,
-        ),
-    )
-    monkeypatch.setattr(service, "_session_for_pack", lambda model_pack, resource_tier: object())
-    monkeypatch.setattr(
-        "app.api.inference_service.run_default_clarity_pipeline",
-        lambda **kwargs: DefaultClarityResult(
+        "app.api.inference_service.run_clarity_pipeline",
+        lambda **kwargs: ClarityResult(
             image=Image.new("RGB", (320, 240), color=(80, 100, 140)),
             duration_ms=456,
             source_width=320,
             source_height=240,
             working_width=640,
             working_height=480,
-            engine_name=DEFAULT_CLARITY_ENGINE_NAME,
-            variant_label="multiband_chroma_edgeaware_fs_unsharp_shrink",
-            seed=999,
+            engine_name=CLARITY_ENGINE_NAME,
+            variant_label="current",
             device="cpu",
             step_timings_ms={
-                "fidelity_seed_ms": 11,
-                "fidelity_img2img_ms": 22,
-                "clarity_multiband_ms": 1,
-                "clarity_chroma_ms": 2,
-                "clarity_edgeaware_ms": 3,
                 "clarity_fs_ms": 4,
                 "clarity_downscale_ms": 7,
                 "clarity_pre_downscale_unsharp_ms": 8,
@@ -96,18 +81,18 @@ def test_inference_clarity_persists_lineage(monkeypatch, temp_app_paths, make_ap
     assert metadata["source_height"] == 240
     assert metadata["working_width"] == 640
     assert metadata["working_height"] == 480
-    assert metadata["clarity_engine"] == DEFAULT_CLARITY_ENGINE_NAME
-    assert metadata["clarity_variant"] == "multiband_chroma_edgeaware_fs_unsharp_shrink"
-    assert metadata["fidelity_seed_ms"] == 11
-    assert metadata["clarity_edgeaware_ms"] == 3
+    assert metadata["clarity_engine"] == CLARITY_ENGINE_NAME
+    assert metadata["clarity_variant"] == "current"
     assert metadata["clarity_fs_ms"] == 4
     assert metadata["clarity_unsharp_stage"] == "pre_downscale"
+    assert metadata["model_pack"] == "Rayzist_bf16"
+    assert metadata["resource_tier"] == settings.runtime_profile.name
     assert result["mode"] == "api_clarity"
     assert result["source_filename"] == "source.png"
     assert result["working_width"] == 640
     assert result["working_height"] == 480
-    assert result["clarity_engine"] == DEFAULT_CLARITY_ENGINE_NAME
-    assert result["clarity_variant"] == "multiband_chroma_edgeaware_fs_unsharp_shrink"
+    assert result["clarity_engine"] == CLARITY_ENGINE_NAME
+    assert result["clarity_variant"] == "current"
 
 
 def test_inference_clarity_bubbles_missing_model_error(monkeypatch, temp_app_paths, make_app_settings) -> None:
@@ -130,23 +115,15 @@ def test_inference_clarity_bubbles_missing_model_error(monkeypatch, temp_app_pat
         },
     )
 
-    monkeypatch.setattr(
-        service,
-        "_resolve_runtime_pack",
-        lambda pack_name, apply_resource_tier_policy=True: (
-            SimpleNamespace(name="Rayzist_bf16"),
-            SimpleNamespace(name="Rayzist_bf16"),
-            settings.runtime_profile,
-        ),
-    )
-    monkeypatch.setattr(service, "_session_for_pack", lambda model_pack, resource_tier: object())
+    monkeypatch.setattr(service, "_resolve_runtime_pack", lambda *args, **kwargs: pytest.fail("model pack not needed"))
+    monkeypatch.setattr(service, "_session_for_pack", lambda *args, **kwargs: pytest.fail("session not needed"))
 
     def fail_pipeline(**kwargs):
-        raise RuntimeError("unexpected legacy clarity model dependency")
+        raise RuntimeError("clarity failed")
 
-    monkeypatch.setattr("app.api.inference_service.run_default_clarity_pipeline", fail_pipeline)
+    monkeypatch.setattr("app.api.inference_service.run_clarity_pipeline", fail_pipeline)
 
-    with pytest.raises(RuntimeError, match="unexpected legacy clarity model dependency"):
+    with pytest.raises(RuntimeError, match="clarity failed"):
         service.clarity(owner_id="example-client", filename="source.png")
 
 
