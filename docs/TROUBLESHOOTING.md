@@ -51,6 +51,19 @@ $headers = @{ "X-JustRayzist-Client" = "desktop-client" }
 Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:37717/images" -Headers $headers
 ```
 
+## Server shutdown or restart returns 403
+
+Cause:
+
+- `/server/kill` and `/server/restart` are allowed only from the machine hosting the app
+- browser requests must also come from a local app origin such as `http://127.0.0.1:37717`
+
+Actions:
+
+- open the app from the local URL printed by the launcher
+- use the host machine directly for shutdown or restart
+- do not expose these routes as remote LAN controls
+
 ## CUDA is not detected
 
 Check:

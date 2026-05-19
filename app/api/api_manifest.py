@@ -620,7 +620,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ApiExample(
         method="POST",
         path="/clarity",
-        description="Run the multiband clarity pipeline on one gallery image and return it at the original size.",
+        description="Run the fast FS clarity pipeline on one gallery image and return it at the original size.",
         requires_client=True,
         request={
             "job_id": "pending_clarity_1712345678901_abcd1234",
@@ -634,7 +634,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
             "filename": "justrayzist_YYYYMMDD_hhmmss_002.png",
             "mode": "api_clarity",
             "source_filename": "justrayzist_YYYYMMDD_hhmmss_000.png",
-            "clarity_engine": "multiband_chroma_edgeaware_fs_unsharp_downscale",
+            "clarity_engine": "fs_unsharp_downscale",
             "working_width": 2048,
             "working_height": 2048,
             "duration_ms": 16789,
@@ -793,7 +793,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ApiExample(
         method="POST",
         path="/server/kill",
-        description="Request local server shutdown from the same machine that is hosting the app.",
+        description="Request local server shutdown from the hosting machine and local app origin.",
         requires_client=False,
         request={},
         response={"status": "ok", "message": "Server shutdown initiated."},
@@ -802,7 +802,7 @@ API_EXAMPLES: tuple[ApiExample, ...] = (
     ApiExample(
         method="POST",
         path="/server/restart",
-        description="Request local server restart on the same bind host and port so code changes are picked up.",
+        description="Request local server restart from the hosting machine and local app origin.",
         requires_client=False,
         request={},
         response={"status": "ok", "message": "Server restart initiated."},

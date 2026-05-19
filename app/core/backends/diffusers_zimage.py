@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import math
 import re
@@ -936,6 +935,7 @@ class DiffusersZImageBackend:
 
         try:
             from diffusers import ZImageImg2ImgPipeline
+            import torch
         except ImportError as exc:
             raise ImportError(
                 "Installed diffusers build is missing ZImageImg2ImgPipeline. "
@@ -953,6 +953,7 @@ class DiffusersZImageBackend:
         )
         if hasattr(pipe, "set_progress_bar_config"):
             pipe.set_progress_bar_config(disable=True)
+        self._patch_img2img_prepare_latents_vae_dtype(pipe, torch)
 
         if loaded.device == "cuda":
             target_mode = self._effective_execution_mode
@@ -975,6 +976,124 @@ class DiffusersZImageBackend:
                 torch_module.cuda.empty_cache()
         except Exception:
             pass
+
+    @staticmethod
+    def _module_has_accelerate_hook(module: Any) -> bool:
+        if module is None:
+            return False
+        if hasattr(module, "_hf_hook"):
+            return True
+        iter_modules = getattr(module, "modules", None)
+        if not callable(iter_modules):
+            return False
+        try:
+            return any(hasattr(child, "_hf_hook") for child in iter_modules())
+        except Exception:
+            return False
+
+    @classmethod
+    def _pipe_has_accelerate_hooks(cls, pipe: Any) -> bool:
+        components = getattr(pipe, "components", None)
+        if isinstance(components, dict):
+            candidates = components.values()
+        else:
+            candidates = (
+                getattr(pipe, "transformer", None),
+                getattr(pipe, "text_encoder", None),
+                getattr(pipe, "vae", None),
+            )
+        return any(cls._module_has_accelerate_hook(component) for component in candidates)
+
+    @classmethod
+    def _pipeline_forward_context(cls, torch_module: Any, pipe: Any) -> Any:
+        if cls._pipe_has_accelerate_hooks(pipe):
+            return torch_module.no_grad()
+        return torch_module.inference_mode()
+
+    @staticmethod
+    def _module_floating_dtype(module: Any) -> Any | None:
+        if module is None:
+            return None
+        module_dtype = getattr(module, "dtype", None)
+        if module_dtype is not None:
+            return module_dtype
+        for iter_values_name in ("parameters", "buffers"):
+            iter_values = getattr(module, iter_values_name, None)
+            if not callable(iter_values):
+                continue
+            try:
+                for value in iter_values():
+                    if getattr(value, "is_floating_point", lambda: False)():
+                        return getattr(value, "dtype", None)
+            except Exception:
+                continue
+        return None
+
+    @classmethod
+    def _patch_img2img_prepare_latents_vae_dtype(cls, pipe: Any, torch_module: Any) -> None:
+        if getattr(pipe, "_rayzist_img2img_vae_dtype_patch", False):
+            return
+        original_prepare_latents = getattr(pipe, "prepare_latents", None)
+        if not callable(original_prepare_latents):
+            return
+
+        try:
+            from diffusers.pipelines.z_image.pipeline_z_image_img2img import retrieve_latents
+            from diffusers.utils.torch_utils import randn_tensor
+        except Exception:
+            return
+
+        def prepare_latents(
+            image: Any,
+            timestep: Any,
+            batch_size: int,
+            num_channels_latents: int,
+            height: int,
+            width: int,
+            dtype: Any,
+            device: Any,
+            generator: Any,
+            latents: Any = None,
+        ) -> Any:
+            height = 2 * (int(height) // (pipe.vae_scale_factor * 2))
+            width = 2 * (int(width) // (pipe.vae_scale_factor * 2))
+            shape = (batch_size, num_channels_latents, height, width)
+
+            if latents is not None:
+                return latents.to(device=device, dtype=dtype)
+
+            if image.shape[1] != num_channels_latents:
+                vae_dtype = cls._module_floating_dtype(getattr(pipe, "vae", None)) or dtype
+                image = image.to(device=device, dtype=vae_dtype)
+                if isinstance(generator, list):
+                    image_latents = [
+                        retrieve_latents(pipe.vae.encode(image[i : i + 1]), generator=generator[i])
+                        for i in range(image.shape[0])
+                    ]
+                    image_latents = torch_module.cat(image_latents, dim=0)
+                else:
+                    image_latents = retrieve_latents(pipe.vae.encode(image), generator=generator)
+
+                image_latents = (
+                    image_latents - pipe.vae.config.shift_factor
+                ) * pipe.vae.config.scaling_factor
+            else:
+                image_latents = image.to(device=device, dtype=dtype)
+
+            if batch_size > image_latents.shape[0] and batch_size % image_latents.shape[0] == 0:
+                additional_image_per_prompt = batch_size // image_latents.shape[0]
+                image_latents = torch_module.cat([image_latents] * additional_image_per_prompt, dim=0)
+            elif batch_size > image_latents.shape[0] and batch_size % image_latents.shape[0] != 0:
+                raise ValueError(
+                    f"Cannot duplicate `image` of batch size {image_latents.shape[0]} to {batch_size} text prompts."
+                )
+
+            noise = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+            return pipe.scheduler.scale_noise(image_latents, timestep, noise)
+
+        setattr(pipe, "_rayzist_original_prepare_latents", original_prepare_latents)
+        setattr(pipe, "prepare_latents", prepare_latents)
+        setattr(pipe, "_rayzist_img2img_vae_dtype_patch", True)
 
     @staticmethod
     def _build_generator(torch_module: Any, device: str, seed: int | None) -> Any:
@@ -3181,7 +3300,7 @@ class DiffusersZImageBackend:
         loaded_adapter_names = self._list_loaded_lora_adapters(pipe)
         conflicting_adapter_names = [name for name in adapter_names if name in loaded_adapter_names]
         if conflicting_adapter_names:
-            LOGGER.info(
+            LOGGER.debug(
                 "Clearing stale LoRA adapters before reload ids=%s",
                 conflicting_adapter_names,
             )
@@ -3203,7 +3322,7 @@ class DiffusersZImageBackend:
                     list(prepared_state.dropped_keys),
                 )
             if prepared_state.format_label != "diffusers-native":
-                LOGGER.info(
+                LOGGER.debug(
                     "Detected %s LoRA format for '%s'; converting locally to diffusers format.",
                     prepared_state.format_label,
                     lora.id,
@@ -3241,7 +3360,7 @@ class DiffusersZImageBackend:
             prepared_states_by_adapter,
             dict(zip(adapter_names, adapter_weights, strict=False)),
         )
-        LOGGER.info(
+        LOGGER.debug(
             "Activating LoRAs ids=%s weights=%s formats=%s runtime_path=%s",
             adapter_names,
             adapter_weights,
@@ -3282,7 +3401,13 @@ class DiffusersZImageBackend:
                 pass
         self._revert_lora_direct_deltas(pipe, adapter_names=adapter_names)
         try:
-            pipe.unfuse_lora(components=["transformer"])
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"Already unmerged\. Nothing to do\.",
+                    category=UserWarning,
+                )
+                pipe.unfuse_lora(components=["transformer"])
         except Exception:
             pass
         target_names = list(adapter_names or [])
@@ -3334,7 +3459,7 @@ class DiffusersZImageBackend:
         generator: Any,
         torch_module: Any,
     ) -> Image.Image:
-        with torch_module.inference_mode():
+        with self._pipeline_forward_context(torch_module, pipe):
             output = pipe(
                 prompt=prompt,
                 image=image,
@@ -3725,9 +3850,9 @@ class DiffusersZImageBackend:
         started = now_perf()
         rplus_telemetry: dict[str, Any] = {}
         try:
-            with torch.inference_mode():
-                if request.loras:
-                    self._load_lora_adapters(pipe, request.loras)
+            if request.loras:
+                self._load_lora_adapters(pipe, request.loras)
+            with self._pipeline_forward_context(torch, pipe):
                 setattr(pipe, "_interrupt", False)
                 if inference_process == self._INFERENCE_PROCESS_RPLUS:
                     image, rplus_telemetry = self._run_rplus_generate(

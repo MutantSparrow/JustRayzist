@@ -115,6 +115,26 @@ class DiffusersQwenInference:
     def encoder_label(self) -> str:
         return self._encoder_label
 
+    @staticmethod
+    def _module_has_accelerate_hook(module: Any) -> bool:
+        if module is None:
+            return False
+        if hasattr(module, "_hf_hook"):
+            return True
+        iter_modules = getattr(module, "modules", None)
+        if not callable(iter_modules):
+            return False
+        try:
+            return any(hasattr(child, "_hf_hook") for child in iter_modules())
+        except Exception:
+            return False
+
+    @classmethod
+    def _module_forward_context(cls, torch_module: Any, module: Any) -> Any:
+        if cls._module_has_accelerate_hook(module):
+            return torch_module.no_grad()
+        return torch_module.inference_mode()
+
     def _pipe_view(self) -> SimpleNamespace:
         return SimpleNamespace(tokenizer=self._tokenizer, text_encoder=self._text_encoder)
 
@@ -1310,7 +1330,7 @@ class DiffusersQwenInference:
                 fallback_encoded = self._move_encoded_to_module_device(encoded, text_encoder)
                 fallback_kwargs = self._build_generate_fallback_kwargs(text_encoder, generate_kwargs)
                 with self._seeded_rng_context(torch_module, generation_seed):
-                    with torch_module.inference_mode():
+                    with self._module_forward_context(torch_module, text_encoder):
                         output_ids = text_encoder.generate(**fallback_encoded, **fallback_kwargs)
             except Exception as exc:
                 LOGGER.warning(
@@ -1565,7 +1585,7 @@ class DiffusersQwenInference:
                 fallback_encoded = self._move_encoded_to_module_device(encoded, text_encoder)
                 fallback_kwargs = self._build_generate_fallback_kwargs(text_encoder, generate_kwargs)
                 with self._seeded_rng_context(torch_module, enhancement_seed):
-                    with torch_module.inference_mode():
+                    with self._module_forward_context(torch_module, text_encoder):
                         output_ids = text_encoder.generate(**fallback_encoded, **fallback_kwargs)
             except Exception as exc:
                 LOGGER.warning(
@@ -1612,7 +1632,7 @@ class DiffusersQwenInference:
         generated = input_ids
         embed_weight = embed_layer.weight
 
-        with torch_module.inference_mode():
+        with DiffusersQwenInference._module_forward_context(torch_module, text_encoder):
             try:
                 forward_params = inspect.signature(text_encoder.forward).parameters
             except Exception:

@@ -38,6 +38,23 @@ def test_highres_auto_still_forces_tiling_for_balanced_moderate_images() -> None
     assert {attempt.vae_decode_tile_overlap for attempt in attempts} == {256}
 
 
+def test_default_attempt_timeout_gives_highres_seedvr2_more_than_sixty_seconds(monkeypatch) -> None:
+    monkeypatch.delenv(seedvr2_core.SEEDVR2_ATTEMPT_TIMEOUT_ENV, raising=False)
+
+    assert seedvr2_core._resolve_attempt_timeout_seconds(
+        seedvr2_core.SEEDVR2_DEFAULT_TIMEOUT_SECONDS,
+        1024,
+    ) == 75
+    assert seedvr2_core._resolve_attempt_timeout_seconds(
+        seedvr2_core.SEEDVR2_DEFAULT_TIMEOUT_SECONDS,
+        3072,
+    ) == 120
+    assert seedvr2_core._resolve_attempt_timeout_seconds(
+        seedvr2_core.SEEDVR2_DEFAULT_TIMEOUT_SECONDS,
+        4096,
+    ) == 180
+
+
 def test_constrained_profile_uses_decode_overlap_table_while_encode_stays_128() -> None:
     attempts = seedvr2_core._attempts_for_profile(
         "constrained",

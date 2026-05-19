@@ -438,7 +438,7 @@ def test_load_lora_adapters_always_passes_state_dict_payload(monkeypatch, caplog
         },
     )
 
-    with caplog.at_level("INFO"):
+    with caplog.at_level("DEBUG"):
         backend._load_lora_adapters(pipe, (lora,))
 
     assert len(pipe.load_calls) == 1
@@ -678,7 +678,7 @@ def test_load_lora_adapters_clears_stale_conflicting_adapter_names_before_reload
         },
     )
 
-    with caplog.at_level("INFO"):
+    with caplog.at_level("DEBUG"):
         backend._load_lora_adapters(pipe, (lora,))
 
     assert pipe.delete_calls == [["natalia-lora"]]
@@ -743,7 +743,7 @@ def test_load_lora_adapters_converts_lora_unet_keys_to_diffusers(monkeypatch, ca
         },
     )
 
-    with caplog.at_level("INFO"):
+    with caplog.at_level("DEBUG"):
         backend._load_lora_adapters(pipe, (lora,))
 
     assert len(pipe.load_calls) == 1
@@ -820,6 +820,11 @@ class _FakeOtherWarningPipe(_FakeLoraPipe):
         warnings.warn("some other loader warning", UserWarning, stacklevel=1)
 
 
+class _FakeUnmergedWarningPipe(_FakeLoraPipe):
+    def unfuse_lora(self, **kwargs) -> None:
+        warnings.warn("Already unmerged. Nothing to do.", UserWarning, stacklevel=1)
+
+
 def test_load_lora_adapters_suppresses_expected_peft_multi_adapter_warning(monkeypatch) -> None:
     backend = object.__new__(DiffusersZImageBackend)
     pipe = _FakeMultiAdapterWarningPipe()
@@ -873,6 +878,20 @@ def test_load_lora_adapters_does_not_suppress_unrelated_warnings(monkeypatch) ->
 
     with pytest.warns(UserWarning, match="some other loader warning"):
         backend._load_lora_adapters(pipe, (lora,))
+
+
+def test_clear_lora_adapters_suppresses_expected_unmerged_warning() -> None:
+    backend = object.__new__(DiffusersZImageBackend)
+    pipe = _FakeUnmergedWarningPipe()
+    pipe.loaded_adapters.add("style-one")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        backend._clear_lora_adapters(pipe, adapter_names=["style-one"])
+
+    assert not any("Already unmerged. Nothing to do." in str(item.message) for item in caught)
+
+
 def test_gallery_sync_persists_lora_metadata(monkeypatch, workspace_tmp_path: Path) -> None:
     root = workspace_tmp_path / "gallery-lora-metadata"
     monkeypatch.setenv("JUSTRAYZIST_ROOT", str(root))

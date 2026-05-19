@@ -1294,12 +1294,12 @@ def serve(
     verbose_logs: bool = typer.Option(
         False,
         "--verbose-logs/--quiet-logs",
-        help="Enable verbose HTTP access/dependency logs. Default is quiet logs.",
+        help="Enable debug app logs plus verbose HTTP access/dependency logs. Default is quiet logs.",
     ),
 ) -> None:
     import uvicorn
 
-    configure_logging(verbose_logs=verbose_logs)
+    configure_logging(level="DEBUG" if verbose_logs else None, verbose_logs=verbose_logs)
     resolved_settings = load_settings()
     os.environ["JUSTRAYZIST_ROOT"] = str(resolved_settings.paths.root_dir)
     os.environ["JUSTRAYZIST_SERVER_HOST"] = host

@@ -18,6 +18,29 @@ def _png_bytes(size: tuple[int, int] = (32, 32)) -> bytes:
     return buffer.getvalue()
 
 
+def test_asyncio_connection_lost_reset_context_is_suppressed() -> None:
+    context = {
+        "exception": ConnectionResetError(10054, "reset by peer"),
+        "handle": "<Handle _ProactorBasePipeTransport._call_connection_lost(None)>",
+    }
+
+    assert api_main._should_suppress_asyncio_connection_lost(context) is True
+
+
+def test_asyncio_connection_lost_filter_keeps_unrelated_errors() -> None:
+    reset_context = {
+        "exception": ConnectionResetError(10054, "reset by peer"),
+        "handle": "<Handle unrelated_callback(None)>",
+    }
+    runtime_context = {
+        "exception": RuntimeError("boom"),
+        "handle": "<Handle _ProactorBasePipeTransport._call_connection_lost(None)>",
+    }
+
+    assert api_main._should_suppress_asyncio_connection_lost(reset_context) is False
+    assert api_main._should_suppress_asyncio_connection_lost(runtime_context) is False
+
+
 def test_generate_route_requires_client_header() -> None:
     client = TestClient(api_main.app)
     response = client.post(

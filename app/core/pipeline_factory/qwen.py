@@ -118,7 +118,7 @@ def _load_text_encoder_state_dict_if_fp8(
         state_dict,
         dtype=dtype,
     )
-    LOGGER.info(
+    LOGGER.debug(
         "Converted %d FP8 text encoder tensors to %s for runtime load.",
         converted_count,
         dtype,
@@ -139,6 +139,14 @@ def _instantiate_text_encoder_from_config(model_cls: Any, config: Any) -> Any:
             return model_cls.from_config(config)
 
 
+def _set_transformers_config_dtype(config: Any, dtype: Any) -> None:
+    if hasattr(config, "dtype"):
+        config.dtype = dtype
+        return
+    if hasattr(config, "torch_dtype"):
+        config.torch_dtype = dtype
+
+
 def _load_text_encoder_from_state_dict(
     *,
     config_dir: Path,
@@ -149,8 +157,7 @@ def _load_text_encoder_from_state_dict(
     from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
 
     config = AutoConfig.from_pretrained(str(config_dir), local_files_only=local_files_only)
-    if hasattr(config, "torch_dtype"):
-        config.torch_dtype = dtype
+    _set_transformers_config_dtype(config, dtype)
 
     loaders = (
         ("AutoModelForCausalLM", AutoModelForCausalLM),

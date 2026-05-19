@@ -9,10 +9,7 @@ from typing import Any
 from app.config.profiles import RuntimeProfile
 from app.core.model_registry import ModelComponent, ModelPack
 from app.core.platform_guidance import setup_repair_hint
-from app.core.pipeline_factory.qwen import (
-    _convert_scaled_fp8_text_encoder_state_dict,
-    _load_text_encoder_from_local_config,
-)
+from app.core.pipeline_factory.qwen import _load_text_encoder_from_local_config
 
 LOGGER = logging.getLogger(__name__)
 
@@ -524,7 +521,7 @@ def _configure_component_storage(
         component.storage_dtype,
         getattr(torch_module, "float8_e4m3fn"),
     )
-    LOGGER.info(
+    LOGGER.debug(
         "Applying layerwise storage mode to component '%s' with storage=%s compute=%s.",
         component.role,
         component.storage_dtype or str(storage_dtype),
@@ -581,7 +578,6 @@ def _build_zimage_pipeline(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = _resolve_dtype(torch, device)
     kwargs: dict[str, Any] = {
-        "torch_dtype": dtype,
         "local_files_only": True,
     }
     pipeline_metadata: dict[str, Any] = {
@@ -616,7 +612,7 @@ def _build_zimage_pipeline(
             str(transformer_component.path),
             quantization_config=quantization_config,
             config=str(pack.pipeline_config_dir / "transformer"),
-            torch_dtype=dtype,
+            dtype=dtype,
             local_files_only=True,
         )
         kwargs["transformer"] = transformer
@@ -651,7 +647,7 @@ def _build_zimage_pipeline(
             transformer = ZImageTransformer2DModel.from_single_file(
                 str(transformer_component.path),
                 config=str(pack.pipeline_config_dir / "transformer"),
-                torch_dtype=dtype,
+                dtype=dtype,
                 local_files_only=True,
             )
         if (
@@ -685,7 +681,7 @@ def _build_zimage_pipeline(
                 str(vae_component.path),
                 quantization_config=quantization_config,
                 config=str(pack.pipeline_config_dir / "vae"),
-                torch_dtype=dtype,
+                dtype=dtype,
                 local_files_only=True,
             )
         except Exception as exc:
@@ -696,7 +692,7 @@ def _build_zimage_pipeline(
         vae = AutoencoderKL.from_single_file(
             str(vae_component.path),
             config=str(pack.pipeline_config_dir / "vae"),
-            torch_dtype=dtype,
+            dtype=dtype,
             local_files_only=True,
         )
         kwargs["vae"] = vae
