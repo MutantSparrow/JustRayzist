@@ -3,22 +3,24 @@ param(
   [switch]$AcceptCommunityLicense
 )
 
-# Fetches Krea2-Turbo weights + config into models/packs/Krea2_Turbo.
+# Thin wrapper: fetch the Krea2_Turbo pack weights via the shared model-asset fetcher.
 #
 # Krea2-Turbo is opt-in and governed by the Krea 2 Community License (distinct from the Z-Image
-# assets). This script downloads for LOCAL use only and requires -AcceptCommunityLicense to proceed.
-# See JustRayzist-Krea.md §12 and models/packs/Krea2_Turbo/weights/README.md.
+# assets). Weights download for LOCAL use only. Re-run with -AcceptCommunityLicense to proceed.
+# See models/packs/Krea2_Turbo/weights/README.md and JustRayzist-Krea.md.
 #
-# NOTE (WP-0): the exact repo filenames below are placeholders to be confirmed against
-# https://huggingface.co/krea/Krea-2-Turbo when the coexistence spike is run on real hardware.
+# The authoritative asset list (repo ids, filenames, SHA256, output paths) lives in
+# scripts/portable/fetch_model_assets.py (OPTIONAL_KREA2_ASSETS). This wrapper only forwards flags
+# so the two paths never drift.
 
 $ErrorActionPreference = "Stop"
 
-$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$packDir = Join-Path $projectRoot "models\packs\Krea2_Turbo"
-$weightsDir = Join-Path $packDir "weights"
-$configDir = Join-Path $packDir "config"
-$repoId = "krea/Krea-2-Turbo"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$fetchScript = Join-Path $scriptDir "fetch_model_assets.ps1"
+
+if (-not (Test-Path $fetchScript)) {
+  throw "Shared fetch script not found: $fetchScript"
+}
 
 Write-Host "==============================================================="
 Write-Host " Krea2-Turbo assets - Krea 2 Community License"
@@ -30,34 +32,12 @@ if (-not $AcceptCommunityLicense) {
   throw "Re-run with -AcceptCommunityLicense once you have reviewed and accepted the Krea 2 Community License."
 }
 
-foreach ($dir in @($weightsDir, $configDir)) {
-  if (-not (Test-Path $dir)) {
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
-  }
+$fetchArgs = @("-IncludeKrea2", "-AcceptKrea2License")
+if ($Force) {
+  $fetchArgs += "-Force"
 }
 
-# Prefer the project venv's hf CLI, fall back to PATH.
-$hfCandidates = @(
-  (Join-Path $projectRoot ".venv\Scripts\hf.exe"),
-  "hf"
-)
-$hfExe = $null
-foreach ($candidate in $hfCandidates) {
-  if ($candidate -ne "hf" -and -not (Test-Path $candidate)) { continue }
-  $hfExe = $candidate
-  break
-}
-if (-not $hfExe) {
-  throw "Hugging Face CLI ('hf') not found. Run .\RunMeFirst.bat to set up the environment."
-}
-
-$downloadArgs = @("download", $repoId, "--local-dir", $packDir)
-if ($Force) { $downloadArgs += "--force-download" }
-
-Write-Host "Downloading $repoId into $packDir ..."
-& $hfExe @downloadArgs
+& $fetchScript @fetchArgs
 if ($LASTEXITCODE -ne 0) {
-  throw "hf download failed with exit code $LASTEXITCODE."
+  throw "Krea2 asset fetch failed with exit code $LASTEXITCODE."
 }
-
-Write-Host "Done. Copy modelpack.yaml.template -> modelpack.yaml and adjust paths if needed."

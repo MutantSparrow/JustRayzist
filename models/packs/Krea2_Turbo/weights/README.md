@@ -1,20 +1,29 @@
 # Local Weights (Not Stored In Git)
 
-Place the Krea2-Turbo weight files in this folder before running generation:
+The Krea2-Turbo pack uses the ComfyUI-native fp8 weights from
+[`AlperKTS/Krea2_FP8`](https://huggingface.co/AlperKTS/Krea2_FP8). Place these three files in this
+folder before running generation (the app converts their ComfyUI key layout at load time — see
+`app/core/pipeline_factory/krea_comfy_convert.py`):
 
-- `krea2_transformer.safetensors`  (Krea2Transformer2DModel — ~12B params)
-- `krea2_vae.safetensors`          (AutoencoderKLQwenImage)
+- `krea2_turbo_fp8.safetensors`       (Krea2Transformer2DModel — ~12B, fp8)
+- `qwen3vl_4b_fp8_scaled.safetensors` (Qwen3VLModel text encoder, scaled fp8)
+- `qwen_image_vae.safetensors`        (AutoencoderKLQwenImage)
 
-The text-encoder weights (`Qwen3VLModel`) are fetched into `../config/text_encoder/`.
+They are intentionally excluded from GitHub because of large size limits. The pack's diffusers
+config dirs (`../config/`) ARE committed, so only these weights need fetching.
 
-They are intentionally excluded from GitHub because of large size limits.
-
-Source: `krea/Krea-2-Turbo` on Hugging Face (`https://huggingface.co/krea/Krea-2-Turbo`).
-
-From project root, the automated fetch command is:
+From project root, the automated fetch commands are:
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\fetch_krea2_assets.ps1
+# Windows
+powershell -ExecutionPolicy Bypass -File .\scripts\fetch_model_assets.ps1 -IncludeKrea2 -AcceptKrea2License
 ```
+```bash
+# Any platform
+python scripts/portable/fetch_model_assets.py --include-krea2 --accept-krea2-license
+```
+
+`StartWeb.bat` / `StartWeb.sh` also prompt to fetch these automatically the first time you select
+the `Krea2_Turbo` pack.
 
 ## Licensing (READ BEFORE DISTRIBUTING)
 

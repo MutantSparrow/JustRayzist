@@ -112,6 +112,13 @@ if /I "!PACK!"=="Rayzist_bf16" (
     goto :after_run
   )
 )
+if /I "!PACK!"=="Krea2_Turbo" (
+  call :ensure_krea2_pack_assets
+  if errorlevel 1 (
+    set "EXIT_CODE=1"
+    goto :after_run
+  )
+)
 
 echo.
 if /I "%JUSTRAYZIST_LISTEN%"=="1" (
@@ -305,6 +312,61 @@ if not exist "!NEEDED_SEEDVR2_RUNTIME!" (
 )
 
 echo Model assets ready.
+exit /b 0
+
+:ensure_krea2_pack_assets
+set "KREA_ROOT=%CD%\models\packs\Krea2_Turbo"
+set "KREA_TRANSFORMER=%KREA_ROOT%\weights\krea2_turbo_fp8.safetensors"
+set "KREA_ENCODER=%KREA_ROOT%\weights\qwen3vl_4b_fp8_scaled.safetensors"
+set "KREA_VAE=%KREA_ROOT%\weights\qwen_image_vae.safetensors"
+set "FETCH_SCRIPT=%CD%\scripts\fetch_model_assets.ps1"
+set "KREA_MISSING=0"
+
+if not exist "!KREA_TRANSFORMER!" set "KREA_MISSING=1"
+if not exist "!KREA_ENCODER!" set "KREA_MISSING=1"
+if not exist "!KREA_VAE!" set "KREA_MISSING=1"
+
+if !KREA_MISSING! EQU 0 (
+  echo Krea2_Turbo model assets ready.
+  exit /b 0
+)
+
+echo.
+echo Missing Krea2_Turbo model weights (~18 GB).
+echo Krea2-Turbo weights are governed by the Krea 2 Community License, which is
+echo distinct from the Z-Image assets and is downloaded for local use only.
+choice /c YN /n /m "Accept the Krea 2 Community License and download now? [Y/N]: "
+if errorlevel 2 (
+  echo Krea2_Turbo launch cancelled. You can fetch later with:
+  echo   powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1 -IncludeKrea2 -AcceptKrea2License
+  exit /b 1
+)
+if not exist "!FETCH_SCRIPT!" (
+  echo Missing fetch script: !FETCH_SCRIPT!
+  exit /b 1
+)
+echo Running fetch script:
+echo   !FETCH_SCRIPT! -IncludeKrea2 -AcceptKrea2License
+powershell -NoProfile -ExecutionPolicy Bypass -File "!FETCH_SCRIPT!" -IncludeKrea2 -AcceptKrea2License
+if errorlevel 1 (
+  echo Failed to fetch Krea2_Turbo model assets.
+  echo Ensure Hugging Face CLI with XET is installed via:
+  echo   .\RunMeFirst.bat
+  exit /b 1
+)
+if not exist "!KREA_TRANSFORMER!" (
+  echo Missing file after download: !KREA_TRANSFORMER!
+  exit /b 1
+)
+if not exist "!KREA_ENCODER!" (
+  echo Missing file after download: !KREA_ENCODER!
+  exit /b 1
+)
+if not exist "!KREA_VAE!" (
+  echo Missing file after download: !KREA_VAE!
+  exit /b 1
+)
+echo Krea2_Turbo model assets ready.
 exit /b 0
 
 :find_listening_pid

@@ -147,6 +147,75 @@ def select_pack(
             return public_packs[selection - 1].display_name
 
 
+_KREA2_PACK_FOLDER = "Krea2_Turbo"
+_KREA2_WEIGHT_FILES = (
+    "krea2_turbo_fp8.safetensors",
+    "qwen3vl_4b_fp8_scaled.safetensors",
+    "qwen_image_vae.safetensors",
+)
+
+
+def ensure_pack_assets(
+    project_root: Path,
+    selected_pack: str,
+    *,
+    runtime_python: str,
+    interactive: bool,
+) -> None:
+    """Ensure a selected pack's (opt-in, gitignored) weights are present before launch.
+
+    Currently only Krea2_Turbo needs this: its config dirs are committed but the ~18GB ComfyUI fp8
+    weights are fetched on demand under the Krea 2 Community License. If missing, download them
+    (with consent) in an interactive session, or instruct the user to fetch manually otherwise.
+    """
+    if selected_pack != _KREA2_PACK_FOLDER:
+        return
+    weights_dir = project_root / "models" / "packs" / _KREA2_PACK_FOLDER / "weights"
+    missing = [name for name in _KREA2_WEIGHT_FILES if not (weights_dir / name).exists()]
+    if not missing:
+        return
+
+    fetch_cmd = (
+        "python scripts/portable/fetch_model_assets.py --include-krea2 --accept-krea2-license"
+    )
+    notice = (
+        "Krea2_Turbo weights (~18GB) are missing. They are governed by the Krea 2 Community "
+        "License (distinct from the Z-Image assets) and are downloaded for local use only."
+    )
+    print(notice)
+    if not interactive:
+        raise RuntimeError(
+            "Krea2_Turbo weights are missing. Fetch them first with:\n  " + fetch_cmd
+        )
+    answer = input(
+        "Accept the Krea 2 Community License and download now? [y/N]: "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        raise RuntimeError(
+            "Krea2_Turbo launch cancelled. Fetch later with:\n  " + fetch_cmd
+        )
+    helper = project_root / "scripts" / "portable" / "fetch_model_assets.py"
+    completed = subprocess.run(
+        [
+            runtime_python,
+            str(helper),
+            "--project-root",
+            str(project_root),
+            "--include-krea2",
+            "--accept-krea2-license",
+        ],
+        cwd=str(project_root),
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("Failed to fetch Krea2_Turbo weights (fetch helper exited non-zero).")
+    still_missing = [name for name in _KREA2_WEIGHT_FILES if not (weights_dir / name).exists()]
+    if still_missing:
+        raise RuntimeError(
+            "Krea2_Turbo weights still missing after fetch: " + ", ".join(still_missing)
+        )
+
+
 def resolve_bind_host(requested_host: str | None, *, listen_env: str | None) -> str:
     if requested_host:
         return requested_host
@@ -182,6 +251,12 @@ def main() -> int:
         public_packs=public_packs,
         explicit_pack=args.pack.strip() or None,
         env_pack=os.environ.get("JUSTRAYZIST_PACK", "").strip() or None,
+        interactive=interactive,
+    )
+    ensure_pack_assets(
+        project_root,
+        selected_pack,
+        runtime_python=runtime_python,
         interactive=interactive,
     )
     host = resolve_bind_host(args.host.strip() or None, listen_env=os.environ.get("JUSTRAYZIST_LISTEN"))

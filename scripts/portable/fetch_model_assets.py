@@ -204,10 +204,53 @@ OPTIONAL_QWEN3_4B_FP8_ENCODER_ASSETS = [
 OPTIONAL_ASSETS = OPTIONAL_QWEN3_4B_FP8_ENCODER_ASSETS
 
 
-def selected_assets(*, include_qwen3_4b_fp8_encoder: bool = False) -> list[AssetSpec]:
+KREA2_PACK_NAME = "Krea2_Turbo"
+
+# Krea2-Turbo is opt-in and governed by the Krea 2 Community License (distinct from the Z-Image
+# assets). These are the ComfyUI-native fp8 weights from AlperKTS/Krea2_FP8; the app converts their
+# key layout at load time (app/core/pipeline_factory/krea_comfy_convert.py). The pack's diffusers
+# config dirs are committed, so only the 3 weight files are fetched.
+OPTIONAL_KREA2_ASSETS = [
+    AssetSpec(
+        name="Krea2-Turbo transformer (ComfyUI fp8)",
+        repo_id="AlperKTS/Krea2_FP8",
+        repo_file="krea2_turbo_fp8.safetensors",
+        relative_output_path="models/packs/Krea2_Turbo/weights/krea2_turbo_fp8.safetensors",
+        sha256="2d3523507c59df965e5d4ec9a1b9b4591297a50c058915c36fb29d124d30f64e",
+    ),
+    AssetSpec(
+        name="Krea2-Turbo Qwen3-VL text encoder (ComfyUI fp8)",
+        repo_id="AlperKTS/Krea2_FP8",
+        repo_file="qwen3vl_4b_fp8_scaled.safetensors",
+        relative_output_path="models/packs/Krea2_Turbo/weights/qwen3vl_4b_fp8_scaled.safetensors",
+        sha256="54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094",
+    ),
+    AssetSpec(
+        name="Krea2-Turbo VAE (Qwen-image)",
+        repo_id="AlperKTS/Krea2_FP8",
+        repo_file="qwen_image_vae.safetensors",
+        relative_output_path="models/packs/Krea2_Turbo/weights/qwen_image_vae.safetensors",
+        sha256="a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+    ),
+]
+
+KREA2_LICENSE_NOTICE = (
+    "Krea2-Turbo weights are governed by the Krea 2 Community License, which is distinct from the "
+    "Z-Image assets. They are downloaded for local use only; redistribution or bundling requires "
+    "reviewing that license. Re-run with --accept-krea2-license to proceed."
+)
+
+
+def selected_assets(
+    *,
+    include_qwen3_4b_fp8_encoder: bool = False,
+    include_krea2: bool = False,
+) -> list[AssetSpec]:
     assets = list(ASSETS)
     if include_qwen3_4b_fp8_encoder:
         assets.extend(OPTIONAL_QWEN3_4B_FP8_ENCODER_ASSETS)
+    if include_krea2:
+        assets.extend(OPTIONAL_KREA2_ASSETS)
     return assets
 
 
@@ -273,6 +316,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also fetch the optional Rayzist_qwen3_4b_fp8 text encoder pack asset.",
     )
+    parser.add_argument(
+        "--include-krea2",
+        action="store_true",
+        help="Also fetch the optional Krea2_Turbo pack weights (requires --accept-krea2-license).",
+    )
+    parser.add_argument(
+        "--accept-krea2-license",
+        action="store_true",
+        help="Acknowledge the Krea 2 Community License, required to fetch Krea2_Turbo weights.",
+    )
     return parser.parse_args()
 
 
@@ -280,6 +333,11 @@ def main() -> int:
     args = parse_args()
     project_root = resolve_project_root(args.project_root)
     platform_name = normalize_platform_name(args.platform)
+
+    if args.include_krea2 and not args.accept_krea2_license:
+        print(KREA2_LICENSE_NOTICE, file=sys.stderr)
+        return 2
+
     hf_exe = resolve_hf_cli_executable(project_root, platform_name=platform_name)
     if not hf_exe:
         raise RuntimeError(
@@ -296,8 +354,14 @@ def main() -> int:
     env["HF_XET_HIGH_PERFORMANCE"] = "1"
     env.pop("HF_HUB_DISABLE_XET", None)
 
+    if args.include_krea2:
+        print(KREA2_LICENSE_NOTICE.replace(" Re-run with --accept-krea2-license to proceed.", ""))
+
     ensure_hf_cli_prerequisites(hf_exe)
-    for asset in selected_assets(include_qwen3_4b_fp8_encoder=args.include_qwen3_4b_fp8_encoder):
+    for asset in selected_assets(
+        include_qwen3_4b_fp8_encoder=args.include_qwen3_4b_fp8_encoder,
+        include_krea2=args.include_krea2,
+    ):
         download_asset(
             project_root=project_root,
             hf_exe=hf_exe,
@@ -308,6 +372,17 @@ def main() -> int:
     if args.include_qwen3_4b_fp8_encoder:
         ensure_qwen3_4b_fp8_pack(project_root)
         print(f"[ok] Optional model pack ready: {QWEN3_4B_FP8_PACK_NAME}")
+    if args.include_krea2:
+        missing = [
+            asset.relative_output_path
+            for asset in OPTIONAL_KREA2_ASSETS
+            if not (project_root / asset.relative_output_path).exists()
+        ]
+        if missing:
+            raise RuntimeError(
+                "Krea2_Turbo weights missing after fetch: " + ", ".join(missing)
+            )
+        print(f"[ok] Optional model pack ready: {KREA2_PACK_NAME}")
 
     deprecated_vae_path = project_root / "models/packs/Rayzist_bf16/weights/ultrafluxVAEImproved_v10.safetensors"
     if deprecated_vae_path.exists():
@@ -319,6 +394,8 @@ def main() -> int:
     print("Selected model pack: Rayzist_bf16")
     if args.include_qwen3_4b_fp8_encoder:
         print(f"Optional model pack installed: {QWEN3_4B_FP8_PACK_NAME}")
+    if args.include_krea2:
+        print(f"Optional model pack installed: {KREA2_PACK_NAME}")
     print("Next step:")
     print("  python -m app.cli.main validate-models")
     return 0

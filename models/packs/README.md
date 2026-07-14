@@ -82,8 +82,11 @@ Krea2 notes:
 - The runtime can switch between families without a restart (see the model switch in the worker
   session); on high-VRAM tiers the previous family is kept resident for instant switch-back, and on
   tighter tiers it is released before the next loads so two large models are never resident at once.
-- Krea2 weights are governed by the **Krea 2 Community License** (distinct from Z-Image); the fetch
-  step (`scripts/fetch_krea2_assets.ps1`) is opt-in and prints the license notice.
+- Krea2 weights are governed by the **Krea 2 Community License** (distinct from Z-Image); fetching
+  is opt-in and license-gated. The pack's config dirs are committed; only the weights are fetched:
+  `scripts/fetch_model_assets.ps1 -IncludeKrea2 -AcceptKrea2License` (Windows) or
+  `python scripts/portable/fetch_model_assets.py --include-krea2 --accept-krea2-license` (any
+  platform). `StartWeb` prompts to fetch on first selection of the `Krea2_Turbo` pack.
 
 ## Supported component formats
 
