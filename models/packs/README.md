@@ -62,6 +62,29 @@ required_configs:
 - `GET /model-packs`, `StartWeb.bat`, and `StartWeb.sh` show only public enabled packs.
 - Install-time asset fetch provisions the bundled `Rayzist_bf16` pack and can optionally fetch the `Rayzist_qwen3_4b_fp8` encoder pack.
 
+## Supported architectures
+
+Two model families are supported. `architecture` in a pack selects which:
+
+- `z_image_turbo` — the default Rayzist Z-Image Turbo family (`diffusers` / `fp8_zimage` backends).
+- `krea2_turbo` — Krea2-Turbo, a 12B distilled flow-matching DiT (`diffusers_krea` / `fp8_krea`
+  backends). Near-sibling of Z-Image: same `FlowMatchEulerDiscreteScheduler`, Qwen-family text
+  encoder + VAE. Differs in transformer class (`Krea2Transformer2DModel`) and pipeline
+  (`Krea2Pipeline`), which require diffusers `>=0.39.0.dev0`. See
+  `models/packs/Krea2_Turbo/` for the pack scaffold and `JustRayzist-Krea.md` for the full plan.
+
+Krea2 notes:
+
+- Its text encoder is `Qwen3VLModel` (vision-language), enabling optional image+text joint
+  conditioning for img2img via `GenerationRequest.context_image`.
+- The 12B bf16 transformer is ~24GB; list `fp8_krea` first in `backend_preference` so limited-VRAM
+  cards use the fp8 path and fall back to bf16.
+- The runtime can switch between families without a restart (see the model switch in the worker
+  session); on high-VRAM tiers the previous family is kept resident for instant switch-back, and on
+  tighter tiers it is released before the next loads so two large models are never resident at once.
+- Krea2 weights are governed by the **Krea 2 Community License** (distinct from Z-Image); the fetch
+  step (`scripts/fetch_krea2_assets.ps1`) is opt-in and prints the license notice.
+
 ## Supported component formats
 
 - `safetensors`
