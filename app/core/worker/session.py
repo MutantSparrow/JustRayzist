@@ -18,6 +18,14 @@ LOGGER = logging.getLogger(__name__)
 class SessionStats:
     generation_count: int = 0
     recycle_count: int = 0
+    switch_count: int = 0
+
+
+# Resource tiers with enough headroom to keep a previously-loaded backend resident for instant
+# switch-back. On tighter tiers the outgoing backend is always released before the next is built,
+# so two (potentially 12B-class) model families are never resident at once.
+# See JustRayzist-Krea.md WP-7.
+_KEEP_RESIDENT_TIERS = frozenset({"high"})
 
 
 class GenerationSession:
@@ -31,6 +39,8 @@ class GenerationSession:
         self._model_pack = model_pack
         self._resource_tier = resource_tier or settings.resource_tier_controller.current()
         self._backend: Any | None = None
+        # Cache of idle backends keyed by pack name, populated only on keep-resident tiers.
+        self._resident_backends: dict[str, Any] = {}
         self.stats = SessionStats()
 
     def _ensure_backend(self):
@@ -41,6 +51,93 @@ class GenerationSession:
                 resource_tier=self._resource_tier,
             )
         return self._backend
+
+    def _keep_resident(self) -> bool:
+        return self._resource_tier.name in _KEEP_RESIDENT_TIERS
+
+    @staticmethod
+    def _release_backend(backend: Any | None) -> None:
+        """Best-effort teardown of a backend and its VRAM."""
+        if backend is None:
+            return
+        cancel = getattr(backend, "cancel_active", None)
+        if callable(cancel):
+            try:
+                cancel()
+            except Exception:  # pragma: no cover - defensive teardown
+                LOGGER.debug("cancel_active() failed during backend release.", exc_info=True)
+        teardown = getattr(backend, "teardown", None)
+        if callable(teardown):
+            try:
+                teardown()
+            except Exception:  # pragma: no cover - defensive teardown
+                LOGGER.debug("teardown() failed during backend release.", exc_info=True)
+
+    @staticmethod
+    def _free_cuda_cache() -> None:
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+    @property
+    def model_pack(self) -> ModelPack:
+        return self._model_pack
+
+    def switch_model_pack(self, model_pack: ModelPack) -> ModelPack:
+        """Switch the active model family/pack at runtime, tier-adaptively.
+
+        On a keep-resident tier (headroom) the outgoing backend is cached for instant switch-back;
+        otherwise it is torn down and its VRAM released before the target backend is built. Any
+        in-flight generation on the current backend is cancelled first. Returns the now-active pack.
+
+        See JustRayzist-Krea.md WP-7.
+        """
+        if model_pack.name == self._model_pack.name and self._backend is not None:
+            return self._model_pack
+
+        outgoing = self._backend
+        keep_resident = self._keep_resident()
+
+        if outgoing is not None:
+            if keep_resident:
+                # Cancel any in-flight work, then park the backend for instant switch-back. It is
+                # NOT torn down, so its weights stay resident (headroom tier only).
+                cancel = getattr(outgoing, "cancel_active", None)
+                if callable(cancel):
+                    try:
+                        cancel()
+                    except Exception:  # pragma: no cover - defensive
+                        LOGGER.debug("cancel_active() failed before switch.", exc_info=True)
+                self._resident_backends[self._model_pack.name] = outgoing
+            else:
+                # Release fully (cancel + teardown + free VRAM) before loading the next family, so
+                # two large models are never resident at once. _release_backend cancels for us.
+                self._release_backend(outgoing)
+                self._free_cuda_cache()
+
+        self._backend = None
+        self._model_pack = model_pack
+
+        # Reuse a cached resident backend if we have one for the target pack.
+        cached = self._resident_backends.pop(model_pack.name, None)
+        if cached is not None:
+            self._backend = cached
+        else:
+            self._backend = self._ensure_backend()
+
+        self.stats.switch_count += 1
+        LOGGER.info(
+            "Switched active model pack to '%s' (tier=%s, keep_resident=%s).",
+            model_pack.name,
+            self._resource_tier.name,
+            keep_resident,
+        )
+        return self._model_pack
 
     def set_resource_tier(self, resource_tier: RuntimeProfile) -> None:
         if self._resource_tier.name == resource_tier.name:
@@ -128,16 +225,15 @@ class GenerationSession:
 
     def recycle(self, reason: str) -> None:
         LOGGER.info("Recycling generation session backend. Reason: %s", reason)
+        # Drop the active backend and any resident (cached) backends so a recycle — e.g. on a
+        # resource-tier change — fully releases VRAM rather than stranding a cached model family.
+        if self._resident_backends:
+            for cached in self._resident_backends.values():
+                self._release_backend(cached)
+            self._resident_backends.clear()
         self._backend = None
         self.stats.recycle_count += 1
-        gc.collect()
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
+        self._free_cuda_cache()
 
     def runtime_status(self) -> dict[str, object]:
         backend = self._ensure_backend()
