@@ -389,6 +389,22 @@ class DiffusersZImageBackend:
             self._resource_profile(),
         )
 
+    def _default_steps(self) -> int:
+        """Default inference step count when a request does not specify one.
+
+        Overridable turbo-default seam (subclasses such as the Krea backend return a different
+        value). Z-Image reads the active runtime profile, preserving existing behavior.
+        """
+        return self._settings.runtime_profile.steps_default
+
+    def _default_guidance_scale(self) -> float:
+        """Default classifier-free guidance scale when a request does not specify one.
+
+        Overridable turbo-default seam. Z-Image reads the active runtime profile (which already
+        defaults to 0.0), preserving existing behavior.
+        """
+        return self._settings.runtime_profile.guidance_scale_default
+
     def set_resource_tier(self, profile: RuntimeProfile) -> None:
         self._resource_tier = profile
 
@@ -3768,11 +3784,11 @@ class DiffusersZImageBackend:
 
         import torch
 
-        steps = request.steps or self._settings.runtime_profile.steps_default
+        steps = request.steps or self._default_steps()
         guidance_scale = 1.0 if inference_process == self._INFERENCE_PROCESS_RPLUS else (
             request.guidance_scale
             if request.guidance_scale is not None
-            else self._settings.runtime_profile.guidance_scale_default
+            else self._default_guidance_scale()
         )
         generator = self._build_generator(torch, "cuda" if loaded.device == "cuda" else "cpu", request.seed)
         procedural_latents = None
@@ -4087,7 +4103,7 @@ class DiffusersZImageBackend:
 
         import torch
 
-        refine_steps = request.refine_steps or self._settings.runtime_profile.steps_default
+        refine_steps = request.refine_steps or self._default_steps()
         refine_strength = request.refine_strength if request.refine_strength is not None else 0.20
         if refine_strength <= 0.0 or refine_strength >= 1.0:
             raise ValueError("refine_strength must be between 0 and 1.")
@@ -4097,7 +4113,7 @@ class DiffusersZImageBackend:
         elif mode == "img2img_refine":
             guidance_scale = self._IMG2IMG_GUIDANCE_SCALE_DEFAULT
         else:
-            guidance_scale = self._settings.runtime_profile.guidance_scale_default
+            guidance_scale = self._default_guidance_scale()
         prompt_original = request.prompt
         prompt_wildcard_resolved, wildcard_occurrences = expand_prompt_wildcards(
             self._settings,

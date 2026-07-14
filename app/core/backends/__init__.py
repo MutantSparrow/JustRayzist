@@ -5,7 +5,13 @@ from typing import Any
 from app.core.backends.diffusers_zimage import DiffusersZImageBackend, GenerationResult
 from app.core.backends.fp8_zimage import Fp8ZImageBackend
 
-SUPPORTED_BACKENDS = {"diffusers", "diffusers_zimage", "fp8_zimage"}
+SUPPORTED_BACKENDS = {
+    "diffusers",
+    "diffusers_zimage",
+    "fp8_zimage",
+    "diffusers_krea",
+    "fp8_krea",
+}
 
 
 def create_backend(*, settings: Any, model_pack: Any, resource_tier: Any):
@@ -26,6 +32,25 @@ def create_backend(*, settings: Any, model_pack: Any, resource_tier: Any):
             )
         if backend_name in {"diffusers", "diffusers_zimage"}:
             return DiffusersZImageBackend(
+                settings=settings,
+                model_pack=model_pack,
+                resource_tier=resource_tier,
+            )
+        # Krea backends are imported lazily so the diffusers Krea classes (which require a newer
+        # diffusers build — see JustRayzist-Krea.md WP-0) are only touched when a Krea pack is
+        # actually dispatched. This keeps the Z-Image path free of any Krea import cost/risk.
+        if backend_name == "fp8_krea":
+            from app.core.backends.diffusers_krea import Fp8KreaBackend
+
+            return Fp8KreaBackend(
+                settings=settings,
+                model_pack=model_pack,
+                resource_tier=resource_tier,
+            )
+        if backend_name == "diffusers_krea":
+            from app.core.backends.diffusers_krea import DiffusersKreaBackend
+
+            return DiffusersKreaBackend(
                 settings=settings,
                 model_pack=model_pack,
                 resource_tier=resource_tier,

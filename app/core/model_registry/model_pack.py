@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-ALLOWED_ARCHITECTURES = {"z_image_turbo"}
+ALLOWED_ARCHITECTURES = {"z_image_turbo", "krea2_turbo"}
 ALLOWED_FORMATS = {"safetensors", "gguf"}
 ALLOWED_STORAGE_MODES = {"layerwise"}
 ALLOWED_RUNTIME_DTYPES = {"float32", "float16", "bfloat16", "fp8_e4m3fn"}
