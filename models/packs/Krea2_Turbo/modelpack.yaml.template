@@ -1,0 +1,54 @@
+# Copy this file to:
+# models/packs/Krea2_Turbo/modelpack.yaml
+# Then update paths to your real local files.
+#
+# Rules:
+# - All paths must be local.
+# - Format must match extension (.safetensors or .gguf).
+# - pipeline_config_dir must point to a local diffusers-style config directory.
+#
+# Krea2-Turbo is a 12B distilled flow-matching DiT (Krea 2 Community License). It is a near-sibling
+# of Z-Image Turbo: same FlowMatchEulerDiscreteScheduler, Qwen-family text encoder + VAE. The two
+# differ in transformer class (Krea2Transformer2DModel) and pipeline (Krea2Pipeline), which require
+# diffusers >=0.39.0.dev0 (see JustRayzist-Krea.md WP-0).
+
+name: Krea2_Turbo
+architecture: krea2_turbo
+
+# fp8 is listed first: the 12B transformer in bf16 is ~24GB, so on <=24GB cards the fp8 backend is
+# the path that fits alongside the Qwen3VL encoder + VAE. Dispatch falls back to bf16 if fp8 is
+# unavailable. (See JustRayzist-Krea.md §4 / WP-6.)
+backend_preference:
+  - fp8_krea
+  - diffusers_krea
+
+# Local pipeline config directory used by Krea2Pipeline.from_pretrained(...)
+pipeline_config_dir: ./config
+
+components:
+  # Main denoiser/transformer (Krea2Transformer2DModel).
+  transformer:
+    path: ./weights/krea2_transformer.safetensors
+    format: safetensors
+    # For the fp8 backend on limited VRAM, an fp8 checkpoint or layerwise storage hints may be used:
+    # storage_mode: layerwise
+    # storage_dtype: fp8_e4m3fn
+    # compute_dtype: bfloat16
+
+  # VAE (AutoencoderKLQwenImage).
+  vae:
+    path: ./weights/krea2_vae.safetensors
+    format: safetensors
+
+  # Text encoder (Qwen3VLModel — vision-language, enables image+text img2img conditioning).
+  text_encoder:
+    path: ./config/text_encoder/model.safetensors
+    format: safetensors
+
+required_configs:
+  - ./config/model_index.json
+  - ./config/scheduler/scheduler_config.json
+  - ./config/tokenizer/tokenizer.json
+  - ./config/transformer/config.json
+  - ./config/vae/config.json
+  - ./config/text_encoder/config.json
