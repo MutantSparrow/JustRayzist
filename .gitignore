@@ -11,8 +11,12 @@ __pycache__/
 .venv/
 .venv-lite/
 .venv-test/
+.venv-cuda/
 venv/
 env/
+
+# Local HF download cache
+.hf-cache/
 
 # Local runtime data
 outputs/

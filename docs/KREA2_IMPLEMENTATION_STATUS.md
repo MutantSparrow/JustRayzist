@@ -1,9 +1,47 @@
 # Krea2-Turbo Integration — Implementation Status
 
-Tracks what landed on `feat/krea2-support` versus what remains GPU-gated. The full design is in
-`JustRayzist-Krea.md` (repo root). This branch was implemented on a CPU-only Windows box with no
-model weights, so all **runtime** verification (generation, tiering, VL img2img) is deferred to a
-CUDA box per the plan's WP-0 gate.
+Tracks what landed on `feat/krea2-support`. The full design is in `JustRayzist-Krea.md` (repo root).
+
+**End-to-end verified on an RTX 4080 (16GB):** the `Krea2_Turbo` fp8 pack generates images through
+the real app backend (`create_backend` → `Fp8KreaBackend` → `build_fp8_krea_pipeline` →
+`backend.generate()`). A 1024×1024, 8-step, cfg-0.0 render of "a red fox sitting in fresh snow"
+completed in ~230s and produced a correct photorealistic image. See "ComfyUI checkpoint support"
+below.
+
+## ComfyUI checkpoint support (AlperKTS/Krea2_FP8)
+
+The `Krea2_Turbo` pack uses the ComfyUI-native fp8 weights from
+[`AlperKTS/Krea2_FP8`](https://huggingface.co/AlperKTS/Krea2_FP8) (transformer, VAE, Qwen3VL
+encoder). ComfyUI checkpoints use different key layouts than diffusers, so
+`app/core/pipeline_factory/krea_comfy_convert.py` converts each component — the same pattern as the
+existing Z-Image `_convert_prefixed_fused_zimage_state_dict`:
+
+- **Transformer** (`blocks.*` → `transformer_blocks.*`, `first/last/tmlp/tproj/txtmlp` globals,
+  `mod.lin (6*H,)` → `scale_shift_table (6,H)`; drops the 2 extra `last.up/last.down` tensors some
+  fp8 repacks carry). Mapping derived by aligning against the official
+  `krea/Krea-2-Turbo/turbo.safetensors` (same native layout, 430 keys) and the diffusers model;
+  validated by an exact key+shape match and a full 12.82B-param CPU load.
+- **VAE** — reuses diffusers' own `convert_wan_vae_to_diffusers` (the Qwen-image VAE shares the Wan
+  VAE layout); exact 194/194 match, strict load.
+- **Qwen3VL encoder** — ComfyUI scaled-fp8 (`.weight` fp8 × scalar `.weight_scale`, plus a
+  `.comfy_quant` JSON-metadata tensor that is dropped) with a `model.* → language_model.*` /
+  `model.visual.* → visual.*` prefix remap; exact 713/713 match.
+
+The pack config dirs (`config/{scheduler,tokenizer,transformer,vae,text_encoder}`) are the official
+`krea/Krea-2-Turbo` diffusers configs. Weights are gitignored; fetch them with
+`scripts/fetch_krea2_assets.ps1` (or the `AlperKTS/Krea2_FP8` files) into
+`models/packs/Krea2_Turbo/weights/`.
+
+On a 16GB card the builder sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (unless already
+set) before CUDA init to avoid fragmentation OOMs; the `constrained` profile's sequential CPU
+offload keeps the fp8 transformer + bf16 encoder + VAE within budget. A manual smoke test lives at
+`scripts/dev_krea2_smoke.py`.
+
+## Coexistence
+
+Implemented against `diffusers==0.39.0` (a normal PyPI release), which ships both the `Krea2*` and
+`ZImage*` classes — the plan's §6.1 option (a). The full Z-Image regression suite passes on 0.39.0
+(342 passed / 1 skipped), so Krea2 support does not disturb the Z-Image path.
 
 ## Landed (code-complete, CPU-verifiable)
 
