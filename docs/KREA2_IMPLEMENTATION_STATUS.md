@@ -2,11 +2,17 @@
 
 Tracks what landed on `feat/krea2-support`. The full design is in `JustRayzist-Krea.md` (repo root).
 
-**End-to-end verified on an RTX 4080 (16GB):** the `Krea2_Turbo` fp8 pack generates images through
-the real app backend (`create_backend` → `Fp8KreaBackend` → `build_fp8_krea_pipeline` →
-`backend.generate()`). A 1024×1024, 8-step, cfg-0.0 render of "a red fox sitting in fresh snow"
-completed in ~230s and produced a correct photorealistic image. See "ComfyUI checkpoint support"
-below.
+**End-to-end verified on an RTX 4080 (16GB), through the full web app.** The `Krea2_Turbo` fp8 pack
+generates correct images both directly through the backend and through the running web server:
+
+- **Backend path:** `create_backend` → `Fp8KreaBackend` → `build_fp8_krea_pipeline` →
+  `backend.generate()`. 1024×1024, 8 steps, cfg 0.0, "a red fox in fresh snow" → correct image
+  (~230 s). Smoke script: `scripts/dev_krea2_smoke.py`.
+- **Web/API path:** `StartWeb` → select `Krea2_Turbo` → `POST /generate` → image saved to the
+  gallery. Response confirmed `model_pack=Krea2_Turbo`, `backend=fp8_krea`, `device=cuda`,
+  `execution_mode=sequential_offload`, 8 steps, cfg 0.0.
+
+Weights are gitignored and provisioned on demand (opt-in, license-gated) — see "Provisioning" below.
 
 ## ComfyUI checkpoint support (AlperKTS/Krea2_FP8)
 
@@ -28,33 +34,56 @@ existing Z-Image `_convert_prefixed_fused_zimage_state_dict`:
   `model.visual.* → visual.*` prefix remap; exact 713/713 match.
 
 The pack config dirs (`config/{scheduler,tokenizer,transformer,vae,text_encoder}`) are the official
-`krea/Krea-2-Turbo` diffusers configs. Weights are gitignored; fetch them with
-`scripts/fetch_krea2_assets.ps1` (or the `AlperKTS/Krea2_FP8` files) into
-`models/packs/Krea2_Turbo/weights/`.
+`krea/Krea-2-Turbo` diffusers configs and are committed. See "Provisioning" for weight fetching.
 
 On a 16GB card the builder sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (unless already
 set) before CUDA init to avoid fragmentation OOMs; the `constrained` profile's sequential CPU
 offload keeps the fp8 transformer + bf16 encoder + VAE within budget. A manual smoke test lives at
 `scripts/dev_krea2_smoke.py`.
 
+## Provisioning (installers / launchers)
+
+Only the ~18GB weights are fetched (config dirs are committed). Krea is wired into the same asset
+machinery as the optional `Rayzist_qwen3_4b_fp8` pack, and is **opt-in + license-gated** (Krea 2
+Community License, distinct from Z-Image):
+
+- `scripts/portable/fetch_model_assets.py` — `OPTIONAL_KREA2_ASSETS` (3 `AlperKTS/Krea2_FP8` files
+  with SHA256), gated behind `--include-krea2 --accept-krea2-license` (refuses with exit 2 if the
+  license flag is absent).
+- `scripts/fetch_model_assets.ps1` — `-IncludeKrea2` / `-AcceptKrea2License` pass-through switches.
+- `scripts/fetch_krea2_assets.ps1` — thin wrapper over the shared fetcher (kept to avoid drift).
+- `StartWeb.bat` (`:ensure_krea2_pack_assets`) and `scripts/portable/start_web.py`
+  (`ensure_pack_assets`, used by `StartWeb.sh`) — on selecting `Krea2_Turbo`, prompt for license
+  consent and fetch missing weights; non-interactive launches print the manual fetch command instead
+  of silently downloading 18GB.
+
+Fetch manually with:
+```
+scripts/fetch_model_assets.ps1 -IncludeKrea2 -AcceptKrea2License          # Windows
+python scripts/portable/fetch_model_assets.py --include-krea2 --accept-krea2-license   # any platform
+```
+
 ## Coexistence
 
 Implemented against `diffusers==0.39.0` (a normal PyPI release), which ships both the `Krea2*` and
 `ZImage*` classes — the plan's §6.1 option (a). The full Z-Image regression suite passes on 0.39.0
-(342 passed / 1 skipped), so Krea2 support does not disturb the Z-Image path.
+(**344 passed / 1 skipped**, including the Krea unit tests), so Krea2 support does not disturb the
+Z-Image path.
 
-## Landed (code-complete, CPU-verifiable)
+## Landed
 
 | WP | Area | Files |
 |----|------|-------|
 | WP-1 | Registry + dispatch | `app/core/model_registry/model_pack.py` (`krea2_turbo` architecture), `app/core/backends/__init__.py` (`diffusers_krea`/`fp8_krea` dispatch, lazy import, `SUPPORTED_BACKENDS`) |
-| WP-2 | Pipeline builders | `app/core/pipeline_factory/krea.py` (`build_krea_pipeline`, `build_fp8_krea_pipeline`), exported from `pipeline_factory/__init__.py` |
-| WP-3 | Backends | `app/core/backends/diffusers_krea.py` (`DiffusersKreaBackend`, `Fp8KreaBackend`); turbo-default seam (`_default_steps`/`_default_guidance_scale`) added to `diffusers_zimage.py` |
-| WP-5 | VL img2img field | `app/core/worker/types.py` (`GenerationRequest.context_image`); encode hook `_prepare_krea_image_conditioning` in the Krea backend |
+| WP-2 | Pipeline builders | `app/core/pipeline_factory/krea.py` (`build_krea_pipeline`, `build_fp8_krea_pipeline`) + `krea_comfy_convert.py` (ComfyUI→diffusers converters), exported from `pipeline_factory/__init__.py` |
+| WP-3 | Backends | `app/core/backends/diffusers_krea.py` (`DiffusersKreaBackend`, `Fp8KreaBackend`, R+ `encode_prompt` override); turbo-default seam (`_default_steps`/`_default_guidance_scale`) added to `diffusers_zimage.py` |
+| WP-5 | VL img2img field | `app/core/worker/types.py` (`GenerationRequest.context_image`); encode hook `_prepare_krea_image_conditioning` in the Krea backend (field + hook only; wiring still open) |
 | WP-7 | Runtime model switch | `app/core/worker/session.py` (`GenerationSession.switch_model_pack`, tier-adaptive keep-resident/unload, `recycle` releases resident cache) |
-| WP-4 | Pack scaffold | `models/packs/Krea2_Turbo/` (template, `config/model_index.json`, READMEs), `scripts/fetch_krea2_assets.ps1` |
-| WP-8 | Weightless tests | `tests/test_krea_registry_dispatch.py`, `tests/test_runtime_model_switch.py` |
-| WP-9 | Docs | `models/packs/README.md` (architectures section), this file |
+| WP-4 | Real pack | `models/packs/Krea2_Turbo/` — `modelpack.yaml` (fp8 component paths) + official diffusers configs |
+| WP-6 | Tiering (fp8 path) | fp8 backend runs on 16GB via `constrained` sequential offload + `expandable_segments` alloc tweak (full per-tier calibration still open) |
+| WP-8 | Tests | `tests/test_krea_registry_dispatch.py`, `test_runtime_model_switch.py`, `test_krea_comfy_convert.py`, Krea cases in `test_fetch_model_assets.py` |
+| WP-9 | Docs | `models/packs/README.md`, pack READMEs, this file |
+| — | Provisioning | installers/launchers fetch Krea weights (opt-in, license-gated) — see "Provisioning" |
 
 ### Behavior-preservation note (Z-Image regression)
 
@@ -94,33 +123,35 @@ These de-risk the plan but do **not** replace the on-GPU generate spike:
   Qwen-image edit pipeline; the `context_image` field + `_prepare_krea_image_conditioning` hook are
   in place awaiting that wiring.
 
-## Remaining — GPU-gated (WP-0 gate + downstream)
+## Remaining
 
-These require a CUDA box, the real Krea2 weights/config, and a diffusers build with the Krea2
-classes (`>=0.39.0.dev0`). They are explicitly out of reach in this environment:
+The WP-0 gate is resolved and both backend and web-app generation are proven on the RTX 4080. What's
+left is downstream feature work and hardening:
 
-1. **WP-0 spike (blocks all runtime claims):**
-   - Resolve diffusers coexistence: confirm one build serves both Z-Image and Krea2 (option a), or
-     vendor Krea2 modules (option b), or process-isolate (option c). The repo currently pins
-     `diffusers>=0.36.0`; the Krea classes are imported lazily with a clear error until this lands.
-   - Confirm the duck-typed surface (`Krea2Pipeline.transformer(...)` signature, `encode_prompt`,
-     `vae_scale_factor`, img2img variant, scheduler flow-shift).
-   - Confirm the `Qwen3VLModel` image-conditioning argument name (linchpin for WP-5 wiring).
-   - Confirm an fp8 load path for `Krea2Transformer2DModel`.
-   - Fill in the real `config/` files (scheduler/tokenizer/transformer/vae/text_encoder) — only
-     `model_index.json` is scaffolded.
-2. **WP-3/WP-5 runtime:** wire `_prepare_krea_image_conditioning` into the generate/img2img call
-   once the encode argument is known; end-to-end `generate()` on a real pack (bf16 + fp8).
-3. **WP-6 tiering:** recalibrate offload/backend selection for the 12B model; bf16-vs-fp8 choice
-   per tier; decide whether `constrained` runs Krea2 or fails gracefully.
-4. **WP-10 regression:** run the full Z-Image suite on the (possibly bumped) diffusers env and
-   confirm functional/perceptual equivalence at a fixed seed.
+1. **WP-5 VL img2img wiring.** The `context_image` field + `_prepare_krea_image_conditioning` hook
+   exist but are not wired. Krea2 has no `Krea2Img2ImgPipeline` and no `__call__`/`encode_prompt`
+   image argument; the likely route is `QwenImageEditPipeline` (shared Qwen-image family). Currently
+   passing a `context_image` raises `NotImplementedError`.
+2. **WP-6 full tiering calibration.** The fp8 path works on 16GB (`constrained` sequential offload);
+   still to do: bf16-vs-fp8 auto-selection per tier, whether `high`/24GB can skip offload, and a
+   clean failure message when a tier can't host the 12B model.
+3. **Parity on real weights.** LoRA compose, upscale/refine, R+/procedural, and prompt-enhance have
+   not been exercised on Krea (R+ has a code override but is unrun).
+4. **bf16 (`diffusers_krea`) backend.** Implemented but unrun — won't fit 16GB; needs a ≥24GB card.
+5. **Native fp8 compute.** Current scheme is fp8 storage / bf16 compute (`native_fp8_not_implemented`).
+   Ada (sm_89) supports native fp8; a future optimization, not required for correctness.
+6. **Pin bump.** `pyproject.toml` still pins `diffusers>=0.36.0`; bump to `>=0.39.0` (the Krea
+   classes are imported lazily with a clear error until then).
+7. **WP-10 release.** Branch merge to `main` / final review.
 
-## How to verify what landed (no GPU)
+## How to verify
 
 ```bash
-# From repo root, in an env with torch + runtime deps installed:
-pytest tests/test_krea_registry_dispatch.py tests/test_runtime_model_switch.py -q
-# Registry-only check needs just pyyaml:
-python -c "from app.core.model_registry.model_pack import ALLOWED_ARCHITECTURES; assert 'krea2_turbo' in ALLOWED_ARCHITECTURES"
+# Weightless (torch + runtime deps, no GPU):
+pytest tests/test_krea_registry_dispatch.py tests/test_runtime_model_switch.py \
+       tests/test_krea_comfy_convert.py tests/test_fetch_model_assets.py -q
+
+# GPU (with weights fetched):
+python scripts/dev_krea2_smoke.py                 # backend path
+# or: StartWeb → select Krea2_Turbo → generate    # web/API path
 ```
