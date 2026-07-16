@@ -22,14 +22,23 @@ config/
 ├── vae/
 │   └── config.json               # AutoencoderKLQwenImage config
 └── text_encoder/
-    ├── config.json               # Qwen3VLModel config (vision-language)
+    ├── config.json                     # Qwen3VLModel config (vision-language)
     ├── generation_config.json
-    └── model.safetensors         # staged by the pipeline builder from the pack component
+    ├── preprocessor_config.json        # fetched: Qwen3VL image processor sidecar (WP-5)
+    ├── chat_template.json              # fetched: Qwen3VL chat template with vision tokens (WP-5)
+    ├── video_preprocessor_config.json  # fetched: Qwen3VL video processor sidecar (WP-5)
+    └── model.safetensors               # staged by the pipeline builder from the pack component
 ```
+
+The three `*_preprocessor_config.json` / `chat_template.json` files come from
+`Qwen/Qwen3-VL-4B-Instruct` (Apache-2.0) and are fetched by the same asset script as the weights.
+They are required for the WP-5 style-reference path so `AutoProcessor.from_pretrained(...)` can
+build a multimodal processor that preprocesses a `context_image` before Qwen3VL encoding.
 
 Fetch these from the Krea2-Turbo repo before first run — see
 `scripts/fetch_krea2_assets.ps1` (project root) and `../weights/README.md`.
 
 > The text encoder is `Qwen3VLModel` (vision-language), not the plain `Qwen3Model` used by Z-Image.
-> This is what enables the optional image+text joint conditioning for img2img
-> (`GenerationRequest.context_image`; see JustRayzist-Krea.md §4 / WP-5).
+> This is what enables the optional style-reference conditioning
+> (`GenerationRequest.context_image`; see JustRayzist-Krea.md §4 / WP-5) — a reference image is
+> jointly encoded with the prompt through Qwen3VL and passed to `Krea2Pipeline` as `prompt_embeds`.

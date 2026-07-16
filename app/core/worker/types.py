@@ -52,8 +52,10 @@ class GenerationRequest:
     refine_tile_overlap: int = 64
     upscaler_checkpoint: Path | None = None
     loras: tuple[LoraSelection, ...] = ()
-    # Optional reference image for image+text joint conditioning (image-edit style). Krea2-only:
-    # its Qwen3VLModel text encoder is vision-language and can encode an image alongside the
-    # prompt. Additive and defaulting to None so the frozen contract stays backward-compatible;
-    # the Z-Image backend ignores it. See JustRayzist-Krea.md §2/§4/WP-5.
+    # Optional style-reference image for image+text joint conditioning. Krea2-only: its
+    # Qwen3VLModel text encoder is vision-language, so the reference image is jointly encoded with
+    # the prompt through Qwen3VL and fed to Krea2Pipeline as prompt_embeds (the same pattern
+    # ComfyUI's Krea2 style-ref workflow uses). Additive and defaulting to None so the frozen
+    # contract stays backward-compatible; the Z-Image backend ignores it.
+    # See JustRayzist-Krea.md §2/§4/WP-5.
     context_image: Path | None = None

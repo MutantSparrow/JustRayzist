@@ -405,6 +405,39 @@ class DiffusersZImageBackend:
         """
         return self._settings.runtime_profile.guidance_scale_default
 
+    def _build_generate_pipe_kwargs(
+        self,
+        *,
+        pipe: Any,
+        prompt: str,
+        request: GenerationRequest,
+        steps: int,
+        guidance_scale: float,
+        generator: Any,
+        procedural_latents: Any,
+        torch_module: Any,
+    ) -> dict[str, Any]:
+        """Assemble kwargs for the base ``pipe(...)`` call in ``generate()``.
+
+        Extracted so subclasses (Krea backend) can substitute prompt embeds for image-conditioned
+        conditioning without duplicating the surrounding retry/context/lora scaffolding. Z-Image
+        returns the exact prior kwarg set — no behavior change.
+        """
+        del torch_module  # subclasses may need it; Z-Image does not
+        return {
+            "prompt": prompt,
+            "width": request.width,
+            "height": request.height,
+            "num_inference_steps": steps,
+            "guidance_scale": guidance_scale,
+            "generator": generator,
+            "latents": procedural_latents,
+            "max_sequence_length": self._resolve_pipeline_max_sequence_length(
+                getattr(pipe, "tokenizer", None),
+                prompt,
+            ),
+        }
+
     def set_resource_tier(self, profile: RuntimeProfile) -> None:
         self._resource_tier = profile
 
@@ -3882,20 +3915,18 @@ class DiffusersZImageBackend:
                     guidance_scale = float(rplus_telemetry["guidance_scale"])
                     output = None
                 else:
+                    pipe_kwargs = self._build_generate_pipe_kwargs(
+                        pipe=pipe,
+                        prompt=prompt_effective,
+                        request=request,
+                        steps=steps,
+                        guidance_scale=guidance_scale,
+                        generator=generator,
+                        procedural_latents=procedural_latents,
+                        torch_module=torch,
+                    )
                     try:
-                        output = pipe(
-                            prompt=prompt_effective,
-                            width=request.width,
-                            height=request.height,
-                            num_inference_steps=steps,
-                            guidance_scale=guidance_scale,
-                            generator=generator,
-                            latents=procedural_latents,
-                            max_sequence_length=self._resolve_pipeline_max_sequence_length(
-                                getattr(pipe, "tokenizer", None),
-                                prompt_effective,
-                            ),
-                        )
+                        output = pipe(**pipe_kwargs)
                     except (RuntimeError, ValueError, FloatingPointError) as exc:
                         retry_mode = self._resolve_scheduler_retry_mode(scheduler_mode, exc)
                         if retry_mode is None:
@@ -3909,19 +3940,7 @@ class DiffusersZImageBackend:
                         )
                         self._clear_cuda_cache(torch)
                         scheduler_mode = self._apply_scheduler_mode(pipe, retry_mode)
-                        output = pipe(
-                            prompt=prompt_effective,
-                            width=request.width,
-                            height=request.height,
-                            num_inference_steps=steps,
-                            guidance_scale=guidance_scale,
-                            generator=generator,
-                            latents=procedural_latents,
-                            max_sequence_length=self._resolve_pipeline_max_sequence_length(
-                                getattr(pipe, "tokenizer", None),
-                                prompt_effective,
-                            ),
-                        )
+                        output = pipe(**pipe_kwargs)
         finally:
             if active_lora_ids:
                 self._clear_lora_adapters(pipe, adapter_names=active_lora_ids)

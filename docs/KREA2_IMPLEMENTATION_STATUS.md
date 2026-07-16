@@ -77,7 +77,7 @@ Z-Image path.
 | WP-1 | Registry + dispatch | `app/core/model_registry/model_pack.py` (`krea2_turbo` architecture), `app/core/backends/__init__.py` (`diffusers_krea`/`fp8_krea` dispatch, lazy import, `SUPPORTED_BACKENDS`) |
 | WP-2 | Pipeline builders | `app/core/pipeline_factory/krea.py` (`build_krea_pipeline`, `build_fp8_krea_pipeline`) + `krea_comfy_convert.py` (ComfyUI→diffusers converters), exported from `pipeline_factory/__init__.py` |
 | WP-3 | Backends | `app/core/backends/diffusers_krea.py` (`DiffusersKreaBackend`, `Fp8KreaBackend`, R+ `encode_prompt` override); turbo-default seam (`_default_steps`/`_default_guidance_scale`) added to `diffusers_zimage.py` |
-| WP-5 | VL img2img field | `app/core/worker/types.py` (`GenerationRequest.context_image`); encode hook `_prepare_krea_image_conditioning` in the Krea backend (field + hook only; wiring still open) |
+| WP-5 | VL image conditioning (style ref) | `app/core/worker/types.py` (`GenerationRequest.context_image`); `_build_generate_pipe_kwargs` seam in Z-Image + Krea override that runs Qwen3VL with vision tokens + `pixel_values`, taps `pipe.text_encoder_select_layers`, and passes the result as `prompt_embeds`/`prompt_embeds_mask` to `Krea2Pipeline`. Mirrors the ComfyUI style-ref workflow. `tests/test_krea_vl_context_image.py` covers the plumbing weightlessly (kwarg substitution, prompt dropped when embeds set, Z-Image path unchanged). |
 | WP-7 | Runtime model switch | `app/core/worker/session.py` (`GenerationSession.switch_model_pack`, tier-adaptive keep-resident/unload, `recycle` releases resident cache) |
 | WP-4 | Real pack | `models/packs/Krea2_Turbo/` — `modelpack.yaml` (fp8 component paths) + official diffusers configs |
 | WP-6 | Tiering (fp8 path) | fp8 backend runs on 16GB via `constrained` sequential offload + `expandable_segments` alloc tweak (full per-tier calibration still open) |
@@ -117,21 +117,26 @@ These de-risk the plan but do **not** replace the on-GPU generate spike:
   so the inherited `_rplus_prepare_prompt_embeds` would raise `TypeError`. It is overridden in
   `DiffusersKreaBackend`. Only 1 core helper diverges so far — below the Tier-B "≥3 helpers"
   escalation threshold (Checkpoint ②), so the minimal-subclass approach holds.
-- **VL img2img has no `__call__`/`encode_prompt` image argument.** There is no `Krea2Img2ImgPipeline`,
-  but `QwenImageImg2ImgPipeline` / `QwenImageEditPipeline` exist and are the likely route for
-  Krea2 image conditioning (shared Qwen-image VAE/encoder). WP-5's img2img agent should target the
-  Qwen-image edit pipeline; the `context_image` field + `_prepare_krea_image_conditioning` hook are
-  in place awaiting that wiring.
+- **VL image conditioning is done via prompt_embeds, not a pipeline image arg.** `Krea2Pipeline`
+  itself is text2img — no `image=` on `__call__` or `encode_prompt`, and no `Krea2Img2ImgPipeline`
+  exists. `QwenImageEditPipeline` is a *different* model (Qwen2.5-VL + `QwenImageTransformer2DModel`)
+  and is not a route for Krea2 weights. The Krea backend now encodes a vision-token chat template
+  through Qwen3VL, taps the pipeline's `text_encoder_select_layers`, and feeds the result to
+  `Krea2Pipeline` as `prompt_embeds`+`prompt_embeds_mask` — the same pattern ComfyUI's Krea2
+  style-ref workflow uses.
 
 ## Remaining
 
 The WP-0 gate is resolved and both backend and web-app generation are proven on the RTX 4080. What's
 left is downstream feature work and hardening:
 
-1. **WP-5 VL img2img wiring.** The `context_image` field + `_prepare_krea_image_conditioning` hook
-   exist but are not wired. Krea2 has no `Krea2Img2ImgPipeline` and no `__call__`/`encode_prompt`
-   image argument; the likely route is `QwenImageEditPipeline` (shared Qwen-image family). Currently
-   passing a `context_image` raises `NotImplementedError`.
+1. **WP-5 VL image conditioning — GPU verification.** Wired: `_build_generate_pipe_kwargs` in
+   the Krea backend substitutes `prompt_embeds`/`prompt_embeds_mask` produced by
+   `_encode_prompt_with_context_image` (Qwen3VL + vision tokens + pixel_values, tapping
+   `pipe.text_encoder_select_layers`). Plumbing has weightless coverage; still to do on a CUDA box:
+   confirm the encoded embeds are shape-compatible with what Krea2's transformer expects at
+   inference, and validate that a real reference image steers style/composition as it does in the
+   ComfyUI style-ref workflow.
 2. **WP-6 full tiering calibration.** The fp8 path works on 16GB (`constrained` sequential offload);
    still to do: bf16-vs-fp8 auto-selection per tier, whether `high`/24GB can skip offload, and a
    clean failure message when a tier can't host the 12B model.

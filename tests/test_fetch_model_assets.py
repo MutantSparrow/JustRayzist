@@ -41,16 +41,36 @@ def test_krea2_assets_are_opt_in_and_map_to_pack_weights() -> None:
     for asset in OPTIONAL_KREA2_ASSETS:
         assert asset in krea_selected
 
-    # All three come from the AlperKTS ComfyUI fp8 repo and land in the pack weights dir with hashes.
-    repo_files = {asset.repo_file for asset in OPTIONAL_KREA2_ASSETS}
-    assert repo_files == {
+    # Weights come from the AlperKTS ComfyUI fp8 repo and land in the pack weights dir.
+    weight_assets = [
+        a for a in OPTIONAL_KREA2_ASSETS if a.repo_id == "AlperKTS/Krea2_FP8"
+    ]
+    assert {a.repo_file for a in weight_assets} == {
         "krea2_turbo_fp8.safetensors",
         "qwen3vl_4b_fp8_scaled.safetensors",
         "qwen_image_vae.safetensors",
     }
-    for asset in OPTIONAL_KREA2_ASSETS:
-        assert asset.repo_id == "AlperKTS/Krea2_FP8"
+    for asset in weight_assets:
         assert asset.relative_output_path.startswith("models/packs/Krea2_Turbo/weights/")
+
+    # Qwen3VL processor sidecar files come from the source Qwen repo and land next to the
+    # text_encoder config, so AutoProcessor can build a multimodal processor for the WP-5
+    # style-reference conditioning path.
+    processor_assets = [
+        a for a in OPTIONAL_KREA2_ASSETS if a.repo_id == "Qwen/Qwen3-VL-4B-Instruct"
+    ]
+    assert {a.repo_file for a in processor_assets} == {
+        "preprocessor_config.json",
+        "chat_template.json",
+        "video_preprocessor_config.json",
+    }
+    for asset in processor_assets:
+        assert asset.relative_output_path.startswith(
+            "models/packs/Krea2_Turbo/config/text_encoder/"
+        )
+
+    # Every asset has a full SHA256.
+    for asset in OPTIONAL_KREA2_ASSETS:
         assert len(asset.sha256) == 64
 
 

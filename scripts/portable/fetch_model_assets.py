@@ -232,6 +232,31 @@ OPTIONAL_KREA2_ASSETS = [
         relative_output_path="models/packs/Krea2_Turbo/weights/qwen_image_vae.safetensors",
         sha256="a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
     ),
+    # Qwen3VL processor sidecar files (from the source Qwen/Qwen3-VL-4B-Instruct repo) required to
+    # build a multimodal AutoProcessor for the WP-5 style-reference conditioning path. The Krea
+    # backend uses these to preprocess a context image before Qwen3VL encodes it alongside the
+    # prompt. Small (<10 KB total); no license issue distinct from the base Qwen release.
+    AssetSpec(
+        name="Krea2-Turbo Qwen3VL image preprocessor config",
+        repo_id="Qwen/Qwen3-VL-4B-Instruct",
+        repo_file="preprocessor_config.json",
+        relative_output_path="models/packs/Krea2_Turbo/config/text_encoder/preprocessor_config.json",
+        sha256="27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+    ),
+    AssetSpec(
+        name="Krea2-Turbo Qwen3VL chat template",
+        repo_id="Qwen/Qwen3-VL-4B-Instruct",
+        repo_file="chat_template.json",
+        relative_output_path="models/packs/Krea2_Turbo/config/text_encoder/chat_template.json",
+        sha256="6f8a6a55027e3da5160105556cda5dd69f6423f1c32645f6730d32de7773d0c4",
+    ),
+    AssetSpec(
+        name="Krea2-Turbo Qwen3VL video preprocessor config",
+        repo_id="Qwen/Qwen3-VL-4B-Instruct",
+        repo_file="video_preprocessor_config.json",
+        relative_output_path="models/packs/Krea2_Turbo/config/text_encoder/video_preprocessor_config.json",
+        sha256="7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13",
+    ),
 ]
 
 KREA2_LICENSE_NOTICE = (

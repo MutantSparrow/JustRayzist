@@ -12,13 +12,15 @@ Two backends are provided, mirroring the Z-Image ``diffusers_zimage`` / ``fp8_zi
 
 Tier-B escalation (extracting a shared ``_QwenFlowMatchBackend``) is intentionally NOT done here.
 Per the plan, that only happens if a real-hardware spike (WP-0) proves >=3 core helpers diverge.
-Divergences discovered during WP-5 (e.g. the Qwen3VL image-conditioning path for img2img) are
-added as narrow per-method overrides in this file — see ``_prepare_krea_image_conditioning``.
+Divergences discovered during WP-5 (e.g. the Qwen3VL image-conditioning path) are added as narrow
+per-method overrides in this file — see ``_build_generate_pipe_kwargs`` and
+``_encode_prompt_with_context_image``.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from app.core.backends.diffusers_zimage import DiffusersZImageBackend
@@ -27,6 +29,7 @@ from app.core.pipeline_factory import (
     build_fp8_krea_pipeline,
     build_krea_pipeline,
 )
+from app.core.worker.types import GenerationRequest
 
 LOGGER = logging.getLogger(__name__)
 
@@ -66,9 +69,7 @@ class DiffusersKreaBackend(DiffusersZImageBackend):
     # Krea2Pipeline.encode_prompt has a different signature than Z-Image's: it takes no
     # negative_prompt/do_classifier_free_guidance and returns (prompt_embeds, prompt_embeds_mask)
     # rather than (prompt_embeds, negative_prompt_embeds). The inherited R+ helper would raise a
-    # TypeError on Krea, so it is overridden here to call encode_prompt with Krea's kwargs. Verified
-    # against diffusers 0.39.0 signatures (WP-0 compatibility matrix); the R+ denoise math itself is
-    # still GPU-gated for validation (WP-5 rplus-procedural parity agent).
+    # TypeError on Krea, so it is overridden here to call encode_prompt with Krea's kwargs.
     @classmethod
     def _rplus_prepare_prompt_embeds(cls, pipe: Any, prompt: str, device: Any) -> list[Any]:
         prompt_embeds, _prompt_embeds_mask = pipe.encode_prompt(
@@ -81,26 +82,154 @@ class DiffusersKreaBackend(DiffusersZImageBackend):
         )
         return prompt_embeds
 
-    # --- WP-5 hook: Qwen3VL image conditioning for img2img ---
+    # --- WP-5: Qwen3VL image conditioning ---
+    # Krea2Pipeline itself is text2img; it has no image argument on ``__call__`` or ``encode_prompt``.
+    # But its text encoder is a Qwen3VL vision-language model, and the Krea2 transformer was trained
+    # to consume the same 12 hidden-state taps the pipeline builds from text. ComfyUI's reference
+    # "style image" workflow works by encoding the chat template with vision tokens + pixel_values
+    # through Qwen3VL, tapping those same layers, and feeding the result to Krea2 as prompt_embeds.
+    # We mirror that here — same encoder call surface, same layer indices from
+    # ``pipe.text_encoder_select_layers``, then pass the embeds via ``prompt_embeds``.
 
-    def _prepare_krea_image_conditioning(self, pipe: Any, context_image: Any) -> dict[str, Any]:
-        """Return pipeline kwargs that inject an optional reference image into Krea2 conditioning.
-
-        Krea2's text encoder is a vision-language model (``Qwen3VLModel``), so a reference image can
-        be jointly encoded with the prompt (image-edit style). The exact ``Krea2Pipeline`` argument
-        name for this is a WP-0 open question (JustRayzist-Krea.md §12); until confirmed on real
-        hardware, this hook is a documented, isolated seam that returns no extra kwargs when no
-        context image is supplied. Wiring it into the generate/img2img call and validating the
-        argument name is GPU-gated work (WP-5 exit criteria).
-        """
-
-        if context_image is None:
-            return {}
-        raise NotImplementedError(
-            "Qwen3VL image conditioning (context_image) requires the Krea2Pipeline "
-            "image-encode argument confirmed on real hardware (WP-0/WP-5). "
-            "See JustRayzist-Krea.md §12."
+    def _build_generate_pipe_kwargs(
+        self,
+        *,
+        pipe: Any,
+        prompt: str,
+        request: GenerationRequest,
+        steps: int,
+        guidance_scale: float,
+        generator: Any,
+        procedural_latents: Any,
+        torch_module: Any,
+    ) -> dict[str, Any]:
+        base = super()._build_generate_pipe_kwargs(
+            pipe=pipe,
+            prompt=prompt,
+            request=request,
+            steps=steps,
+            guidance_scale=guidance_scale,
+            generator=generator,
+            procedural_latents=procedural_latents,
+            torch_module=torch_module,
         )
+        context_image = getattr(request, "context_image", None)
+        if context_image is None:
+            return base
+
+        embeds, embeds_mask = self._encode_prompt_with_context_image(
+            pipe=pipe,
+            prompt=prompt,
+            context_image=context_image,
+            max_sequence_length=base["max_sequence_length"],
+            torch_module=torch_module,
+        )
+        # Krea2Pipeline validates: pass prompt_embeds+mask ⇒ prompt must be None.
+        base["prompt"] = None
+        base["prompt_embeds"] = embeds
+        base["prompt_embeds_mask"] = embeds_mask
+        return base
+
+    def _encode_prompt_with_context_image(
+        self,
+        *,
+        pipe: Any,
+        prompt: str,
+        context_image: Path,
+        max_sequence_length: int,
+        torch_module: Any,
+    ) -> tuple[Any, Any]:
+        """Encode ``prompt`` jointly with a reference image through Qwen3VL.
+
+        Returns ``(prompt_embeds, prompt_embeds_mask)`` shaped to match Krea2's ``prompt_embeds``
+        contract: ``(1, text_seq_len, num_text_layers, text_hidden_dim)`` and
+        ``(1, text_seq_len)``. Follows the same chat-template layout that Krea2Pipeline uses
+        text-only (``get_text_hidden_states``) with vision tokens injected so the encoder attends
+        to the image; the pipeline's ``text_encoder_select_layers`` are then tapped the same way.
+        """
+        from PIL import Image
+
+        text_encoder = pipe.text_encoder
+        tokenizer = pipe.tokenizer
+        device = text_encoder.device
+        select_layers = tuple(pipe.text_encoder_select_layers)
+        prefix_idx = pipe.prompt_template_encode_start_idx
+
+        image = Image.open(str(context_image)).convert("RGB")
+
+        # Build the Qwen3VL chat message with an image turn. This matches the ComfyUI style-ref
+        # workflow: the assistant sees a user turn containing both an image and the description
+        # prompt, so the Qwen3VL hidden states carry visual features fused with the text.
+        processor = self._resolve_qwen3vl_processor(pipe)
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Describe the image by detailing the color, shape, size, texture, quantity, "
+                    "text, spatial relationships of the objects and background:"
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt},
+                ],
+            },
+        ]
+        text = processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        inputs = processor(
+            text=[text],
+            images=[image],
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+            max_length=max_sequence_length + prefix_idx,
+        )
+        inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
+
+        # Match Krea2Pipeline.get_text_hidden_states position-id handling: positions count only
+        # real tokens (padding does not consume a position) and are broadcast across the 3 mRoPE
+        # axes. Padding position sits in the middle so image + suffix tokens don't get a shifted
+        # mRoPE phase.
+        attention_mask = inputs["attention_mask"].bool()
+        position_ids = (attention_mask.long().cumsum(dim=-1) - 1).clamp(min=0)
+        position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+        inputs["position_ids"] = position_ids
+        inputs["attention_mask"] = attention_mask
+
+        with torch_module.no_grad():
+            outputs = text_encoder(**inputs, output_hidden_states=True)
+
+        hidden = torch_module.stack(
+            [outputs.hidden_states[i] for i in select_layers], dim=2
+        )
+        # Drop the system-prefix tokens exactly like the text-only path.
+        hidden = hidden[:, prefix_idx:]
+        mask = attention_mask[:, prefix_idx:]
+        return hidden, mask
+
+    def _resolve_qwen3vl_processor(self, pipe: Any) -> Any:
+        """Return the Qwen3VL processor (tokenizer + image processor).
+
+        Krea2Pipeline stores only a tokenizer, so build the multimodal processor lazily against the
+        same local text-encoder config directory used by the pipeline builder. Cached on the
+        pipeline instance so repeated context_image generations don't rebuild it.
+        """
+        cached = getattr(pipe, "_rayzist_qwen3vl_processor", None)
+        if cached is not None:
+            return cached
+
+        from transformers import AutoProcessor
+
+        config_dir = self._model_pack.pipeline_config_dir / "text_encoder"
+        processor = AutoProcessor.from_pretrained(str(config_dir), local_files_only=True)
+        setattr(pipe, "_rayzist_qwen3vl_processor", processor)
+        return processor
 
 
 class Fp8KreaBackend(DiffusersKreaBackend):

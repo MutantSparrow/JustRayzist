@@ -75,8 +75,10 @@ Two model families are supported. `architecture` in a pack selects which:
 
 Krea2 notes:
 
-- Its text encoder is `Qwen3VLModel` (vision-language), enabling optional image+text joint
-  conditioning for img2img via `GenerationRequest.context_image`.
+- Its text encoder is `Qwen3VLModel` (vision-language), enabling optional style-reference
+  conditioning via `GenerationRequest.context_image`: a reference image is jointly encoded with
+  the prompt through Qwen3VL, and the resulting hidden states are passed to `Krea2Pipeline` as
+  `prompt_embeds` (the same pattern ComfyUI's Krea2 style-ref workflow uses).
 - The 12B bf16 transformer is ~24GB; list `fp8_krea` first in `backend_preference` so limited-VRAM
   cards use the fp8 path and fall back to bf16.
 - The runtime can switch between families without a restart (see the model switch in the worker
