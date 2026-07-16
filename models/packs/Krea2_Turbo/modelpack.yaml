@@ -28,6 +28,10 @@ optimizations:
   # ``reduce-overhead`` triggers cudagraph capture which crashed on Windows/triton-windows 3.5 with
   # OverflowError inside static_cuda_launcher (int too large for C long) on RTX 4090 (sm_89). The
   # ``default`` mode compiles the graph without cudagraphs and still gives most of the speedup.
+  # Note: on the fp8-storage backend (fp8_krea) the applier detects a _SelectiveTensorStorageHook
+  # on the transformer and skips compile automatically — dtype-mutating forward hooks force
+  # dynamo to recompile every gen. The compile knob stays truthy here so the bf16 backend
+  # (diffusers_krea) still benefits when someone loads that on a ≥24GB card.
   torch_compile:
     enabled: true
     mode: default
@@ -38,6 +42,13 @@ optimizations:
     enabled: false
     scope: transformer
   sage_attention:
+    enabled: true
+  # TF32 matmul on Ampere/Ada. Free ~1-5% on fp32 residuals with no visible quality change.
+  # Skipped on Turing.
+  tf32:
+    enabled: true
+  # VAE tiling/slicing trims peak VRAM and speeds up large-canvas decode. Universal.
+  vae_tiling:
     enabled: true
 components:
   # Native/ComfyUI fp8 transformer checkpoint (AlperKTS/Krea2_FP8). The builder detects the

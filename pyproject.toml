@@ -28,11 +28,11 @@ dependencies = [
   # Runtime optimization deps (torch.compile / fp8 quant / SageAttention). Each is
   # capability-gated at apply time so older GPUs skip the option rather than crash.
   "sageattention>=1.0.6",
-  "torch>=2.9.1",
-  "torchao>=0.14.1",
-  "torchaudio>=2.9.1",
+  "torch>=2.11.0",
+  "torchao>=0.17.0",
+  "torchaudio>=2.11.0",
   "tqdm>=4.67.1",
-  "torchvision>=0.24.1",
+  "torchvision>=0.26.0",
   "transformers>=4.57.0",
   # Triton kernels power the sageattention/fp8 fast paths. Linux/Mac ship official ``triton``;
   # Windows uses the ``triton-windows`` fork with matching semantics.

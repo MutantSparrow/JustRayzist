@@ -44,6 +44,10 @@ optimizations:
     scope: transformer
   sage_attention:
     enabled: true
+  tf32:
+    enabled: true
+  vae_tiling:
+    enabled: true
 
 components:
   # Main denoiser/transformer (Krea2Transformer2DModel).

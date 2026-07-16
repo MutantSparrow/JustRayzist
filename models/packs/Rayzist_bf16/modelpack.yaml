@@ -23,14 +23,12 @@ required_configs:
   - ./config/text_encoder/config.json
 
 # Post-load runtime optimizations — each capability-gated.
-# torch.compile is OFF for Z-Image: the pipeline builder's ``_cast`` seam (see
-# app/core/pipeline_factory/zimage.py:63) switches dtypes per parameter, which triggers dynamo
-# recompiles (8+ on the first gen) and net-regresses first-run wall time (2026-07-16 RTX 4090
-# bench: 24.3 s → 31.7 s on 9:16 portrait). Krea2's flow-matching path doesn't hit this so it
-# keeps compile ON.
-# fp8_quantization is OFF because Z-Image ships bf16 weights natively — a bf16→fp8 conversion
-# would add load-time cost with no matmul benefit.
-# SageAttention runs on every GPU from Turing (sm_75) onward and gave a ~1.2× on the anime prompt.
+# torch.compile is OFF: even without the fp8-storage hook that Krea2 hits, the first-gen compile
+# warmup was net-negative on the 9:16 portrait bench (24.3 s → 31.7 s). Enable it once the
+# inductor cache warms across sessions and warmup no longer shows in every run.
+# fp8_quantization is OFF: Z-Image ships bf16 weights natively so quantization adds load-time
+# cost with no matmul benefit.
+# SageAttention, TF32, and VAE tiling are always safe wins on capable hardware.
 optimizations:
   torch_compile:
     enabled: false
@@ -39,4 +37,8 @@ optimizations:
     enabled: false
     scope: transformer
   sage_attention:
+    enabled: true
+  tf32:
+    enabled: true
+  vae_tiling:
     enabled: true

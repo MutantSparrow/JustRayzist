@@ -51,10 +51,35 @@ class SageAttentionConfig:
 
 
 @dataclass(frozen=True)
+class TF32Config:
+    """Enable TF32 matmul on Ampere/Ada. Free ~1-5% on fp32 residuals.
+
+    Ignored on pre-Ampere GPUs (Turing/Volta) where TF32 tensor cores don't exist. Ampere/Ada
+    default is to opt out of TF32 in PyTorch >=1.12 for numerical determinism; this re-enables it
+    at the ``high`` precision level (best of both — allow TF32 without dropping to fp16 activations).
+    """
+
+    enabled: bool = False
+
+
+@dataclass(frozen=True)
+class VAETilingConfig:
+    """Enable VAE tiling/slicing to trim VAE decode cost at large resolutions and cut peak VRAM.
+
+    Both ``vae.enable_tiling()`` and ``vae.enable_slicing()`` are called when available; each is
+    a diffusers noop when unsupported. Universal (CUDA/CPU).
+    """
+
+    enabled: bool = False
+
+
+@dataclass(frozen=True)
 class OptimizationsConfig:
     torch_compile: TorchCompileConfig = TorchCompileConfig()
     fp8_quantization: Fp8QuantConfig = Fp8QuantConfig()
     sage_attention: SageAttentionConfig = SageAttentionConfig()
+    tf32: TF32Config = TF32Config()
+    vae_tiling: VAETilingConfig = VAETilingConfig()
 
 
 # --- Capability detection -----------------------------------------------------
@@ -90,6 +115,14 @@ def _supports_sage_attention(device: str) -> bool:
     return cap >= (7, 5)
 
 
+def _supports_tf32(device: str) -> bool:
+    """TF32 tensor cores are Ampere (sm_80) or newer. No-op on Turing/Volta."""
+    cap = _device_capability(device)
+    if cap is None:
+        return False
+    return cap >= (8, 0)
+
+
 # --- Individual optimizers ----------------------------------------------------
 
 
@@ -116,6 +149,32 @@ def _skip_if_offload_active(pipeline: Any, name: str) -> bool:
     return False
 
 
+def _warn_if_fp8_storage_hook_active(pipeline: Any) -> None:
+    """Log a heads-up when a fp8-storage forward hook coexists with torch.compile.
+
+    The fp8-storage fallback (see ``_SelectiveTensorStorageHook`` in ``pipeline_factory/zimage.py``)
+    swaps parameter ``.data`` between the fp8 storage dtype and the bf16 compute dtype in a
+    ``forward_pre_hook`` — this mutates parameter dtype every forward, which triggers dynamo
+    recompiles until it hits ``recompile_limit`` and falls back to eager for the affected sub-graph.
+    Other sub-graphs still compile and net-benefit (~1.44× warm on RTX 4090 for Krea2), so we
+    still enable compile — but the operator should know this is happening so they can tune
+    ``torch._dynamo.config.recompile_limit`` if they see excess recompile churn in logs.
+    """
+    transformer = getattr(pipeline, "transformer", None)
+    if transformer is None:
+        return
+    for module in transformer.modules():
+        if hasattr(module, "_justrayzist_fp8_storage_hook"):
+            LOGGER.info(
+                "torch.compile: fp8-storage forward hooks detected on the transformer. Dynamo "
+                "will likely hit its recompile_limit on the modules whose parameter dtype is "
+                "swapped per forward and fall back to eager there; other sub-graphs still "
+                "compile. If you see excessive '/N recompile' logs, bump "
+                "``torch._dynamo.config.recompile_limit``."
+            )
+            return
+
+
 def _apply_torch_compile(pipeline: Any, cfg: TorchCompileConfig, device: str) -> bool:
     if not cfg.enabled:
         return False
@@ -124,6 +183,13 @@ def _apply_torch_compile(pipeline: Any, cfg: TorchCompileConfig, device: str) ->
         return False
     if _skip_if_offload_active(pipeline, "torch.compile"):
         return False
+    # NB: pipelines with a ``_SelectiveTensorStorageHook`` on their transformer (fp8-storage
+    # backends) will trigger dynamo recompiles per gen because the hook mutates parameter dtypes
+    # in ``forward_pre_hook``. Torch handles this by hitting its ``recompile_limit`` and falling
+    # back to eager for the affected sub-graphs; other sub-graphs (like SageAttention shim'd
+    # attention) still get compiled and give net speedup. Log a warning but don't skip — the
+    # 2026-07-16 RTX 4090 bench measured a 1.44× warm gain on Krea2 with the hook present.
+    _warn_if_fp8_storage_hook_active(pipeline)
     transformer = getattr(pipeline, "transformer", None)
     if transformer is None:
         LOGGER.info("Skipping torch.compile: pipeline has no .transformer attribute.")
@@ -226,6 +292,95 @@ def _apply_sage_attention(pipeline: Any, cfg: SageAttentionConfig, device: str) 
         return False
 
 
+def _apply_tf32(cfg: TF32Config, device: str) -> bool:
+    """Enable TF32 matmul + cuDNN TF32 on Ampere/Ada.
+
+    Process-global setting: only needs to run once per Python session. Repeat calls are idempotent
+    (torch flips the same flag each time). Kept inside the applier so a pack manifest that turns it
+    off leaves the flag alone (as opposed to explicitly disabling — the pack contract is
+    "enabled=true means turn on", not "enabled=false means turn off").
+    """
+    if not cfg.enabled:
+        return False
+    if not _supports_tf32(device):
+        LOGGER.info(
+            "Skipping TF32: GPU compute capability %s does not have TF32 tensor cores "
+            "(need sm_80 / Ampere or newer).",
+            _device_capability(device),
+        )
+        return False
+    try:
+        import torch
+
+        # "high" precision keeps activation fidelity while allowing TF32 in matmul reductions —
+        # the sweet spot for image models. "highest" would disable TF32 entirely.
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        LOGGER.info("TF32 matmul enabled (precision=high, cuDNN TF32 on).")
+        return True
+    except Exception as exc:  # pragma: no cover - platform-specific
+        LOGGER.warning("TF32 enable failed, continuing: %s", exc)
+        return False
+
+
+def _apply_vae_tiling(pipeline: Any, cfg: VAETilingConfig) -> bool:
+    """Enable VAE tiling + slicing on the pipeline's VAE if the model supports it.
+
+    Tiling splits the decode into overlapping tiles (peak VRAM ↓, small quality drift at seams);
+    slicing splits the batch dimension (peak VRAM ↓, no quality drift). Both are safe to enable
+    together — tiling helps single-image high-res, slicing helps batched decode.
+    """
+    if not cfg.enabled:
+        return False
+    vae = getattr(pipeline, "vae", None)
+    if vae is None:
+        LOGGER.info("Skipping VAE tiling: pipeline has no .vae attribute.")
+        return False
+    applied = 0
+    for method_name in ("enable_tiling", "enable_slicing"):
+        method = getattr(vae, method_name, None)
+        if callable(method):
+            try:
+                method()
+                applied += 1
+            except Exception as exc:  # pragma: no cover - model-specific
+                LOGGER.warning("VAE %s() failed: %s", method_name, exc)
+    if applied == 0:
+        LOGGER.info("Skipping VAE tiling: this VAE class exposes neither enable_tiling nor enable_slicing.")
+        return False
+    LOGGER.info("VAE tiling/slicing enabled (%d method(s) applied).", applied)
+    return True
+
+
+def _configure_inductor_cache_dir() -> None:
+    """Set a stable on-disk cache directory for Inductor + Dynamo so compile warmup persists.
+
+    Compiled artifacts are keyed by graph hash, so the same pack + same shape reuses the cache
+    across processes. Uses ``JUSTRAYZIST_INDUCTOR_CACHE_DIR`` if set, otherwise ``.build/inductor``
+    at the repo root. Idempotent: repeated calls just overwrite the same env vars.
+    """
+    if os.environ.get("TORCHINDUCTOR_CACHE_DIR"):
+        return  # honor an existing user override
+    cache_root = os.environ.get("JUSTRAYZIST_INDUCTOR_CACHE_DIR")
+    if not cache_root:
+        # Cache next to the project's other build artifacts. Users can override with the env var.
+        try:
+            from app.config.settings import _resolve_root
+
+            cache_root = str(_resolve_root() / ".build" / "inductor")
+        except Exception:
+            return
+    try:
+        os.makedirs(cache_root, exist_ok=True)
+    except OSError:
+        return
+    os.environ["TORCHINDUCTOR_CACHE_DIR"] = cache_root
+    # FX graph cache — cheap to keep too.
+    os.environ.setdefault("TORCHINDUCTOR_FX_GRAPH_CACHE", "1")
+    LOGGER.info("Inductor persistent cache: %s", cache_root)
+
+
 def _install_sage_attention_processor(transformer: Any, sageattn_fn: Any) -> int:
     """Monkey-patch the diffusers ``F.scaled_dot_product_attention`` calls on every attention
     module of the transformer to route through Sage.
@@ -292,6 +447,8 @@ class AppliedOptimizations:
     torch_compile: bool = False
     fp8_quantization: bool = False
     sage_attention: bool = False
+    tf32: bool = False
+    vae_tiling: bool = False
 
 
 def apply_optimizations(
@@ -302,20 +459,31 @@ def apply_optimizations(
     """Apply pack-configured optimizations to ``pipeline`` in place.
 
     ``device`` is the string returned by the pipeline builder ("cuda" or "cpu"). All optimizations
-    are CUDA-only and no-op on CPU. Individual optimizations soft-fail (log + skip) rather than
-    raise, so a manifest can request aggressive settings without breaking on older GPUs.
+    are CUDA-only and no-op on CPU (except VAE tiling which is universal). Individual
+    optimizations soft-fail (log + skip) rather than raise, so a manifest can request aggressive
+    settings without breaking on older GPUs.
     """
-    # Skip when running the test harness with a JUSTRAYZIST_DISABLE_OPTIMIZATIONS=1 env — same
-    # escape hatch we already use for other hot paths in tests.
     if os.environ.get("JUSTRAYZIST_DISABLE_OPTIMIZATIONS") == "1":
         LOGGER.info("JUSTRAYZIST_DISABLE_OPTIMIZATIONS=1 set; skipping all optimizations.")
         return AppliedOptimizations()
 
-    compiled = _apply_torch_compile(pipeline, cfg.torch_compile, device)
-    quantized = _apply_fp8_quantization(pipeline, cfg.fp8_quantization, device)
+    # Process-global setup that must happen BEFORE torch.compile so the compiler picks up the
+    # cache directory and the TF32 flag on its first invocation.
+    _configure_inductor_cache_dir()
+    tf32 = _apply_tf32(cfg.tf32, device)
+
+    # Per-pipeline optimizations.
+    vae_tiling = _apply_vae_tiling(pipeline, cfg.vae_tiling)
     sage = _apply_sage_attention(pipeline, cfg.sage_attention, device)
+    quantized = _apply_fp8_quantization(pipeline, cfg.fp8_quantization, device)
+    # torch.compile is last: it snapshots the current graph, so any prior module-level mutations
+    # (SageAttention shim, fp8 weight swap) need to be in place before compile traces the forward.
+    compiled = _apply_torch_compile(pipeline, cfg.torch_compile, device)
+
     return AppliedOptimizations(
         torch_compile=compiled,
         fp8_quantization=quantized,
         sage_attention=sage,
+        tf32=tf32,
+        vae_tiling=vae_tiling,
     )

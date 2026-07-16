@@ -18,7 +18,9 @@ from app.core.pipeline_factory.optimizations import (
     Fp8QuantConfig,
     OptimizationsConfig,
     SageAttentionConfig,
+    TF32Config,
     TorchCompileConfig,
+    VAETilingConfig,
     apply_optimizations,
 )
 
@@ -46,6 +48,8 @@ def _all_enabled() -> OptimizationsConfig:
         torch_compile=TorchCompileConfig(enabled=True),
         fp8_quantization=Fp8QuantConfig(enabled=True, scope="transformer"),
         sage_attention=SageAttentionConfig(enabled=True),
+        tf32=TF32Config(enabled=True),
+        vae_tiling=VAETilingConfig(enabled=True),
     )
 
 
@@ -140,8 +144,10 @@ def test_sage_allowed_on_turing(monkeypatch) -> None:
 # --- Offload guard ---
 
 
-def test_all_skipped_when_pipeline_has_accelerate_hooks(monkeypatch) -> None:
-    """When ``enable_sequential_cpu_offload`` has installed hooks, mutating optimizations must not run."""
+def test_transformer_optimizations_skipped_when_pipeline_has_accelerate_hooks(monkeypatch) -> None:
+    """When ``enable_sequential_cpu_offload`` has installed hooks on the transformer, the
+    optimizations that mutate the transformer (compile, fp8 quant, sage) must not run.
+    """
 
     monkeypatch.setattr(opts_mod, "_device_capability", lambda device: (8, 9) if device == "cuda" else None)
     hooked_transformer = _FakeTransformer()
@@ -149,8 +155,16 @@ def test_all_skipped_when_pipeline_has_accelerate_hooks(monkeypatch) -> None:
     pipe = _FakePipeline()
     pipe.transformer = hooked_transformer
 
-    result = apply_optimizations(pipe, _all_enabled(), "cuda")
-    assert result == AppliedOptimizations()
+    # TF32 disabled for this test so we don't touch real torch state and hit unrelated setup bugs.
+    cfg = OptimizationsConfig(
+        torch_compile=TorchCompileConfig(enabled=True),
+        fp8_quantization=Fp8QuantConfig(enabled=True),
+        sage_attention=SageAttentionConfig(enabled=True),
+    )
+    result = apply_optimizations(pipe, cfg, "cuda")
+    assert result.torch_compile is False
+    assert result.fp8_quantization is False
+    assert result.sage_attention is False
 
 
 # --- Soft-fail on optimizer exception ---
@@ -174,6 +188,108 @@ def test_soft_fail_on_missing_optional_dep(monkeypatch) -> None:
 
 def test_pipeline_without_transformer_skips_everything(monkeypatch) -> None:
     monkeypatch.setattr(opts_mod, "_device_capability", lambda device: (8, 9))
-    pipe = SimpleNamespace(text_encoder=None)  # no .transformer
+    pipe = SimpleNamespace(text_encoder=None, vae=None)  # no .transformer, no .vae
     result = apply_optimizations(pipe, _all_enabled(), "cuda")
-    assert result == AppliedOptimizations()
+    assert result.torch_compile is False
+    assert result.fp8_quantization is False
+    assert result.sage_attention is False
+    assert result.vae_tiling is False
+
+
+# --- TF32 ---
+
+
+def test_tf32_skipped_on_turing(monkeypatch) -> None:
+    monkeypatch.setattr(opts_mod, "_device_capability", lambda device: (7, 5))
+    cfg = OptimizationsConfig(tf32=TF32Config(enabled=True))
+    result = apply_optimizations(_FakePipeline(), cfg, "cuda")
+    assert result.tf32 is False
+
+
+def test_tf32_applied_on_ampere(monkeypatch) -> None:
+    """Ampere/Ada should flip the TF32 flags; older GPUs skip.
+
+    Uses a fake torch module so the test doesn't touch the real process's TF32 flags.
+    """
+
+    monkeypatch.setattr(opts_mod, "_device_capability", lambda device: (8, 6))
+
+    calls: dict[str, object] = {}
+
+    class _FakeCudaMatmul:
+        allow_tf32 = False
+
+    class _FakeCudnn:
+        allow_tf32 = False
+
+    fake_torch = SimpleNamespace(
+        set_float32_matmul_precision=lambda level: calls.setdefault("precision", level),
+        backends=SimpleNamespace(
+            cuda=SimpleNamespace(matmul=_FakeCudaMatmul()),
+            cudnn=_FakeCudnn(),
+        ),
+    )
+    with patch.dict("sys.modules", {"torch": fake_torch}):
+        cfg = OptimizationsConfig(tf32=TF32Config(enabled=True))
+        result = apply_optimizations(_FakePipeline(), cfg, "cuda")
+        assert result.tf32 is True
+        assert calls["precision"] == "high"
+
+
+# --- VAE tiling ---
+
+
+def test_vae_tiling_calls_enable_methods(monkeypatch) -> None:
+    monkeypatch.setattr(opts_mod, "_device_capability", lambda device: (8, 9))
+
+    calls: list[str] = []
+
+    class _FakeVAE:
+        def enable_tiling(self):
+            calls.append("tiling")
+
+        def enable_slicing(self):
+            calls.append("slicing")
+
+    pipe = _FakePipeline()
+    pipe.vae = _FakeVAE()
+
+    cfg = OptimizationsConfig(vae_tiling=VAETilingConfig(enabled=True))
+    result = apply_optimizations(pipe, cfg, "cuda")
+    assert result.vae_tiling is True
+    assert calls == ["tiling", "slicing"]
+
+
+def test_vae_tiling_noop_when_vae_lacks_methods(monkeypatch) -> None:
+    monkeypatch.setattr(opts_mod, "_device_capability", lambda device: (8, 9))
+    pipe = _FakePipeline()
+    pipe.vae = SimpleNamespace()  # no enable_tiling, no enable_slicing
+    cfg = OptimizationsConfig(vae_tiling=VAETilingConfig(enabled=True))
+    result = apply_optimizations(pipe, cfg, "cuda")
+    assert result.vae_tiling is False
+
+
+# --- Inductor cache setup ---
+
+
+def test_inductor_cache_dir_set(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("TORCHINDUCTOR_CACHE_DIR", raising=False)
+    monkeypatch.delenv("JUSTRAYZIST_INDUCTOR_CACHE_DIR", raising=False)
+    monkeypatch.setenv("JUSTRAYZIST_INDUCTOR_CACHE_DIR", str(tmp_path / "ind"))
+    monkeypatch.setattr(opts_mod, "_device_capability", lambda device: (8, 9))
+
+    apply_optimizations(_FakePipeline(), OptimizationsConfig(), "cuda")
+
+    assert opts_mod.os.environ.get("TORCHINDUCTOR_CACHE_DIR") == str(tmp_path / "ind")
+    assert opts_mod.os.environ.get("TORCHINDUCTOR_FX_GRAPH_CACHE") == "1"
+
+
+def test_inductor_cache_dir_respects_user_override(monkeypatch) -> None:
+    """If the user set ``TORCHINDUCTOR_CACHE_DIR`` we don't stomp it."""
+
+    monkeypatch.setenv("TORCHINDUCTOR_CACHE_DIR", "/tmp/user_cache")
+    monkeypatch.setattr(opts_mod, "_device_capability", lambda device: (8, 9))
+
+    apply_optimizations(_FakePipeline(), OptimizationsConfig(), "cuda")
+
+    assert opts_mod.os.environ["TORCHINDUCTOR_CACHE_DIR"] == "/tmp/user_cache"

@@ -166,17 +166,32 @@ def test_bundled_krea2_pack_ships_expected_optimizations() -> None:
     assert pack.optimizations.torch_compile.mode == "default"
     assert pack.optimizations.fp8_quantization.enabled is False
     assert pack.optimizations.sage_attention.enabled is True
+    assert pack.optimizations.tf32.enabled is True
+    assert pack.optimizations.vae_tiling.enabled is True
+
+
+def test_tf32_and_vae_tiling_parsed(tmp_path: Path) -> None:
+    pack = load_model_pack(_write_pack(
+        tmp_path,
+        opt_yaml=(
+            "optimizations:\n"
+            "  tf32:\n"
+            "    enabled: true\n"
+            "  vae_tiling: true\n"
+        ),
+    ))
+    assert pack.optimizations.tf32.enabled is True
+    assert pack.optimizations.vae_tiling.enabled is True
+
+
+def test_tf32_and_vae_tiling_default_disabled(tmp_path: Path) -> None:
+    pack = load_model_pack(_write_pack(tmp_path))
+    assert pack.optimizations.tf32.enabled is False
+    assert pack.optimizations.vae_tiling.enabled is False
 
 
 def test_bundled_zimage_pack_ships_expected_optimizations() -> None:
-    """Z-Image: only SageAttention is ON by default.
-
-    torch.compile is OFF because the pipeline builder's dtype-switching ``_cast`` seam triggers
-    dynamo recompiles that net-regress the first generation (2026-07-16 RTX 4090 bench:
-    24.3 s → 31.7 s on 9:16 portrait). fp8_quantization is OFF because Z-Image ships bf16
-    weights natively — no matmul benefit and adds load-time conversion. Sage stays ON: gave a
-    modest speedup (~1.2× on 1:1 anime) with no quality drift.
-    """
+    """Z-Image: SageAttention + TF32 + VAE tiling ON, compile/fp8 OFF."""
 
     repo_root = Path(__file__).resolve().parents[1]
     manifest = repo_root / "models" / "packs" / "Rayzist_bf16" / "modelpack.yaml"
@@ -186,3 +201,5 @@ def test_bundled_zimage_pack_ships_expected_optimizations() -> None:
     assert pack.optimizations.torch_compile.enabled is False
     assert pack.optimizations.sage_attention.enabled is True
     assert pack.optimizations.fp8_quantization.enabled is False
+    assert pack.optimizations.tf32.enabled is True
+    assert pack.optimizations.vae_tiling.enabled is True

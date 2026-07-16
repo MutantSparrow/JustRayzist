@@ -107,7 +107,9 @@ def _parse_optimizations(raw: Any) -> Any:
         Fp8QuantConfig,
         OptimizationsConfig,
         SageAttentionConfig,
+        TF32Config,
         TorchCompileConfig,
+        VAETilingConfig,
     )
 
     if raw is None:
@@ -146,12 +148,15 @@ def _parse_optimizations(raw: Any) -> Any:
         )
 
     sage_raw = _sub("sage_attention")
+    tf32_raw = _sub("tf32")
+    vae_tiling_raw = _sub("vae_tiling")
 
-    unknown_keys = set(raw.keys()) - {"torch_compile", "fp8_quantization", "sage_attention"}
+    allowed_keys = {"torch_compile", "fp8_quantization", "sage_attention", "tf32", "vae_tiling"}
+    unknown_keys = set(raw.keys()) - allowed_keys
     if unknown_keys:
+        allowed = ", ".join(sorted(allowed_keys))
         raise ModelPackValidationError(
-            f"Unknown optimization keys: {sorted(unknown_keys)}. "
-            "Allowed: torch_compile, fp8_quantization, sage_attention."
+            f"Unknown optimization keys: {sorted(unknown_keys)}. Allowed: {allowed}."
         )
 
     return OptimizationsConfig(
@@ -168,6 +173,12 @@ def _parse_optimizations(raw: Any) -> Any:
         ),
         sage_attention=SageAttentionConfig(
             enabled=_parse_bool("optimizations.sage_attention.enabled", sage_raw.get("enabled"), False),
+        ),
+        tf32=TF32Config(
+            enabled=_parse_bool("optimizations.tf32.enabled", tf32_raw.get("enabled"), False),
+        ),
+        vae_tiling=VAETilingConfig(
+            enabled=_parse_bool("optimizations.vae_tiling.enabled", vae_tiling_raw.get("enabled"), False),
         ),
     )
 
