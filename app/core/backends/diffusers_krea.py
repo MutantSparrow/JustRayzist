@@ -151,7 +151,23 @@ class DiffusersKreaBackend(DiffusersZImageBackend):
 
         text_encoder = pipe.text_encoder
         tokenizer = pipe.tokenizer
-        device = text_encoder.device
+        del tokenizer, max_sequence_length  # processor drives tokenization/length for the VL path
+        # We are called BEFORE the pipeline enters its ``__call__`` (from ``_build_generate_pipe_kwargs``).
+        # Under sequential CPU offload, accelerate has hooked every submodule and swapped params for
+        # meta placeholders whose real storage lives in a ``weights_map`` staged on-demand per
+        # module. The pipeline's text-only ``get_text_hidden_states`` works because it's called
+        # from inside ``__call__`` where accelerate is already routing correctly; but calling
+        # ``text_encoder(...)`` directly from here trips the hook on submodules the text-only path
+        # never touches (the vision tower's ``pos_embed`` / ``patch_embed``).
+        #
+        # Strategy: strip the pipeline's accelerate hooks, move the encoder onto the execution
+        # device, run the VL encode, then re-enable sequential offload before returning. The
+        # encoder is small next to the 12B transformer, so this brief residency is safe on <=24GB.
+        device = pipe._execution_device
+        from accelerate.hooks import remove_hook_from_module
+
+        remove_hook_from_module(text_encoder, recurse=True)
+        text_encoder.to(device)
         select_layers = tuple(pipe.text_encoder_select_layers)
         prefix_idx = pipe.prompt_template_encode_start_idx
 
@@ -182,13 +198,18 @@ class DiffusersKreaBackend(DiffusersZImageBackend):
             tokenize=False,
             add_generation_prompt=True,
         )
+        # Do NOT truncate: an image expands to ~1000 vision tokens after patch merge, so a
+        # fixed ``max_length`` from the text-only path would clip image tokens and desync the
+        # processor's image/text token counts. The Krea2 transformer's text-side reads whatever
+        # ``text_seq_len`` the encoder produces (position ids are built from the mask below), so
+        # a variable length is fine. Padding is disabled for the same reason — a single-image
+        # batch does not need it.
         inputs = processor(
             text=[text],
             images=[image],
             return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=max_sequence_length + prefix_idx,
+            padding=False,
+            truncation=False,
         )
         inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
 
@@ -211,6 +232,14 @@ class DiffusersKreaBackend(DiffusersZImageBackend):
         # Drop the system-prefix tokens exactly like the text-only path.
         hidden = hidden[:, prefix_idx:]
         mask = attention_mask[:, prefix_idx:]
+
+        # Restore the pipeline's offload strategy so the downstream denoise loop keeps its VRAM
+        # budget. remove_all_hooks() clears every module (including the ones we didn't touch);
+        # enable_sequential_cpu_offload() re-attaches the full chain that was originally built by
+        # the pipeline factory.
+        pipe.remove_all_hooks()
+        if hasattr(pipe, "enable_sequential_cpu_offload"):
+            pipe.enable_sequential_cpu_offload()
         return hidden, mask
 
     def _resolve_qwen3vl_processor(self, pipe: Any) -> Any:

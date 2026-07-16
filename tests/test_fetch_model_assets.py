@@ -63,6 +63,8 @@ def test_krea2_assets_are_opt_in_and_map_to_pack_weights() -> None:
         "preprocessor_config.json",
         "chat_template.json",
         "video_preprocessor_config.json",
+        "vocab.json",
+        "merges.txt",
     }
     for asset in processor_assets:
         assert asset.relative_output_path.startswith(

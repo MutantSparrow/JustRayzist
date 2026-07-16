@@ -257,6 +257,24 @@ OPTIONAL_KREA2_ASSETS = [
         relative_output_path="models/packs/Krea2_Turbo/config/text_encoder/video_preprocessor_config.json",
         sha256="7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13",
     ),
+    # vocab.json + merges.txt must sit next to preprocessor_config.json for
+    # AutoProcessor.from_pretrained() to build the full multimodal processor (image processor +
+    # tokenizer share a directory). Fetched into the text_encoder/ config dir rather than
+    # tokenizer/ so a single local_files_only load resolves everything.
+    AssetSpec(
+        name="Krea2-Turbo Qwen3VL vocab",
+        repo_id="Qwen/Qwen3-VL-4B-Instruct",
+        repo_file="vocab.json",
+        relative_output_path="models/packs/Krea2_Turbo/config/text_encoder/vocab.json",
+        sha256="ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+    ),
+    AssetSpec(
+        name="Krea2-Turbo Qwen3VL merges",
+        repo_id="Qwen/Qwen3-VL-4B-Instruct",
+        repo_file="merges.txt",
+        relative_output_path="models/packs/Krea2_Turbo/config/text_encoder/merges.txt",
+        sha256="599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+    ),
 ]
 
 KREA2_LICENSE_NOTICE = (
