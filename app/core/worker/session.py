@@ -37,7 +37,17 @@ class GenerationSession:
     ):
         self._settings = settings
         self._model_pack = model_pack
-        self._resource_tier = resource_tier or settings.resource_tier_controller.current()
+        # Auto-tier selection consults pack-specific thresholds when the caller doesn't pin a
+        # profile explicitly. This lets a large model (e.g. Krea2's 12B DiT) demand more free VRAM
+        # for `high` than the default the smaller Z-Image family uses.
+        if resource_tier is not None:
+            self._resource_tier = resource_tier
+        else:
+            controller = settings.resource_tier_controller
+            current_for = getattr(controller, "current_for", None)
+            self._resource_tier = (
+                current_for(model_pack) if callable(current_for) else controller.current()
+            )
         self._backend: Any | None = None
         # Cache of idle backends keyed by pack name, populated only on keep-resident tiers.
         self._resident_backends: dict[str, Any] = {}
@@ -122,6 +132,14 @@ class GenerationSession:
 
         self._backend = None
         self._model_pack = model_pack
+
+        # Re-resolve the resource tier against the new pack's thresholds. A pack switch between
+        # families with different VRAM footprints (e.g. Z-Image ↔ Krea2) may demand a different
+        # tier — the user override is still honored via ResourceTierController.current_for().
+        controller = self._settings.resource_tier_controller
+        current_for = getattr(controller, "current_for", None)
+        if callable(current_for):
+            self._resource_tier = current_for(model_pack)
 
         # Reuse a cached resident backend if we have one for the target pack.
         cached = self._resident_backends.pop(model_pack.name, None)

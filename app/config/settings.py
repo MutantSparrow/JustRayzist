@@ -29,13 +29,31 @@ def current_free_vram_bytes() -> int | None:
         return None
 
 
-def detect_resource_tier_profile(*, free_vram_bytes: int | None = None) -> RuntimeProfile:
+def _threshold_gb(tier_name: str, overrides: dict[str, int] | None) -> int:
+    """Return the min-free-VRAM (GB) threshold for a tier, honoring optional pack overrides."""
+    if overrides is not None and tier_name in overrides:
+        return int(overrides[tier_name])
+    return RUNTIME_PROFILES[tier_name].min_free_vram_gb
+
+
+def detect_resource_tier_profile(
+    *,
+    free_vram_bytes: int | None = None,
+    pack_thresholds: dict[str, int] | None = None,
+) -> RuntimeProfile:
+    """Pick a runtime profile from free-VRAM, optionally with per-pack threshold overrides.
+
+    ``pack_thresholds`` maps tier names (``high``/``balanced``/``constrained``) to GB integers
+    that override the corresponding ``RuntimeProfile.min_free_vram_gb``. Absent keys fall back
+    to the global defaults. This lets a large model (e.g. Krea2's 12B DiT) require more free VRAM
+    to select ``high`` than the default 12 GB the smaller Z-Image family uses.
+    """
     free_bytes = current_free_vram_bytes() if free_vram_bytes is None else free_vram_bytes
     if free_bytes is None:
         return RUNTIME_PROFILES[_BALANCED_PROFILE_NAME]
-    if free_bytes >= _bytes_from_gb(RUNTIME_PROFILES["high"].min_free_vram_gb):
+    if free_bytes >= _bytes_from_gb(_threshold_gb("high", pack_thresholds)):
         return RUNTIME_PROFILES["high"]
-    if free_bytes >= _bytes_from_gb(RUNTIME_PROFILES["balanced"].min_free_vram_gb):
+    if free_bytes >= _bytes_from_gb(_threshold_gb("balanced", pack_thresholds)):
         return RUNTIME_PROFILES["balanced"]
     return RUNTIME_PROFILES["constrained"]
 
@@ -65,6 +83,20 @@ class ResourceTierController:
 
     def current(self) -> RuntimeProfile:
         return self.override_profile or self.current_profile
+
+    def current_for(self, pack: Any) -> RuntimeProfile:
+        """Pick the runtime profile for a given pack, honoring per-pack threshold overrides.
+
+        Respects any active user/env override (same as ``current()``); otherwise re-selects a
+        tier against the pack's ``resource_tier_thresholds`` (see ``ModelPack``). Falls back to
+        ``current()`` when the pack does not provide overrides or free-VRAM cannot be read.
+        """
+        if self.override_profile is not None:
+            return self.override_profile
+        thresholds = getattr(pack, "resource_tier_thresholds", None)
+        if not thresholds:
+            return self.current_profile
+        return detect_resource_tier_profile(pack_thresholds=thresholds)
 
     def refresh(self) -> RuntimeProfile:
         if self.override_profile is not None:

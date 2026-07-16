@@ -97,6 +97,24 @@ Krea2 notes:
 
 GGUF component loading is supported for `transformer`, `vae`, and `text_encoder`.
 
+## Per-pack resource tier thresholds
+
+By default the runtime tier (`high` / `balanced` / `constrained`) is picked by comparing free VRAM
+against `RUNTIME_PROFILES[tier].min_free_vram_gb` in `app/config/profiles.py`. A pack can override
+these thresholds for its own tier selection via the top-level `resource_tier_thresholds` block:
+
+```yaml
+resource_tier_thresholds:
+  high: 22        # min free-VRAM (GB) to pick `high` for this pack
+  balanced: 14
+  constrained: 4
+```
+
+Absent keys fall back to the global defaults. This lets a large model (e.g. Krea2's 12B fp8 DiT +
+Qwen3VL encoder) demand more free VRAM to skip sequential CPU offload than a smaller Z-Image pack
+would need — the RTX 4090 bench measured ~5.8× faster generation for Krea2 when `high` (no
+offload) is selected. Any user/env tier override still wins.
+
 ## Optional runtime storage hints
 
 Component entries may include optional advanced runtime hints:

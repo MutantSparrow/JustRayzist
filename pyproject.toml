@@ -25,11 +25,19 @@ dependencies = [
   "pyyaml>=6.0.3",
   "rotary-embedding-torch>=0.8.6",
   "safetensors>=0.6.2",
+  # Runtime optimization deps (torch.compile / fp8 quant / SageAttention). Each is
+  # capability-gated at apply time so older GPUs skip the option rather than crash.
+  "sageattention>=1.0.6",
   "torch>=2.9.1",
+  "torchao>=0.14.1",
   "torchaudio>=2.9.1",
   "tqdm>=4.67.1",
   "torchvision>=0.24.1",
   "transformers>=4.57.0",
+  # Triton kernels power the sageattention/fp8 fast paths. Linux/Mac ship official ``triton``;
+  # Windows uses the ``triton-windows`` fork with matching semantics.
+  "triton>=3.5.0 ; platform_system != 'Windows'",
+  "triton-windows>=3.5.1 ; platform_system == 'Windows'",
   "typer>=0.16.0",
   "uvicorn>=0.35.0",
 ]

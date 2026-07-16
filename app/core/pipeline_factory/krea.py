@@ -404,6 +404,13 @@ def _build_krea_pipeline(
         else:
             pipeline.to("cuda")
 
+    # Apply pack-configured runtime optimizations (torch.compile / fp8 quant / SageAttention).
+    # Each is capability-gated; unsupported combinations soft-fail with a log line. Deferred to
+    # here so pipeline device placement (or offload hook wiring) has finished first.
+    from app.core.pipeline_factory.optimizations import apply_optimizations
+
+    apply_optimizations(pipeline, pack.optimizations, device)
+
     return LoadedKreaPipeline(
         pipeline=pipeline,
         device=device,

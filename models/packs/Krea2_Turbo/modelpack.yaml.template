@@ -25,6 +25,26 @@ backend_preference:
 # Local pipeline config directory used by Krea2Pipeline.from_pretrained(...)
 pipeline_config_dir: ./config
 
+# Optional per-pack min-free-VRAM (GB) thresholds. When present these override
+# app/config/profiles.py globals for the auto-tier selector. See
+# tests/test_resource_tier_thresholds.py and the RTX 4090 bench (2026-07-16) that
+# established Krea2 needs ~22 GB free to skip sequential CPU offload (~5.8× faster).
+resource_tier_thresholds:
+  high: 22
+  balanced: 14
+  constrained: 4
+
+# Post-load runtime optimizations — each capability-gated (see the main modelpack.yaml comment).
+optimizations:
+  torch_compile:
+    enabled: true
+    mode: default
+  fp8_quantization:
+    enabled: false
+    scope: transformer
+  sage_attention:
+    enabled: true
+
 components:
   # Main denoiser/transformer (Krea2Transformer2DModel).
   transformer:

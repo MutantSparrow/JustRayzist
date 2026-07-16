@@ -1,15 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+# NOTE: ``OptimizationsConfig`` and its subtypes live in ``app.core.pipeline_factory.optimizations``
+# but are imported lazily inside ``_parse_optimizations`` / at the type-annotation boundary below
+# to avoid a circular import cycle (pipeline_factory.__init__ pulls in zimage.py, which in turn
+# needs ``ModelPack``).
 ALLOWED_ARCHITECTURES = {"z_image_turbo", "krea2_turbo"}
 ALLOWED_FORMATS = {"safetensors", "gguf"}
 ALLOWED_STORAGE_MODES = {"layerwise"}
 ALLOWED_RUNTIME_DTYPES = {"float32", "float16", "bfloat16", "fp8_e4m3fn"}
+ALLOWED_TIER_NAMES = {"high", "balanced", "constrained"}
+ALLOWED_COMPILE_MODES = {"default", "reduce-overhead", "max-autotune"}
+ALLOWED_FP8_SCOPES = {"transformer", "transformer+text_encoder"}
 
 
 @dataclass(frozen=True)
@@ -35,6 +42,16 @@ class ModelPack:
     enabled: bool = True
     base_name: str | None = None
     derived_strategy: str | None = None
+    # Optional per-pack minimum free-VRAM (GB) required to select each resource tier. Overrides
+    # RUNTIME_PROFILES[tier].min_free_vram_gb when the auto-tier selector runs against this pack.
+    # Absent keys fall back to global defaults. Keys must be a subset of ALLOWED_TIER_NAMES.
+    resource_tier_thresholds: dict[str, int] | None = None
+    # Optional post-load runtime optimizations (torch.compile / fp8 quant / SageAttention). Each is
+    # capability-gated at apply time (see app/core/pipeline_factory/optimizations.py) so a pack
+    # requesting an option that the local GPU cannot support degrades gracefully with a log line.
+    # Typed as ``Any`` here to avoid an import cycle at module load; runtime value is always an
+    # ``OptimizationsConfig`` instance produced by ``_parse_optimizations``.
+    optimizations: Any = field(default_factory=lambda: _default_optimizations_config())
 
 
 class ModelPackValidationError(ValueError):
@@ -55,6 +72,131 @@ def _parse_enabled(raw: Any) -> bool:
     if isinstance(raw, bool):
         return raw
     raise ModelPackValidationError("'enabled' must be a boolean when provided.")
+
+
+def _parse_bool(field: str, raw: Any, default: bool) -> bool:
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    raise ModelPackValidationError(f"'{field}' must be a boolean; got {raw!r}.")
+
+
+def _default_optimizations_config() -> Any:
+    from app.core.pipeline_factory.optimizations import OptimizationsConfig
+
+    return OptimizationsConfig()
+
+
+def _parse_optimizations(raw: Any) -> Any:
+    """Parse the top-level ``optimizations`` block of a modelpack.yaml.
+
+    Shape (all fields optional; missing keys default to disabled):
+
+    ```yaml
+    optimizations:
+      torch_compile: {enabled: true, mode: reduce-overhead, fullgraph: false}
+      fp8_quantization: {enabled: true, scope: transformer}
+      sage_attention: {enabled: true}
+    ```
+
+    Boolean shortcut also accepted: ``torch_compile: true`` is equivalent to
+    ``torch_compile: {enabled: true}`` (defaults for other subfields).
+    """
+    from app.core.pipeline_factory.optimizations import (
+        Fp8QuantConfig,
+        OptimizationsConfig,
+        SageAttentionConfig,
+        TorchCompileConfig,
+    )
+
+    if raw is None:
+        return OptimizationsConfig()
+    if not isinstance(raw, dict):
+        raise ModelPackValidationError(
+            "'optimizations' must be an object mapping optimization names to config blocks."
+        )
+
+    def _sub(name: str) -> dict[str, Any]:
+        value = raw.get(name)
+        if value is None:
+            return {}
+        if isinstance(value, bool):
+            return {"enabled": value}
+        if isinstance(value, dict):
+            return value
+        raise ModelPackValidationError(
+            f"'optimizations.{name}' must be a boolean or an object; got {value!r}."
+        )
+
+    compile_raw = _sub("torch_compile")
+    compile_mode = str(compile_raw.get("mode", "reduce-overhead")).strip().lower()
+    if compile_mode not in ALLOWED_COMPILE_MODES:
+        allowed = ", ".join(sorted(ALLOWED_COMPILE_MODES))
+        raise ModelPackValidationError(
+            f"'optimizations.torch_compile.mode' must be one of: {allowed}. Got {compile_mode!r}."
+        )
+
+    fp8_raw = _sub("fp8_quantization")
+    fp8_scope = str(fp8_raw.get("scope", "transformer")).strip().lower()
+    if fp8_scope not in ALLOWED_FP8_SCOPES:
+        allowed = ", ".join(sorted(ALLOWED_FP8_SCOPES))
+        raise ModelPackValidationError(
+            f"'optimizations.fp8_quantization.scope' must be one of: {allowed}. Got {fp8_scope!r}."
+        )
+
+    sage_raw = _sub("sage_attention")
+
+    unknown_keys = set(raw.keys()) - {"torch_compile", "fp8_quantization", "sage_attention"}
+    if unknown_keys:
+        raise ModelPackValidationError(
+            f"Unknown optimization keys: {sorted(unknown_keys)}. "
+            "Allowed: torch_compile, fp8_quantization, sage_attention."
+        )
+
+    return OptimizationsConfig(
+        torch_compile=TorchCompileConfig(
+            enabled=_parse_bool("optimizations.torch_compile.enabled", compile_raw.get("enabled"), False),
+            mode=compile_mode,
+            fullgraph=_parse_bool(
+                "optimizations.torch_compile.fullgraph", compile_raw.get("fullgraph"), False
+            ),
+        ),
+        fp8_quantization=Fp8QuantConfig(
+            enabled=_parse_bool("optimizations.fp8_quantization.enabled", fp8_raw.get("enabled"), False),
+            scope=fp8_scope,
+        ),
+        sage_attention=SageAttentionConfig(
+            enabled=_parse_bool("optimizations.sage_attention.enabled", sage_raw.get("enabled"), False),
+        ),
+    )
+
+
+def _parse_resource_tier_thresholds(raw: Any) -> dict[str, int] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ModelPackValidationError(
+            "'resource_tier_thresholds' must be an object mapping tier names to GB integers."
+        )
+    parsed: dict[str, int] = {}
+    for key, value in raw.items():
+        name = str(key).strip().lower()
+        if name not in ALLOWED_TIER_NAMES:
+            allowed = ", ".join(sorted(ALLOWED_TIER_NAMES))
+            raise ModelPackValidationError(
+                f"Unknown resource tier '{key}' in 'resource_tier_thresholds'. Allowed: {allowed}"
+            )
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ModelPackValidationError(
+                f"'resource_tier_thresholds.{name}' must be an integer (GB); got {value!r}."
+            )
+        if value < 0:
+            raise ModelPackValidationError(
+                f"'resource_tier_thresholds.{name}' must be >= 0; got {value}."
+            )
+        parsed[name] = value
+    return parsed or None
 
 
 def _is_remote_path(raw_path: str) -> bool:
@@ -215,6 +357,10 @@ def load_model_pack(pack_file: Path) -> ModelPack:
 
     user_visible = _parse_user_visible(payload.get("user_visible"))
     enabled = _parse_enabled(payload.get("enabled"))
+    resource_tier_thresholds = _parse_resource_tier_thresholds(
+        payload.get("resource_tier_thresholds")
+    )
+    optimizations = _parse_optimizations(payload.get("optimizations"))
 
     return ModelPack(
         name=name,
@@ -228,6 +374,8 @@ def load_model_pack(pack_file: Path) -> ModelPack:
         enabled=enabled,
         base_name=name,
         derived_strategy=None,
+        resource_tier_thresholds=resource_tier_thresholds,
+        optimizations=optimizations,
     )
 
 

@@ -7,6 +7,38 @@ backend_preference:
   - fp8_krea
   - diffusers_krea
 pipeline_config_dir: ./config
+# Krea2-specific tier thresholds (min free-VRAM in GB) — override the global defaults from
+# app/config/profiles.py. The 12B fp8 transformer + Qwen3VL encoder + VAE need ~18 GB resident to
+# skip sequential CPU offload, which the RTX 4090 bench (2026-07-16) showed to be ~5.8× faster
+# than the offload path (28-33 s vs ~170 s per 1024² 8-step generation). Below 22 GB free we drop
+# to the `balanced` (partial offload) tier; below 14 GB free we drop to the fully-offloaded
+# `constrained` tier as a safe fallback.
+resource_tier_thresholds:
+  high: 22
+  balanced: 14
+  constrained: 4
+# Post-load runtime optimizations. Each is capability-gated at apply time (see
+# app/core/pipeline_factory/optimizations.py) so a manifest requesting an option the local GPU
+# cannot support degrades gracefully with a log line rather than crashing:
+#   - torch.compile: universal on CUDA (Turing+)
+#   - fp8_quantization: Ada+ only (sm_89); replaces the fp8-storage/bf16-compute promote-per-step
+#     with native fp8 matmul when the GPU supports it
+#   - sage_attention: Turing+; drops in on top of the diffusers attention path
+optimizations:
+  # ``reduce-overhead`` triggers cudagraph capture which crashed on Windows/triton-windows 3.5 with
+  # OverflowError inside static_cuda_launcher (int too large for C long) on RTX 4090 (sm_89). The
+  # ``default`` mode compiles the graph without cudagraphs and still gives most of the speedup.
+  torch_compile:
+    enabled: true
+    mode: default
+  # torchao 0.14 dynamic fp8 activation-weight quant currently fails on Float8_e4m3fn tensors on
+  # torch 2.9: ``abs_cuda not implemented for 'Float8_e4m3fn'``. Left OFF pending torch>=2.11 +
+  # torchao>=0.17 which restores the aten abs kernel for fp8 dtypes.
+  fp8_quantization:
+    enabled: false
+    scope: transformer
+  sage_attention:
+    enabled: true
 components:
   # Native/ComfyUI fp8 transformer checkpoint (AlperKTS/Krea2_FP8). The builder detects the
   # native `blocks.*` key layout and converts it to diffusers keys (krea_comfy_convert.py).
