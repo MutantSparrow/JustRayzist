@@ -759,15 +759,27 @@ class InferenceService:
             except Exception:
                 backend_status = {}
         color_cache_status = self.gallery_color_cache_status()
+        # Before the first generation, no session has been eagerly loaded — surface the pack
+        # the service *would* load on next request as `selected_pack` so the UI's topbar chip
+        # + R+ availability cue reflect reality on first page load, not "unknown" until the
+        # user picks a pack. `active_pack` stays None until the pack is actually resident.
+        active_pack_name = self._active_pack_name
+        selected_pack_name = self._active_selected_pack_name
+        if not active_pack_name and not selected_pack_name:
+            try:
+                default_pack = self._load_base_pack(None)
+                selected_pack_name = default_pack.base_name or default_pack.name
+            except Exception:
+                pass
         return {
             "runtime_profile": self._settings.runtime_profile.name,
             "resource_tier": tier.name,
             "resource_tier_description": tier.description,
             "resource_tier_override": self._settings.resource_tier_override,
             "auto_resource_tier": self._settings.auto_resource_tier,
-            "active_pack": self._active_pack_name,
-            "selected_pack": self._active_selected_pack_name,
-            "effective_pack": backend_status.get("effective_pack", self._active_pack_name),
+            "active_pack": active_pack_name,
+            "selected_pack": selected_pack_name,
+            "effective_pack": backend_status.get("effective_pack", active_pack_name or selected_pack_name),
             "active_backend": backend_status.get("backend", self._active_backend_name),
             "execution_mode": backend_status.get("execution_mode"),
             "execution_mode_initial": backend_status.get("execution_mode_initial"),
