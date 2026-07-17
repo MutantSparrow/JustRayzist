@@ -117,6 +117,45 @@ def test_resource_tier_controller_requires_two_hits_to_promote(monkeypatch) -> N
     assert controller.refresh().name == "balanced"
 
 
+def test_promotion_threshold_clamps_when_total_vram_below_margin(monkeypatch) -> None:
+    """Regression: on a 24 GB card, promotion to `high` would previously require
+    22 + 3 = 25 GiB free — unreachable, so once demoted the controller stayed stuck.
+    The clamp lets promotion fire once free VRAM approaches (but doesn't quite hit)
+    total-1 GiB."""
+    import dataclasses
+
+    # Simulate Krea2's per-pack override of high=22 GiB by replacing the shipped high tier
+    # with a min_free_vram_gb=22 variant. Mirrors what modelpack.yaml does at pack load.
+    high_tier = dataclasses.replace(RUNTIME_PROFILES["high"], min_free_vram_gb=22)
+    monkeypatch.setattr("app.config.settings.RUNTIME_PROFILES", {**RUNTIME_PROFILES, "high": high_tier})
+
+    controller = ResourceTierController(current_profile=RUNTIME_PROFILES["balanced"])
+    # 24 GiB total (RTX 4090 class), free rises to 23 GiB after weights become resident.
+    monkeypatch.setattr("app.config.settings.current_total_vram_bytes", lambda: 24 * GB)
+    monkeypatch.setattr("app.config.settings.current_free_vram_bytes", lambda: 23 * GB)
+
+    # Without the clamp: promotion_threshold = (22 + 3) * GB = 25 GiB > 23 free → stuck.
+    # With the clamp: promotion_threshold = min(25, 24-1) = 23 GiB. 23 free >= 23 → hits.
+    assert controller.refresh().name == "balanced"  # first hit — needs two consecutive
+    assert controller.refresh().name == "high"
+
+
+def test_promotion_threshold_does_not_clamp_when_total_vram_is_ample(monkeypatch) -> None:
+    """On an A6000 (48 GB) the raw 22+3=25 GiB threshold is reachable — no clamping needed."""
+    import dataclasses
+
+    high_tier = dataclasses.replace(RUNTIME_PROFILES["high"], min_free_vram_gb=22)
+    monkeypatch.setattr("app.config.settings.RUNTIME_PROFILES", {**RUNTIME_PROFILES, "high": high_tier})
+
+    controller = ResourceTierController(current_profile=RUNTIME_PROFILES["balanced"])
+    monkeypatch.setattr("app.config.settings.current_total_vram_bytes", lambda: 48 * GB)
+    # Free = 24 GiB: passes the raw 22 GiB tier floor but not the 25 GiB promotion margin.
+    monkeypatch.setattr("app.config.settings.current_free_vram_bytes", lambda: 24 * GB)
+
+    assert controller.refresh().name == "balanced"
+    assert controller.refresh().name == "balanced"
+
+
 def test_inference_service_completes_minimal_pack_from_donor(monkeypatch, workspace_tmp_path: Path) -> None:
     root = _make_temp_root(workspace_tmp_path, "minimal-pack")
     service = InferenceService(_make_settings(root))

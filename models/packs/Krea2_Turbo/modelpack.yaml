@@ -14,8 +14,8 @@ pipeline_config_dir: ./config
 # to the `balanced` (partial offload) tier; below 14 GB free we drop to the fully-offloaded
 # `constrained` tier as a safe fallback.
 resource_tier_thresholds:
-  high: 22
-  balanced: 14
+  high: 20
+  balanced: 12
   constrained: 4
 # Post-load runtime optimizations. Each is capability-gated at apply time (see
 # app/core/pipeline_factory/optimizations.py) so a manifest requesting an option the local GPU

@@ -29,6 +29,26 @@ def current_free_vram_bytes() -> int | None:
         return None
 
 
+def current_total_vram_bytes() -> int | None:
+    """Total VRAM installed on the current CUDA device, in bytes.
+
+    Used to clamp promotion thresholds against physical capacity — a promotion target that
+    exceeds total VRAM (e.g. requiring 25 GiB free on a 24 GB card) is otherwise
+    unreachable and leaves the controller stuck at a lower tier forever.
+    """
+    try:
+        import torch
+    except Exception:
+        return None
+    try:
+        if not torch.cuda.is_available():
+            return None
+        _, total_bytes = torch.cuda.mem_get_info(torch.cuda.current_device())
+        return int(total_bytes)
+    except Exception:
+        return None
+
+
 def _threshold_gb(tier_name: str, overrides: dict[str, int] | None) -> int:
     """Return the min-free-VRAM (GB) threshold for a tier, honoring optional pack overrides."""
     if overrides is not None and tier_name in overrides:
@@ -131,6 +151,14 @@ class ResourceTierController:
         promotion_threshold = _bytes_from_gb(
             next_profile.min_free_vram_gb + _upgrade_margin_gb(next_name)
         )
+        # Cap the promotion threshold against physical VRAM. Without this a target like
+        # `high: 22 GiB + 3 GiB margin = 25 GiB` is unreachable on any 24 GB card — once
+        # demoted to balanced, promotion never fires and SageAttention / torch.compile stay
+        # skipped even after weights are resident. Never clamp below the raw tier floor.
+        total_bytes = current_total_vram_bytes()
+        if total_bytes is not None and promotion_threshold > total_bytes:
+            floor_bytes = _bytes_from_gb(next_profile.min_free_vram_gb)
+            promotion_threshold = max(floor_bytes, total_bytes - _bytes_from_gb(1))
         if free_bytes >= promotion_threshold:
             self.consecutive_upgrade_hits += 1
             if self.consecutive_upgrade_hits >= 2:

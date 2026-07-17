@@ -30,8 +30,8 @@ pipeline_config_dir: ./config
 # tests/test_resource_tier_thresholds.py and the RTX 4090 bench (2026-07-16) that
 # established Krea2 needs ~22 GB free to skip sequential CPU offload (~5.8× faster).
 resource_tier_thresholds:
-  high: 22
-  balanced: 14
+  high: 20
+  balanced: 12
   constrained: 4
 
 # Post-load runtime optimizations — each capability-gated (see the main modelpack.yaml comment).

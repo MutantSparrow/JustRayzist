@@ -165,6 +165,20 @@ def test_pack_with_thresholds_parsed(tmp_path: Path) -> None:
     assert pack.resource_tier_thresholds == {"high": 22, "balanced": 14, "constrained": 4}
 
 
+def test_pack_with_lower_thresholds_parsed(tmp_path: Path) -> None:
+    path = _write_pack(
+        tmp_path,
+        thresholds_yaml=(
+            "resource_tier_thresholds:\n"
+            "  high: 20\n"
+            "  balanced: 12\n"
+            "  constrained: 4\n"
+        ),
+    )
+    pack = load_model_pack(path)
+    assert pack.resource_tier_thresholds == {"high": 20, "balanced": 12, "constrained": 4}
+
+
 def test_pack_rejects_unknown_tier(tmp_path: Path) -> None:
     path = _write_pack(
         tmp_path,
@@ -190,11 +204,17 @@ def test_pack_rejects_non_integer(tmp_path: Path) -> None:
 
 
 def test_krea2_pack_ships_expected_thresholds() -> None:
-    """The bundled Krea2 pack's thresholds should match the values documented in modelpack.yaml."""
+    """The bundled Krea2 pack's thresholds should match the values documented in modelpack.yaml.
+
+    Lowered from 22/14 to 20/12 on 2026-07-17 — the 22 GiB `high` bar was unreachable on
+    RTX 4090-class 24 GB cards at boot (Windows compositor + prior CUDA contexts leave
+    ~21-22 GiB free), causing auto-tier to demote to `balanced` and skip SageAttention +
+    torch.compile.
+    """
 
     repo_root = Path(__file__).resolve().parents[1]
     manifest = repo_root / "models" / "packs" / "Krea2_Turbo" / "modelpack.yaml"
     if not manifest.exists():
         pytest.skip("Krea2 pack manifest not present (opt-in provisioning).")
     pack = load_model_pack(manifest)
-    assert pack.resource_tier_thresholds == {"high": 22, "balanced": 14, "constrained": 4}
+    assert pack.resource_tier_thresholds == {"high": 20, "balanced": 12, "constrained": 4}
