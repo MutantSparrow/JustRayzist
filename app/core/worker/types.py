@@ -57,5 +57,5 @@ class GenerationRequest:
     # the prompt through Qwen3VL and fed to Krea2Pipeline as prompt_embeds (the same pattern
     # ComfyUI's Krea2 style-ref workflow uses). Additive and defaulting to None so the frozen
     # contract stays backward-compatible; the Z-Image backend ignores it.
-    # See JustRayzist-Krea.md §2/§4/WP-5.
+    # See docs/KREA2_IMPLEMENTATION_STATUS.md for the design summary.
     context_image: Path | None = None

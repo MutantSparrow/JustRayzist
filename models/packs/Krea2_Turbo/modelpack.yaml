@@ -51,8 +51,8 @@ optimizations:
   vae_tiling:
     enabled: true
 components:
-  # Native/ComfyUI fp8 transformer checkpoint (AlperKTS/Krea2_FP8). The builder detects the
-  # native `blocks.*` key layout and converts it to diffusers keys (krea_comfy_convert.py).
+  # Native/ComfyUI fp8 transformer checkpoint. The builder detects the native `blocks.*` key
+  # layout and converts it to diffusers keys (krea_comfy_convert.py).
   transformer:
     path: ./weights/krea2_turbo_fp8.safetensors
     format: safetensors

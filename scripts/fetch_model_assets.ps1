@@ -1,8 +1,7 @@
 param(
   [switch]$Force,
   [switch]$IncludeQwen3Fp8Encoder,
-  [switch]$IncludeKrea2,
-  [switch]$AcceptKrea2License
+  [switch]$IncludeKrea2
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,9 +49,6 @@ if ($IncludeQwen3Fp8Encoder) {
 }
 if ($IncludeKrea2) {
   $arguments += "--include-krea2"
-}
-if ($AcceptKrea2License) {
-  $arguments += "--accept-krea2-license"
 }
 
 & $pythonExe @arguments

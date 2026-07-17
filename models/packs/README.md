@@ -71,7 +71,8 @@ Two model families are supported. `architecture` in a pack selects which:
   backends). Near-sibling of Z-Image: same `FlowMatchEulerDiscreteScheduler`, Qwen-family text
   encoder + VAE. Differs in transformer class (`Krea2Transformer2DModel`) and pipeline
   (`Krea2Pipeline`), which require diffusers `>=0.39.0.dev0`. See
-  `models/packs/Krea2_Turbo/` for the pack scaffold and `JustRayzist-Krea.md` for the full plan.
+  `models/packs/Krea2_Turbo/` for the pack scaffold and `docs/KREA2_IMPLEMENTATION_STATUS.md`
+  for the design summary.
 
 Krea2 notes:
 
@@ -84,11 +85,14 @@ Krea2 notes:
 - The runtime can switch between families without a restart (see the model switch in the worker
   session); on high-VRAM tiers the previous family is kept resident for instant switch-back, and on
   tighter tiers it is released before the next loads so two large models are never resident at once.
-- Krea2 weights are governed by the **Krea 2 Community License** (distinct from Z-Image); fetching
-  is opt-in and license-gated. The pack's config dirs are committed; only the weights are fetched:
-  `scripts/fetch_model_assets.ps1 -IncludeKrea2 -AcceptKrea2License` (Windows) or
-  `python scripts/portable/fetch_model_assets.py --include-krea2 --accept-krea2-license` (any
-  platform). `StartWeb` prompts to fetch on first selection of the `Krea2_Turbo` pack.
+- Krea2 weights are opt-in and drop-in: the operator supplies their own finetuned Krea2-Turbo
+  checkpoint (licensing handled off-repo, not by the app). The pack's config dirs are committed;
+  only the weights are fetched:
+  `scripts/fetch_model_assets.ps1 -IncludeKrea2` (Windows) or
+  `python scripts/portable/fetch_model_assets.py --include-krea2` (any platform). `StartWeb`
+  prompts to confirm the ~18 GB download on first selection of the `Krea2_Turbo` pack. The
+  target repo id lives in `scripts/portable/fetch_model_assets.py` (`_KREA2_FINETUNE_REPO`); see
+  the `TODO(krea2 finetune)` marker there for how to plumb in the real repo + SHA256s.
 
 ## Supported component formats
 

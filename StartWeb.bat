@@ -345,12 +345,10 @@ if !KREA_MISSING! EQU 0 (
 
 echo.
 echo Missing Krea2_Turbo model weights (~18 GB).
-echo Krea2-Turbo weights are governed by the Krea 2 Community License, which is
-echo distinct from the Z-Image assets and is downloaded for local use only.
-choice /c YN /n /m "Accept the Krea 2 Community License and download now? [Y/N]: "
+choice /c YN /n /m "Download Krea2_Turbo assets now? [Y/N]: "
 if errorlevel 2 (
   echo Krea2_Turbo launch cancelled. You can fetch later with:
-  echo   powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1 -IncludeKrea2 -AcceptKrea2License
+  echo   powershell -ExecutionPolicy Bypass -File scripts\fetch_model_assets.ps1 -IncludeKrea2
   exit /b 1
 )
 if not exist "!FETCH_SCRIPT!" (
@@ -358,8 +356,8 @@ if not exist "!FETCH_SCRIPT!" (
   exit /b 1
 )
 echo Running fetch script:
-echo   !FETCH_SCRIPT! -IncludeKrea2 -AcceptKrea2License
-powershell -NoProfile -ExecutionPolicy Bypass -File "!FETCH_SCRIPT!" -IncludeKrea2 -AcceptKrea2License
+echo   !FETCH_SCRIPT! -IncludeKrea2
+powershell -NoProfile -ExecutionPolicy Bypass -File "!FETCH_SCRIPT!" -IncludeKrea2
 if errorlevel 1 (
   echo Failed to fetch Krea2_Turbo model assets.
   echo Ensure Hugging Face CLI with XET is installed via:

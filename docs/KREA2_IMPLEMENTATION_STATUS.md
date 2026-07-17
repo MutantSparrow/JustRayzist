@@ -1,40 +1,43 @@
 # Krea2-Turbo Integration — Implementation Status
 
-Tracks what landed on `feat/krea2-support`. The full design is in `JustRayzist-Krea.md` (repo root).
+Tracks what landed on `feat/krea2-support`.
 
-**End-to-end verified on an RTX 4080 (16GB), through the full web app.** The `Krea2_Turbo` fp8 pack
-generates correct images both directly through the backend and through the running web server:
+**End-to-end verified on RTX 4080 (16GB) + RTX 4090 (24GB), through the full web app.** The
+`Krea2_Turbo` fp8 pack generates correct images both directly through the backend and through the
+running web server:
 
 - **Backend path:** `create_backend` → `Fp8KreaBackend` → `build_fp8_krea_pipeline` →
   `backend.generate()`. 1024×1024, 8 steps, cfg 0.0, "a red fox in fresh snow" → correct image
-  (~230 s). Smoke script: `scripts/dev_krea2_smoke.py`.
+  (~230 s on 16 GB constrained tier; ~20 s on 24 GB high tier with the optimization stack).
+  Smoke script: `scripts/dev_krea2_smoke.py`.
 - **Web/API path:** `StartWeb` → select `Krea2_Turbo` → `POST /generate` → image saved to the
   gallery. Response confirmed `model_pack=Krea2_Turbo`, `backend=fp8_krea`, `device=cuda`,
   `execution_mode=sequential_offload`, 8 steps, cfg 0.0.
 
-Weights are gitignored and provisioned on demand (opt-in, license-gated) — see "Provisioning" below.
+Weights are gitignored and provisioned on demand — see "Provisioning" below. The operator supplies
+their own finetuned Krea2-Turbo checkpoint (licensing handled off-repo); the app only knows the
+disk layout it expects.
 
-## ComfyUI checkpoint support (AlperKTS/Krea2_FP8)
+## Native/ComfyUI fp8 checkpoint support
 
-The `Krea2_Turbo` pack uses the ComfyUI-native fp8 weights from
-[`AlperKTS/Krea2_FP8`](https://huggingface.co/AlperKTS/Krea2_FP8) (transformer, VAE, Qwen3VL
-encoder). ComfyUI checkpoints use different key layouts than diffusers, so
-`app/core/pipeline_factory/krea_comfy_convert.py` converts each component — the same pattern as the
-existing Z-Image `_convert_prefixed_fused_zimage_state_dict`:
+The `Krea2_Turbo` pack loads ComfyUI-native fp8 weights and converts their key layout to the
+`diffusers` expectations. `app/core/pipeline_factory/krea_comfy_convert.py` handles each component
+— same pattern as the existing Z-Image `_convert_prefixed_fused_zimage_state_dict`:
 
 - **Transformer** (`blocks.*` → `transformer_blocks.*`, `first/last/tmlp/tproj/txtmlp` globals,
   `mod.lin (6*H,)` → `scale_shift_table (6,H)`; drops the 2 extra `last.up/last.down` tensors some
-  fp8 repacks carry). Mapping derived by aligning against the official
-  `krea/Krea-2-Turbo/turbo.safetensors` (same native layout, 430 keys) and the diffusers model;
-  validated by an exact key+shape match and a full 12.82B-param CPU load.
+  fp8 repacks carry). Mapping derived by aligning against the official Krea 2 Turbo layout (native
+  format, 430 keys) and the diffusers model; validated by an exact key+shape match and a full
+  12.82B-param CPU load.
 - **VAE** — reuses diffusers' own `convert_wan_vae_to_diffusers` (the Qwen-image VAE shares the Wan
   VAE layout); exact 194/194 match, strict load.
 - **Qwen3VL encoder** — ComfyUI scaled-fp8 (`.weight` fp8 × scalar `.weight_scale`, plus a
   `.comfy_quant` JSON-metadata tensor that is dropped) with a `model.* → language_model.*` /
   `model.visual.* → visual.*` prefix remap; exact 713/713 match.
 
-The pack config dirs (`config/{scheduler,tokenizer,transformer,vae,text_encoder}`) are the official
-`krea/Krea-2-Turbo` diffusers configs and are committed. See "Provisioning" for weight fetching.
+The pack config dirs (`config/{scheduler,tokenizer,transformer,vae,text_encoder}`) hold the
+official diffusers configs for the Krea 2 Turbo architecture and are committed. See "Provisioning"
+for weight fetching.
 
 On a 16GB card the builder sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (unless already
 set) before CUDA init to avoid fragmentation OOMs; the `constrained` profile's sequential CPU
@@ -43,24 +46,24 @@ offload keeps the fp8 transformer + bf16 encoder + VAE within budget. A manual s
 
 ## Provisioning (installers / launchers)
 
-Only the ~18GB weights are fetched (config dirs are committed). Krea is wired into the same asset
-machinery as the optional `Rayzist_qwen3_4b_fp8` pack, and is **opt-in + license-gated** (Krea 2
-Community License, distinct from Z-Image):
+Only the ~18 GB weights are fetched (config dirs are committed). Krea is wired into the same
+asset machinery as the optional `Rayzist_qwen3_4b_fp8` pack, opt-in and drop-in:
 
-- `scripts/portable/fetch_model_assets.py` — `OPTIONAL_KREA2_ASSETS` (3 `AlperKTS/Krea2_FP8` files
-  with SHA256), gated behind `--include-krea2 --accept-krea2-license` (refuses with exit 2 if the
-  license flag is absent).
-- `scripts/fetch_model_assets.ps1` — `-IncludeKrea2` / `-AcceptKrea2License` pass-through switches.
-- `scripts/fetch_krea2_assets.ps1` — thin wrapper over the shared fetcher (kept to avoid drift).
+- `scripts/portable/fetch_model_assets.py` — `OPTIONAL_KREA2_ASSETS` lists three weight files
+  keyed by a single `_KREA2_FINETUNE_REPO` constant (currently the placeholder
+  `MutantSparrow/krea2-placeholder`; operators replace this with their own finetune repo id and
+  fill in the per-file SHA256s — see the `TODO(krea2 finetune)` comment).
+- `scripts/fetch_model_assets.ps1` — `-IncludeKrea2` switch forwards to the portable helper.
+- `scripts/fetch_krea2_assets.ps1` — two-liner wrapper (`fetch_model_assets.ps1 -IncludeKrea2`).
 - `StartWeb.bat` (`:ensure_krea2_pack_assets`) and `scripts/portable/start_web.py`
-  (`ensure_pack_assets`, used by `StartWeb.sh`) — on selecting `Krea2_Turbo`, prompt for license
-  consent and fetch missing weights; non-interactive launches print the manual fetch command instead
-  of silently downloading 18GB.
+  (`ensure_pack_assets`, used by `StartWeb.sh`) — on selecting `Krea2_Turbo`, prompt to confirm
+  the ~18 GB download (size-based safety valve, no licensing framing); non-interactive launches
+  print the manual fetch command instead of silently downloading 18 GB.
 
 Fetch manually with:
 ```
-scripts/fetch_model_assets.ps1 -IncludeKrea2 -AcceptKrea2License          # Windows
-python scripts/portable/fetch_model_assets.py --include-krea2 --accept-krea2-license   # any platform
+scripts/fetch_model_assets.ps1 -IncludeKrea2                    # Windows
+python scripts/portable/fetch_model_assets.py --include-krea2   # any platform
 ```
 
 ## Coexistence
@@ -84,7 +87,7 @@ Z-Image path.
 | — | Runtime optimization framework | `app/core/pipeline_factory/optimizations.py` — post-load applier for `torch.compile`, `torchao` fp8 dynamic quant (Ada+ only), SageAttention (Turing+), TF32 (Ampere+), VAE tiling, and persistent Inductor cache. Each is capability-gated at apply time so a pack requesting an option the local GPU cannot support degrades gracefully with a log line. Krea2 pack enables compile+sage+tf32+tiling; Z-Image pack enables sage+tf32+tiling (compile off because its `_cast` seam recompile-storms on first gen). fp8 quant kept OFF pending an aten `abs_cuda(Float8_e4m3fn)` kernel — bumping to torch 2.11 / torchao 0.17 was not enough. Bench (RTX 4090 warm): Krea2 high tier 32.7 s → 21.9 s (~1.5× on top of the tier win). |
 | WP-8 | Tests | `tests/test_krea_registry_dispatch.py`, `test_runtime_model_switch.py`, `test_krea_comfy_convert.py`, Krea cases in `test_fetch_model_assets.py` |
 | WP-9 | Docs | `models/packs/README.md`, pack READMEs, this file |
-| — | Provisioning | installers/launchers fetch Krea weights (opt-in, license-gated) — see "Provisioning" |
+| — | Provisioning | installers/launchers fetch Krea weights (opt-in, size-gated) — see "Provisioning" |
 
 ### Behavior-preservation note (Z-Image regression)
 

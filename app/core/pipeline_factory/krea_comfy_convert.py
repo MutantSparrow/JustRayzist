@@ -3,10 +3,10 @@
 Follows the same pattern as ``zimage._convert_prefixed_fused_zimage_state_dict``: detect the native
 checkpoint key layout and remap it to the keys ``diffusers.Krea2Transformer2DModel`` expects.
 
-The native layout is the one used by ``krea/Krea-2-Turbo/turbo.safetensors`` and by ComfyUI fp8
-repacks such as ``AlperKTS/Krea2_FP8`` (``blocks.N.*``, ``first``, ``last``, ``tmlp``, ``tproj``,
-``txtfusion``, ``txtmlp``). The mapping below was derived by aligning, key-by-key and by tensor
-shape, the official 430-key ``turbo.safetensors`` header against a freshly instantiated
+The native layout is the one produced by the upstream Krea 2 Turbo release and used verbatim by
+ComfyUI fp8 repacks (``blocks.N.*``, ``first``, ``last``, ``tmlp``, ``tproj``, ``txtfusion``,
+``txtmlp``). The mapping below was derived by aligning, key-by-key and by tensor shape, the
+official 430-key ``turbo.safetensors`` header against a freshly instantiated
 ``Krea2Transformer2DModel`` (430 keys) — it is not inferred.
 
 Verified structural facts (diffusers 0.39.0):
@@ -24,9 +24,9 @@ Verified structural facts (diffusers 0.39.0):
   ``last.norm.scale -> final_layer.norm.weight``, ``last.modulation.lin ->
   final_layer.scale_shift_table``.
 
-Extra tensors: some fp8 repacks (e.g. AlperKTS) carry two additional ``last.up.weight`` /
-``last.down.weight`` matrices that the official checkpoint and the diffusers model do NOT have. They
-are dropped (with a warning) rather than force-fit.
+Extra tensors: some fp8 repacks carry two additional ``last.up.weight`` / ``last.down.weight``
+matrices that the official checkpoint and the diffusers model do NOT have. They are dropped
+(with a warning) rather than force-fit.
 """
 
 from __future__ import annotations

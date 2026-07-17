@@ -41,17 +41,23 @@ def test_krea2_assets_are_opt_in_and_map_to_pack_weights() -> None:
     for asset in OPTIONAL_KREA2_ASSETS:
         assert asset in krea_selected
 
-    # Weights come from the AlperKTS ComfyUI fp8 repo and land in the pack weights dir.
+    # TODO(krea2 finetune): the weight repo_id + sha256s are placeholders until the operator
+    # uploads their finetuned Krea2-Turbo checkpoint. Keep the layout assertions (three weight
+    # files landing in ``models/packs/Krea2_Turbo/weights/`` with a single shared repo_id) so a
+    # future edit only has to update the placeholder to point at the real repo.
     weight_assets = [
-        a for a in OPTIONAL_KREA2_ASSETS if a.repo_id == "AlperKTS/Krea2_FP8"
+        a for a in OPTIONAL_KREA2_ASSETS
+        if a.relative_output_path.startswith("models/packs/Krea2_Turbo/weights/")
     ]
     assert {a.repo_file for a in weight_assets} == {
         "krea2_turbo_fp8.safetensors",
         "qwen3vl_4b_fp8_scaled.safetensors",
         "qwen_image_vae.safetensors",
     }
-    for asset in weight_assets:
-        assert asset.relative_output_path.startswith("models/packs/Krea2_Turbo/weights/")
+    weight_repo_ids = {a.repo_id for a in weight_assets}
+    assert len(weight_repo_ids) == 1, (
+        f"Krea2 weights should share a single source repo, got {sorted(weight_repo_ids)}"
+    )
 
     # Qwen3VL processor sidecar files come from the source Qwen repo and land next to the
     # text_encoder config, so AutoProcessor can build a multimodal processor for the WP-5
@@ -71,29 +77,10 @@ def test_krea2_assets_are_opt_in_and_map_to_pack_weights() -> None:
             "models/packs/Krea2_Turbo/config/text_encoder/"
         )
 
-    # Every asset has a full SHA256.
-    for asset in OPTIONAL_KREA2_ASSETS:
+    # Qwen3VL sidecar SHA256s stay pinned (Apache-2.0 upstream, stable content). Weight SHA256s
+    # are blank placeholders that the finetune-provisioning TODO above will fill in.
+    for asset in processor_assets:
         assert len(asset.sha256) == 64
-
-
-def test_krea2_license_gate_blocks_without_acceptance() -> None:
-    # main() must refuse --include-krea2 unless --accept-krea2-license is also passed.
-    import subprocess
-    import sys
-    from pathlib import Path as _Path
-
-    root = _Path(__file__).resolve().parents[1]
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(root / "scripts" / "portable" / "fetch_model_assets.py"),
-            "--include-krea2",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 2
-    assert "Krea 2 Community License" in result.stderr
 
 
 def test_ensure_qwen3_fp8_pack_copies_config_without_base_encoder(temp_app_root: Path) -> None:

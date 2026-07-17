@@ -206,31 +206,35 @@ OPTIONAL_ASSETS = OPTIONAL_QWEN3_4B_FP8_ENCODER_ASSETS
 
 KREA2_PACK_NAME = "Krea2_Turbo"
 
-# Krea2-Turbo is opt-in and governed by the Krea 2 Community License (distinct from the Z-Image
-# assets). These are the ComfyUI-native fp8 weights from AlperKTS/Krea2_FP8; the app converts their
-# key layout at load time (app/core/pipeline_factory/krea_comfy_convert.py). The pack's diffusers
-# config dirs are committed, so only the 3 weight files are fetched.
+# Krea2-Turbo is opt-in via --include-krea2. Weights ship from the operator's own finetuned
+# checkpoint repo (licensing handled off-repo). The three files below carry the native/ComfyUI
+# fp8 layout the loader expects — see app/core/pipeline_factory/krea_comfy_convert.py.
+#
+# TODO(krea2 finetune): populate repo_id + per-file sha256 with the real values once the
+# operator's finetuned Krea2-Turbo weights are uploaded. Until then the fetch fails loudly at
+# ``hf download`` with an unknown-repo error, which is the intended "not-yet-provisioned" state.
+_KREA2_FINETUNE_REPO = "MutantSparrow/krea2-placeholder"
 OPTIONAL_KREA2_ASSETS = [
     AssetSpec(
-        name="Krea2-Turbo transformer (ComfyUI fp8)",
-        repo_id="AlperKTS/Krea2_FP8",
+        name="Krea2-Turbo transformer",
+        repo_id=_KREA2_FINETUNE_REPO,
         repo_file="krea2_turbo_fp8.safetensors",
         relative_output_path="models/packs/Krea2_Turbo/weights/krea2_turbo_fp8.safetensors",
-        sha256="2d3523507c59df965e5d4ec9a1b9b4591297a50c058915c36fb29d124d30f64e",
+        sha256="",
     ),
     AssetSpec(
-        name="Krea2-Turbo Qwen3-VL text encoder (ComfyUI fp8)",
-        repo_id="AlperKTS/Krea2_FP8",
+        name="Krea2-Turbo Qwen3-VL text encoder",
+        repo_id=_KREA2_FINETUNE_REPO,
         repo_file="qwen3vl_4b_fp8_scaled.safetensors",
         relative_output_path="models/packs/Krea2_Turbo/weights/qwen3vl_4b_fp8_scaled.safetensors",
-        sha256="54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094",
+        sha256="",
     ),
     AssetSpec(
         name="Krea2-Turbo VAE (Qwen-image)",
-        repo_id="AlperKTS/Krea2_FP8",
+        repo_id=_KREA2_FINETUNE_REPO,
         repo_file="qwen_image_vae.safetensors",
         relative_output_path="models/packs/Krea2_Turbo/weights/qwen_image_vae.safetensors",
-        sha256="a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+        sha256="",
     ),
     # Qwen3VL processor sidecar files (from the source Qwen/Qwen3-VL-4B-Instruct repo) required to
     # build a multimodal AutoProcessor for the WP-5 style-reference conditioning path. The Krea
@@ -276,12 +280,6 @@ OPTIONAL_KREA2_ASSETS = [
         sha256="599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
     ),
 ]
-
-KREA2_LICENSE_NOTICE = (
-    "Krea2-Turbo weights are governed by the Krea 2 Community License, which is distinct from the "
-    "Z-Image assets. They are downloaded for local use only; redistribution or bundling requires "
-    "reviewing that license. Re-run with --accept-krea2-license to proceed."
-)
 
 
 def selected_assets(
@@ -362,12 +360,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--include-krea2",
         action="store_true",
-        help="Also fetch the optional Krea2_Turbo pack weights (requires --accept-krea2-license).",
-    )
-    parser.add_argument(
-        "--accept-krea2-license",
-        action="store_true",
-        help="Acknowledge the Krea 2 Community License, required to fetch Krea2_Turbo weights.",
+        help="Also fetch the optional Krea2_Turbo pack weights (~18 GB).",
     )
     return parser.parse_args()
 
@@ -376,10 +369,6 @@ def main() -> int:
     args = parse_args()
     project_root = resolve_project_root(args.project_root)
     platform_name = normalize_platform_name(args.platform)
-
-    if args.include_krea2 and not args.accept_krea2_license:
-        print(KREA2_LICENSE_NOTICE, file=sys.stderr)
-        return 2
 
     hf_exe = resolve_hf_cli_executable(project_root, platform_name=platform_name)
     if not hf_exe:
@@ -398,7 +387,7 @@ def main() -> int:
     env.pop("HF_HUB_DISABLE_XET", None)
 
     if args.include_krea2:
-        print(KREA2_LICENSE_NOTICE.replace(" Re-run with --accept-krea2-license to proceed.", ""))
+        print(f"Fetching Krea2_Turbo assets (~18 GB) from {_KREA2_FINETUNE_REPO}...")
 
     ensure_hf_cli_prerequisites(hf_exe)
     for asset in selected_assets(

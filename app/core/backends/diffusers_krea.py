@@ -1,6 +1,6 @@
 """Krea2-Turbo image backends.
 
-Implements the plan's **Tier A** design (JustRayzist-Krea.md §4): subclass
+Tier-A design (see ``docs/KREA2_IMPLEMENTATION_STATUS.md``): subclass
 ``DiffusersZImageBackend`` and override only the pipeline-construction seam plus the turbo
 defaults. Krea2 and Z-Image are near-siblings (flow-matching, Qwen-conditioned, Qwen-VAE DiT
 turbo), so every generate / img2img / upscale / refine / scheduler / tiering path is inherited.
@@ -11,9 +11,8 @@ Two backends are provided, mirroring the Z-Image ``diffusers_zimage`` / ``fp8_zi
 * ``Fp8KreaBackend``        -> ``build_fp8_krea_pipeline``  (fp8 storage; primary path on <=24GB)
 
 Tier-B escalation (extracting a shared ``_QwenFlowMatchBackend``) is intentionally NOT done here.
-Per the plan, that only happens if a real-hardware spike (WP-0) proves >=3 core helpers diverge.
-Divergences discovered during WP-5 (e.g. the Qwen3VL image-conditioning path) are added as narrow
-per-method overrides in this file — see ``_build_generate_pipe_kwargs`` and
+Only helpers that actually diverge get narrow per-method overrides — see
+``_rplus_prepare_prompt_embeds``, ``_build_generate_pipe_kwargs``, and
 ``_encode_prompt_with_context_image``.
 """
 
@@ -265,7 +264,7 @@ class Fp8KreaBackend(DiffusersKreaBackend):
     """fp8-storage Krea2-Turbo backend.
 
     Mirrors :class:`app.core.backends.fp8_zimage.Fp8ZImageBackend`. For a 12B DiT this is the
-    primary path on <=24GB cards (JustRayzist-Krea.md §4).
+    primary path on <=24GB cards.
     """
 
     BACKEND_NAME = "fp8_krea"

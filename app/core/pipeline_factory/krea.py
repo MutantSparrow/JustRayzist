@@ -6,11 +6,10 @@ Mirrors ``pipeline_factory/zimage.py`` but targets Krea2's component classes
 Qwen-VAE DiT turbo models), so the shared loading/storage helpers in ``zimage.py`` are reused
 directly rather than duplicated.
 
-WP-0 gate (see JustRayzist-Krea.md §6.1): Krea2's diffusers classes require
-diffusers ``>=0.39.0.dev0`` (from source), while the repo pins ``diffusers>=0.36.0``. The Krea
-classes are therefore imported lazily and, if the installed diffusers build lacks them, a clear
-error with the setup-repair hint is raised instead of failing at import time. This keeps the
-Z-Image path completely undisturbed on the current pin.
+Krea2's diffusers classes require diffusers ``>=0.39.0``. The Krea classes are imported lazily
+so environments with older diffusers still start; if the installed build lacks the Krea symbols,
+a clear error with the setup-repair hint is raised at pack-load time instead of failing at
+module import. This keeps the Z-Image path completely undisturbed on older pins.
 """
 
 from __future__ import annotations
@@ -256,7 +255,7 @@ def _import_krea_classes() -> tuple[Any, Any, Any]:
         raise ImportError(
             "Installed diffusers build is missing Krea2 classes "
             "(Krea2Pipeline / Krea2Transformer2DModel / AutoencoderKLQwenImage). "
-            "Krea2-Turbo requires diffusers >=0.39.0.dev0 (see JustRayzist-Krea.md WP-0). "
+            "Krea2-Turbo requires diffusers >=0.39.0. "
             + setup_repair_hint()
         ) from exc
     return Krea2Pipeline, Krea2Transformer2DModel, AutoencoderKLQwenImage

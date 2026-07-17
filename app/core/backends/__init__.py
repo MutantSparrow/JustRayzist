@@ -36,9 +36,9 @@ def create_backend(*, settings: Any, model_pack: Any, resource_tier: Any):
                 model_pack=model_pack,
                 resource_tier=resource_tier,
             )
-        # Krea backends are imported lazily so the diffusers Krea classes (which require a newer
-        # diffusers build — see JustRayzist-Krea.md WP-0) are only touched when a Krea pack is
-        # actually dispatched. This keeps the Z-Image path free of any Krea import cost/risk.
+        # Krea backends are imported lazily so the diffusers Krea classes (which require
+        # diffusers >=0.39.0) are only touched when a Krea pack is actually dispatched. This
+        # keeps the Z-Image path free of any Krea import cost/risk on older diffusers builds.
         if backend_name == "fp8_krea":
             from app.core.backends.diffusers_krea import Fp8KreaBackend
 

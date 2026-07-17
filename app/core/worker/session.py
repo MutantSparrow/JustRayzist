@@ -24,7 +24,7 @@ class SessionStats:
 # Resource tiers with enough headroom to keep a previously-loaded backend resident for instant
 # switch-back. On tighter tiers the outgoing backend is always released before the next is built,
 # so two (potentially 12B-class) model families are never resident at once.
-# See JustRayzist-Krea.md WP-7.
+# See docs/KREA2_IMPLEMENTATION_STATUS.md.
 _KEEP_RESIDENT_TIERS = frozenset({"high"})
 
 
@@ -105,7 +105,7 @@ class GenerationSession:
         otherwise it is torn down and its VRAM released before the target backend is built. Any
         in-flight generation on the current backend is cancelled first. Returns the now-active pack.
 
-        See JustRayzist-Krea.md WP-7.
+        See docs/KREA2_IMPLEMENTATION_STATUS.md.
         """
         if model_pack.name == self._model_pack.name and self._backend is not None:
             return self._model_pack

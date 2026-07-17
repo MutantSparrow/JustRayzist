@@ -7,17 +7,17 @@
 # - Format must match extension (.safetensors or .gguf).
 # - pipeline_config_dir must point to a local diffusers-style config directory.
 #
-# Krea2-Turbo is a 12B distilled flow-matching DiT (Krea 2 Community License). It is a near-sibling
-# of Z-Image Turbo: same FlowMatchEulerDiscreteScheduler, Qwen-family text encoder + VAE. The two
-# differ in transformer class (Krea2Transformer2DModel) and pipeline (Krea2Pipeline), which require
-# diffusers >=0.39.0.dev0 (see JustRayzist-Krea.md WP-0).
+# Krea2-Turbo is a 12B distilled flow-matching DiT. It is a near-sibling of Z-Image Turbo: same
+# FlowMatchEulerDiscreteScheduler, Qwen-family text encoder + VAE. The two differ in transformer
+# class (Krea2Transformer2DModel) and pipeline (Krea2Pipeline), which require diffusers >=0.39.0.
+# See docs/KREA2_IMPLEMENTATION_STATUS.md for the design summary and provisioning notes.
 
 name: Krea2_Turbo
 architecture: krea2_turbo
 
 # fp8 is listed first: the 12B transformer in bf16 is ~24GB, so on <=24GB cards the fp8 backend is
 # the path that fits alongside the Qwen3VL encoder + VAE. Dispatch falls back to bf16 if fp8 is
-# unavailable. (See JustRayzist-Krea.md §4 / WP-6.)
+# unavailable.
 backend_preference:
   - fp8_krea
   - diffusers_krea
@@ -64,7 +64,7 @@ components:
     path: ./weights/krea2_vae.safetensors
     format: safetensors
 
-  # Text encoder (Qwen3VLModel — vision-language, enables image+text img2img conditioning).
+  # Text encoder (Qwen3VLModel — vision-language, enables image+text style-reference conditioning).
   text_encoder:
     path: ./config/text_encoder/model.safetensors
     format: safetensors

@@ -188,10 +188,10 @@ def ensure_pack_assets(
 ) -> None:
     """Ensure a selected pack's (opt-in, gitignored) weights are present before launch.
 
-    Currently only Krea2_Turbo needs this: its config dirs are committed but the ~18GB ComfyUI fp8
-    weights and the Qwen3VL processor sidecars (vocab / merges / preprocessor configs) are fetched
-    on demand under the Krea 2 Community License. If missing, download them (with consent) in an
-    interactive session, or instruct the user to fetch manually otherwise.
+    Currently only Krea2_Turbo needs this: its config dirs are committed but the ~18 GB
+    finetuned weights and the Qwen3VL processor sidecars (vocab / merges / preprocessor configs)
+    are fetched on demand. If missing, prompt to download in an interactive session (safety valve
+    against accidental ~18 GB pulls), or instruct the user to fetch manually otherwise.
     """
     if selected_pack != _KREA2_PACK_FOLDER:
         return
@@ -199,21 +199,13 @@ def ensure_pack_assets(
     if not missing:
         return
 
-    fetch_cmd = (
-        "python scripts/portable/fetch_model_assets.py --include-krea2 --accept-krea2-license"
-    )
-    notice = (
-        "Krea2_Turbo weights (~18GB) are missing. They are governed by the Krea 2 Community "
-        "License (distinct from the Z-Image assets) and are downloaded for local use only."
-    )
-    print(notice)
+    fetch_cmd = "python scripts/portable/fetch_model_assets.py --include-krea2"
+    print("Krea2_Turbo assets (~18 GB) are missing.")
     if not interactive:
         raise RuntimeError(
-            "Krea2_Turbo weights are missing. Fetch them first with:\n  " + fetch_cmd
+            "Krea2_Turbo assets are missing. Fetch them first with:\n  " + fetch_cmd
         )
-    answer = input(
-        "Accept the Krea 2 Community License and download now? [y/N]: "
-    ).strip().lower()
+    answer = input("Download Krea2_Turbo assets now? [y/N]: ").strip().lower()
     if answer not in {"y", "yes"}:
         raise RuntimeError(
             "Krea2_Turbo launch cancelled. Fetch later with:\n  " + fetch_cmd
@@ -226,7 +218,6 @@ def ensure_pack_assets(
             "--project-root",
             str(project_root),
             "--include-krea2",
-            "--accept-krea2-license",
         ],
         cwd=str(project_root),
         check=False,

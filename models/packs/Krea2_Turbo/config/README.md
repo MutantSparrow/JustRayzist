@@ -1,9 +1,9 @@
 # Krea2_Turbo local config directory
 
 This directory holds the local diffusers-style config used by
-`Krea2Pipeline.from_pretrained("./config", local_files_only=True)`. Only `model_index.json` is
-committed as a scaffold; the remaining config files are fetched from the Krea2-Turbo model repo
-(they are not redistributed here — see the Krea 2 Community License note in `../weights/README.md`).
+`Krea2Pipeline.from_pretrained("./config", local_files_only=True)`. Only `model_index.json` and
+the small per-component config files are committed as scaffolds; larger sidecars (tokenizer +
+Qwen3VL processor configs) are fetched at setup — see `../weights/README.md`.
 
 Required structure (mirrors the Z-Image `Rayzist_bf16/config` layout):
 
@@ -35,10 +35,11 @@ The three `*_preprocessor_config.json` / `chat_template.json` files come from
 They are required for the WP-5 style-reference path so `AutoProcessor.from_pretrained(...)` can
 build a multimodal processor that preprocesses a `context_image` before Qwen3VL encoding.
 
-Fetch these from the Krea2-Turbo repo before first run — see
-`scripts/fetch_krea2_assets.ps1` (project root) and `../weights/README.md`.
+Fetch these before first run — see `scripts/fetch_krea2_assets.ps1` (project root) and
+`../weights/README.md`.
 
 > The text encoder is `Qwen3VLModel` (vision-language), not the plain `Qwen3Model` used by Z-Image.
 > This is what enables the optional style-reference conditioning
-> (`GenerationRequest.context_image`; see JustRayzist-Krea.md §4 / WP-5) — a reference image is
-> jointly encoded with the prompt through Qwen3VL and passed to `Krea2Pipeline` as `prompt_embeds`.
+> (`GenerationRequest.context_image`; see `docs/KREA2_IMPLEMENTATION_STATUS.md`) — a reference
+> image is jointly encoded with the prompt through Qwen3VL and passed to `Krea2Pipeline` as
+> `prompt_embeds`.
