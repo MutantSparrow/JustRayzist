@@ -17,6 +17,24 @@ DEFAULT_LORA_WEIGHT = 1.0
 MIN_LORA_WEIGHT = -2.0
 MAX_LORA_WEIGHT = 2.0
 PLACEHOLDER_PREVIEW_SIZE = 1024
+# Only two model architectures ship with the app today. Legacy sidecars without an
+# `architecture` field predate the Krea2 pack and are backfilled to z_image_turbo — the only
+# architecture that supported LoRAs at that point.
+SUPPORTED_LORA_ARCHITECTURES = frozenset({"z_image_turbo", "krea2_turbo"})
+DEFAULT_LORA_ARCHITECTURE = "z_image_turbo"
+
+
+def normalize_lora_architecture(raw: Any, *, fallback: str = DEFAULT_LORA_ARCHITECTURE) -> str:
+    """Coerce a raw architecture string to one of ``SUPPORTED_LORA_ARCHITECTURES``.
+
+    Legacy sidecars written before Krea2 support have no ``architecture`` key at all —
+    they hydrate to ``DEFAULT_LORA_ARCHITECTURE`` (``z_image_turbo``). Anything unrecognized
+    also falls back to keep the drawer usable rather than erroring at hydrate time.
+    """
+    value = str(raw or "").strip().lower()
+    if value in SUPPORTED_LORA_ARCHITECTURES:
+        return value
+    return fallback
 _LORA_SUFFIX = ".safetensors"
 _PREVIEW_SUFFIX = ".png"
 _PLACEHOLDER_BACKGROUND = "#101521"
@@ -523,6 +541,7 @@ def _full_record_payload(
     preview_path: Path,
     display_name: str,
     source_filename: str,
+    architecture: str,
     trigger_words: list[str],
     detected_trigger_words: list[str],
     metadata: dict[str, Any],
@@ -538,6 +557,7 @@ def _full_record_payload(
         "id": normalize_lora_id(lora_id),
         "display_name": display_name,
         "source_filename": source_filename,
+        "architecture": normalize_lora_architecture(architecture),
         "filename": weights_path.name,
         "path": str(weights_path.resolve()),
         "preview_filename": preview_path.name,
@@ -562,6 +582,7 @@ def _draft_record_payload(
     weights_path: Path,
     source_filename: str,
     display_name: str,
+    architecture: str,
     detected_trigger_words: list[str],
     metadata: dict[str, Any],
     metadata_summary: dict[str, Any],
@@ -572,6 +593,7 @@ def _draft_record_payload(
         "id": normalize_lora_id(draft_id),
         "source_filename": source_filename,
         "display_name": display_name,
+        "architecture": normalize_lora_architecture(architecture),
         "filename": weights_path.name,
         "path": str(weights_path.resolve()),
         "detected_trigger_words": list(detected_trigger_words),
@@ -594,6 +616,7 @@ def _public_record(record: dict[str, Any]) -> dict[str, Any]:
         "id": record["id"],
         "display_name": record["display_name"],
         "source_filename": record["source_filename"],
+        "architecture": normalize_lora_architecture(record.get("architecture")),
         "filename": record["filename"],
         "preview_filename": record["preview_filename"],
         "preview_url": f"/loras/{record['id']}/preview",
@@ -613,6 +636,7 @@ def _public_draft_record(record: dict[str, Any]) -> dict[str, Any]:
         "draft_id": record["id"],
         "source_filename": record["source_filename"],
         "display_name": record["display_name"],
+        "architecture": normalize_lora_architecture(record.get("architecture")),
         "detected_trigger_words": list(record.get("detected_trigger_words") or []),
         "metadata_summary": dict(record.get("metadata_summary") or {}),
         "created_at": record["created_at"],
@@ -654,6 +678,12 @@ def _hydrate_record(settings: AppSettings, *, lora_id: str, include_deleted: boo
         changed = True
     trigger_words = normalize_trigger_words(trigger_words)
 
+    if "architecture" in existing:
+        architecture = normalize_lora_architecture(existing.get("architecture"))
+    else:
+        architecture = DEFAULT_LORA_ARCHITECTURE
+        changed = True
+
     preview_is_custom = bool(existing.get("preview_is_custom", False))
     if not preview_path.exists():
         _build_placeholder_preview(preview_path, title=display_name)
@@ -671,6 +701,7 @@ def _hydrate_record(settings: AppSettings, *, lora_id: str, include_deleted: boo
         preview_path=preview_path,
         display_name=display_name,
         source_filename=source_filename,
+        architecture=architecture,
         trigger_words=trigger_words,
         detected_trigger_words=detected_trigger_words,
         metadata=metadata,
@@ -710,6 +741,11 @@ def _hydrate_draft(settings: AppSettings, *, draft_id: str) -> dict[str, Any]:
         fallback=Path(str(existing.get("source_filename") or weights_path.stem)).stem,
     )
     source_filename = str(existing.get("source_filename") or weights_path.name)
+    if "architecture" in existing:
+        architecture = normalize_lora_architecture(existing.get("architecture"))
+    else:
+        architecture = DEFAULT_LORA_ARCHITECTURE
+        changed = True
     created_at = str(existing.get("created_at") or _created_at_for_path(weights_path))
     updated_at = str(existing.get("updated_at") or created_at)
     payload = _draft_record_payload(
@@ -717,6 +753,7 @@ def _hydrate_draft(settings: AppSettings, *, draft_id: str) -> dict[str, Any]:
         weights_path=weights_path,
         source_filename=source_filename,
         display_name=display_name,
+        architecture=architecture,
         detected_trigger_words=detected_trigger_words,
         metadata=metadata,
         metadata_summary=metadata_summary,
@@ -761,6 +798,7 @@ def create_lora_draft(
     filename: str,
     content: bytes | None = None,
     content_file: Any | None = None,
+    architecture: str = DEFAULT_LORA_ARCHITECTURE,
 ) -> dict[str, Any]:
     safe_filename = sanitize_upload_filename(filename)
     draft_id = _unique_lora_id(settings, Path(safe_filename).stem, include_drafts=True)
@@ -780,6 +818,7 @@ def create_lora_draft(
         weights_path=target_path,
         source_filename=safe_filename,
         display_name=sanitize_display_name(Path(safe_filename).stem, fallback=Path(safe_filename).stem),
+        architecture=architecture,
         detected_trigger_words=detected_trigger_words,
         metadata=metadata,
         metadata_summary=metadata_summary,
@@ -799,6 +838,7 @@ def detect_lora_draft_triggers(settings: AppSettings, draft_id: str) -> dict[str
         weights_path=weights_path,
         source_filename=str(draft.get("source_filename") or weights_path.name),
         display_name=sanitize_display_name(draft.get("display_name"), fallback=Path(weights_path.stem).stem),
+        architecture=normalize_lora_architecture(draft.get("architecture")),
         detected_trigger_words=detected_trigger_words,
         metadata=metadata,
         metadata_summary=metadata_summary,
@@ -854,6 +894,7 @@ def finalize_lora_draft(
         preview_path=preview_path,
         display_name=name_value,
         source_filename=str(draft.get("source_filename") or target_path.name),
+        architecture=normalize_lora_architecture(draft.get("architecture")),
         trigger_words=trigger_values,
         detected_trigger_words=normalize_trigger_words(draft.get("detected_trigger_words")),
         metadata=dict(draft.get("metadata") or {}),
@@ -902,6 +943,7 @@ def update_lora(
         preview_path=preview_path,
         display_name=sanitize_display_name(display_name, fallback=str(record.get("display_name") or weights_path.stem)),
         source_filename=str(record.get("source_filename") or weights_path.name),
+        architecture=normalize_lora_architecture(record.get("architecture")),
         trigger_words=normalize_trigger_words(
             record.get("trigger_words") if trigger_words is None else trigger_words
         ),
@@ -939,6 +981,7 @@ def mark_lora_deleted(settings: AppSettings, lora_id: str, *, pending_cleanup: b
         preview_path=preview_path,
         display_name=display_name,
         source_filename=source_filename,
+        architecture=normalize_lora_architecture(record.get("architecture") if record else None),
         trigger_words=normalize_trigger_words(record.get("trigger_words") if record else []),
         detected_trigger_words=normalize_trigger_words(record.get("detected_trigger_words") if record else []),
         metadata=dict(record.get("metadata") if record else {}),

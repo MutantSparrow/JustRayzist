@@ -1125,8 +1125,18 @@ function getLoraById(loraId) {
 }
 
 function sanitizeLoraSelectionsAgainstLibrary(selections) {
-  const availableIds = new Set(state.loraLibrary.map((item) => item.id));
-  return normalizeLoraSelections(selections).filter((item) => availableIds.has(item.id));
+  const packArchitecture = String(state.loraCapabilities?.architecture || "").toLowerCase();
+  const compatibleIds = new Set(
+    state.loraLibrary
+      .filter((item) => {
+        if (!packArchitecture) return true;
+        const itemArchitecture = String(item.architecture || "").toLowerCase();
+        if (!itemArchitecture) return true;
+        return itemArchitecture === packArchitecture;
+      })
+      .map((item) => item.id),
+  );
+  return normalizeLoraSelections(selections).filter((item) => compatibleIds.has(item.id));
 }
 
 function buildLoraPreviewUrl(lora) {
@@ -1788,7 +1798,14 @@ function renderLoraLibrary() {
     updateLoraActiveFilterButton();
     const filterValue = String(state.loraFilter || "").trim().toLowerCase();
     const activeLoraIds = new Set(state.loraPendingSelections.map((selection) => selection.id));
-    const filteredItems = state.loraLibrary.filter((item) => {
+    const packArchitecture = String(state.loraCapabilities?.architecture || "").toLowerCase();
+    const architectureMatches = state.loraLibrary.filter((item) => {
+      if (!packArchitecture) return true;
+      const itemArchitecture = String(item.architecture || "").toLowerCase();
+      if (!itemArchitecture) return true;
+      return itemArchitecture === packArchitecture;
+    });
+    const filteredItems = architectureMatches.filter((item) => {
       if (state.loraActiveOnlyFilter && !activeLoraIds.has(item.id)) return false;
       if (!filterValue) return true;
       const haystack = `${item.display_name || ""} ${item.source_filename || ""}`.toLowerCase();
@@ -1802,6 +1819,8 @@ function renderLoraLibrary() {
       loraDrawerEmptyEl.classList.remove("hidden");
       if (state.loraLibrary.length === 0) {
         loraDrawerEmptyEl.textContent = "No LoRAs installed.";
+      } else if (architectureMatches.length === 0) {
+        loraDrawerEmptyEl.textContent = `No LoRAs for the current pack (${packArchitecture || "unknown"}).`;
       } else if (state.loraActiveOnlyFilter && state.loraPendingSelections.length === 0) {
         loraDrawerEmptyEl.textContent = "No active LoRAs.";
       } else {
@@ -1841,13 +1860,19 @@ function syncAppliedLorasWithLibrary() {
   if (state.loraTouchFocusId && !state.loraLibrary.some((item) => item.id === state.loraTouchFocusId)) {
     state.loraTouchFocusId = null;
   }
+  const previousAppliedCount = state.loraAppliedSelections.length;
   const sanitizedApplied = sanitizeLoraSelectionsAgainstLibrary(state.loraAppliedSelections);
   const sanitizedPending = sanitizeLoraSelectionsAgainstLibrary(state.loraPendingSelections);
   const appliedChanged = !loraSelectionsEqual(sanitizedApplied, state.loraAppliedSelections);
+  const dropped = previousAppliedCount - sanitizedApplied.length;
   state.loraAppliedSelections = sanitizedApplied;
   state.loraPendingSelections = sanitizedPending;
   if (appliedChanged) {
     persistAppliedLorasToSession();
+  }
+  if (dropped > 0) {
+    const packLabel = String(state.loraCapabilities?.active_pack || state.currentActivePack || "current pack");
+    setStatus(`Detached ${dropped} LoRA${dropped === 1 ? "" : "s"} — not compatible with ${packLabel}.`);
   }
 }
 
@@ -1856,6 +1881,7 @@ function buildLoraLibrarySignature(items, capabilities) {
     id: String(item?.id || ""),
     display_name: String(item?.display_name || ""),
     source_filename: String(item?.source_filename || ""),
+    architecture: String(item?.architecture || ""),
     preview_filename: String(item?.preview_filename || ""),
     preview_cache_key: String(item?.preview_cache_key || ""),
     preview_is_custom: Boolean(item?.preview_is_custom),
@@ -1870,6 +1896,7 @@ function buildLoraLibrarySignature(items, capabilities) {
   const normalizedCapabilities = {
     supported: Boolean(capabilities?.supported),
     active_pack: String(capabilities?.active_pack || ""),
+    architecture: String(capabilities?.architecture || ""),
     max_active: Number(capabilities?.max_active || 0),
     min_weight: Number(capabilities?.min_weight || 0),
     max_weight: Number(capabilities?.max_weight || 0),

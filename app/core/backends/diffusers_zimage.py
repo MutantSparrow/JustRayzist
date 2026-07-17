@@ -3338,6 +3338,16 @@ class DiffusersZImageBackend:
         if not tracked_by_name:
             tracker.pop(id(transformer), None)
 
+    def _prepare_lora_compat_state(
+        self,
+        lora_id: str,
+        raw_state_dict: dict[str, Any],
+    ) -> PreparedLoraCompatState:
+        # Default implementation targets the Z-Image transformer key layout. Backends whose
+        # transformer speaks a different key layout (Krea2) override this to skip the
+        # Z-Image compat prep and hand diffusers the raw state dict.
+        return self._prepare_zimage_lora_compat_state(lora_id, raw_state_dict)
+
     def _load_lora_adapters(self, pipe: Any, loras: tuple[LoraSelection, ...]) -> None:
         if not loras:
             return
@@ -3358,7 +3368,7 @@ class DiffusersZImageBackend:
         prepared_states_by_adapter: dict[str, PreparedLoraCompatState] = {}
         for lora in loras:
             raw_state_dict = load_safetensors_file(str(lora.path), device="cpu")
-            prepared_state = self._prepare_zimage_lora_compat_state(
+            prepared_state = self._prepare_lora_compat_state(
                 lora.id,
                 raw_state_dict,
             )

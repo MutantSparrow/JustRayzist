@@ -44,6 +44,7 @@ from app.core.worker import GenerationRequest, GenerationSession
 from app.core.worker.types import LoraSelection, resolve_inference_process, resolve_procedural_creativity
 from app.storage import append_generation_metric, build_output_path, save_png_with_metadata
 from app.storage.lora_library import (
+    DEFAULT_LORA_ARCHITECTURE,
     DEFAULT_MAX_ACTIVE_LORAS,
     DEFAULT_LORA_WEIGHT,
     MAX_LORA_WEIGHT,
@@ -97,7 +98,7 @@ LOGGER = logging.getLogger(__name__)
 _DONOR_PACK_NAME = "Rayzist_bf16"
 _DERIVED_FP8_STORAGE_NAME = "fp8_storage"
 _DERIVED_FP8_STORAGE_SUFFIX = "__auto_fp8_storage"
-_LORA_CAPABLE_BACKENDS = {"diffusers", "diffusers_zimage", "fp8_zimage"}
+_LORA_CAPABLE_ARCHITECTURES = {"z_image_turbo", "krea2_turbo"}
 _IMG2IMG_MAX_PIXELS = 1_500_000
 _IMG2IMG_DIM_MULTIPLE = 32
 _IMG2IMG_MIN_DIM = 64
@@ -237,26 +238,27 @@ class InferenceService:
 
     @staticmethod
     def _pack_supports_loras(model_pack: ModelPack) -> bool:
-        backends = [
-            str(name).strip().lower()
-            for name in getattr(model_pack, "backend_preference", [])
-            if str(name).strip()
-        ]
-        if not backends:
-            backends = ["diffusers"]
-        return any(name in _LORA_CAPABLE_BACKENDS for name in backends)
+        # Both Z-Image Turbo and Krea2 Turbo run through diffusers pipelines that expose the
+        # LoRA mixin (load_lora_weights / set_adapters / fuse_lora). Gate by architecture so
+        # architecture-tagged sidecars line up with what the pipeline can actually load —
+        # mirrors how chat / wildcard suggest gate at _pack_supports_qwen_text_decode.
+        architecture = str(getattr(model_pack, "architecture", "") or "").strip().lower()
+        return architecture in _LORA_CAPABLE_ARCHITECTURES
 
     def lora_capabilities(self, pack_name: str | None = None) -> dict[str, Any]:
+        architecture: str | None = None
         try:
             _base_pack, effective_pack, _resource_tier = self._resolve_runtime_pack(pack_name)
             supported = self._pack_supports_loras(effective_pack)
             active_pack = effective_pack.base_name or effective_pack.name
+            architecture = str(getattr(effective_pack, "architecture", "") or "").strip().lower() or None
         except Exception:
             supported = False
             active_pack = None
         return {
             "supported": supported,
             "active_pack": active_pack,
+            "architecture": architecture,
             "max_active": DEFAULT_MAX_ACTIVE_LORAS,
             "min_weight": MIN_LORA_WEIGHT,
             "max_weight": MAX_LORA_WEIGHT,
@@ -582,8 +584,24 @@ class InferenceService:
         filename: str,
         content: bytes | None = None,
         content_file: Any | None = None,
+        architecture: str | None = None,
     ) -> dict[str, Any]:
-        return create_lora_draft(self._settings, filename=filename, content=content, content_file=content_file)
+        # Bind the sidecar to the *active* pack's architecture at upload time so drawer
+        # filtering + generation-path gating can trust the sidecar without re-inspecting the
+        # safetensors on every request. Caller may override for tests / retag flows.
+        resolved_architecture = str(architecture or "").strip().lower()
+        if not resolved_architecture:
+            capabilities = self.lora_capabilities()
+            resolved_architecture = str(capabilities.get("architecture") or "").strip().lower()
+        if not resolved_architecture:
+            resolved_architecture = DEFAULT_LORA_ARCHITECTURE
+        return create_lora_draft(
+            self._settings,
+            filename=filename,
+            content=content,
+            content_file=content_file,
+            architecture=resolved_architecture,
+        )
 
     def get_lora_draft(self, draft_id: str) -> dict[str, Any] | None:
         return get_library_lora_draft(self._settings, normalize_lora_id(draft_id))
@@ -697,8 +715,10 @@ class InferenceService:
             return ()
         if len(raw_loras) > DEFAULT_MAX_ACTIVE_LORAS:
             raise ValueError(f"No more than {DEFAULT_MAX_ACTIVE_LORAS} LoRAs can be active at once.")
-        if not self.lora_capabilities(pack_name).get("supported", False):
+        capabilities = self.lora_capabilities(pack_name)
+        if not capabilities.get("supported", False):
             raise ValueError("The active model pack does not support LoRA adapters.")
+        pack_architecture = str(capabilities.get("architecture") or "").strip().lower()
 
         resolved: list[LoraSelection] = []
         seen_ids: set[str] = set()
@@ -716,6 +736,12 @@ class InferenceService:
             record = get_library_lora(self._settings, lora_id)
             if record is None:
                 raise ValueError(f"LoRA not found: {lora_id}")
+            record_architecture = str(record.get("architecture") or "").strip().lower()
+            if pack_architecture and record_architecture and record_architecture != pack_architecture:
+                raise ValueError(
+                    f"LoRA '{record.get('display_name') or lora_id}' targets {record_architecture} "
+                    f"but the active pack is {pack_architecture}."
+                )
             resolved.append(
                 LoraSelection(
                     id=lora_id,

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.backends.diffusers_qwen import DiffusersQwen3VLInference, DiffusersQwenInference
-from app.core.backends.diffusers_zimage import DiffusersZImageBackend
+from app.core.backends.diffusers_zimage import DiffusersZImageBackend, PreparedLoraCompatState
 from app.core.pipeline_factory import (
     LoadedKreaPipeline,
     build_fp8_krea_pipeline,
@@ -64,6 +64,25 @@ class DiffusersKreaBackend(DiffusersZImageBackend):
 
     def _default_guidance_scale(self) -> float:
         return self._KREA_DEFAULT_GUIDANCE_SCALE
+
+    # --- LoRA compat: Krea2 transformer speaks its own key layout ---
+    # ``_prepare_zimage_lora_compat_state`` remaps Z-Image transformer keys (e.g. flattens
+    # ``.transformer_blocks.<i>.attn.to_q`` → the packed variant Z-Image expects) and drops
+    # anything outside that layout. Krea2's diffusers pipeline already speaks its own LoRA
+    # naming via the PEFT mixin, so we hand the raw state dict straight to
+    # ``pipe.load_lora_weights`` without the Z-Image compat pass.
+    def _prepare_lora_compat_state(
+        self,
+        lora_id: str,
+        raw_state_dict: dict[str, Any],
+    ) -> PreparedLoraCompatState:
+        del lora_id  # unused — diffusers handles adapter naming via load_lora_weights
+        return PreparedLoraCompatState(
+            adapter_state_dict=dict(raw_state_dict),
+            direct_param_deltas=(),
+            format_label="krea2-native",
+            dropped_keys=(),
+        )
 
     # --- Tier-B override: R+ prompt embeds ---
     # Krea2Pipeline.encode_prompt has a different signature than Z-Image's: it takes no
