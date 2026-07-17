@@ -81,6 +81,20 @@ class DiffusersKreaBackend(DiffusersZImageBackend):
         )
         return prompt_embeds
 
+    # R+ is Z-Image-only. Krea2's ``Krea2Pipeline.prepare_latents`` returns packed 3D latents
+    # (batch, image_seq_len, in_channels) rather than the 4D (B, C, H, W) shape the R+ schedule
+    # estimator expects — see ``_rplus_scheduler_mu`` reading ``latents.shape[3]``. Rather than
+    # port the whole R+ denoise loop to packed latents (deep Z-Image internals), block R+ at
+    # entry with a clean error so the UI can grey out the toggle. Bench 2026-07-17 confirms this
+    # path currently crashes with IndexError deep in ``_rplus_estimate_initial_noise_features``.
+    def _run_rplus_generate(self, *, pipe: Any, request: Any, prompt_effective: str,
+                            procedural_latents: Any, torch_module: Any) -> tuple[Any, dict]:
+        raise NotImplementedError(
+            "R+ inference is not supported on the Krea2-Turbo backend. R+ was designed against "
+            "Z-Image Turbo's 4D (B, C, H, W) latent layout; Krea2Pipeline uses packed 3D latents. "
+            "Turn off the R+ toggle before generating with a Krea2 pack."
+        )
+
     # --- WP-5: Qwen3VL image conditioning ---
     # Krea2Pipeline itself is text2img; it has no image argument on ``__call__`` or ``encode_prompt``.
     # But its text encoder is a Qwen3VL vision-language model, and the Krea2 transformer was trained

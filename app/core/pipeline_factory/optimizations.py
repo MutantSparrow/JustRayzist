@@ -200,12 +200,30 @@ def _apply_torch_compile(pipeline: Any, cfg: TorchCompileConfig, device: str) ->
         # Inductor's cudagraphs (implicit under reduce-overhead) can conflict with pipelines that
         # mutate input tensors in place across denoise steps; the diffusers Krea2 / ZImage forwards
         # are pure, so this is safe.
-        transformer.forward = torch.compile(
-            transformer.forward,
+        original_forward = transformer.forward
+        compiled_forward = torch.compile(
+            original_forward,
             mode=cfg.mode,
             fullgraph=cfg.fullgraph,
             dynamic=False,
         )
+
+        # Wrap the compiled forward with a runtime guard: the Z-Image backend can flip a pipeline
+        # from `high` full-CUDA mode to `model_offload` mid-session on VRAM pressure (see
+        # ``_apply_high_runtime_fallback_if_needed`` / ``_apply_pipe_execution_mode`` in
+        # backends/diffusers_zimage.py) — that installs accelerate ``_hf_hook``s AFTER we baked
+        # in the compiled graph, and dynamo tracing then crashes inside
+        # ``accelerate.hooks.pre_forward`` with InternalTorchDynamoError. Detect the hook at
+        # each call and fall back to the pre-compile eager forward when present.
+        def _compile_guard(*args, **kwargs):  # pragma: no cover - runtime guard, GPU-only path
+            for module in transformer.modules():
+                if hasattr(module, "_hf_hook"):
+                    return original_forward(*args, **kwargs)
+            return compiled_forward(*args, **kwargs)
+
+        transformer.forward = _compile_guard
+        setattr(transformer, "_rayzist_original_forward", original_forward)
+        setattr(transformer, "_rayzist_compiled_forward", compiled_forward)
         LOGGER.info("torch.compile applied to transformer (mode=%s).", cfg.mode)
         return True
     except Exception as exc:  # pragma: no cover - hardware/version-specific

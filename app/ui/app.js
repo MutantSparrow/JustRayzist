@@ -4474,6 +4474,8 @@ function applyRuntimeStatus(payload) {
   }
   renderModelPackSelect();
   updateSettingsSummary();
+  // R+ availability depends on the active pack — refresh the toggle so it greys out on Krea2.
+  updateRplusControls();
 }
 
 async function requestPackSwitch(targetName) {
@@ -4938,13 +4940,27 @@ function updatePromptEnhanceButton() {
   }
 }
 
+function isRplusSupportedForActivePack() {
+  // R+ is Z-Image-only. Krea2 backends raise on R+ (backend/diffusers_krea.py) because
+  // Krea2Pipeline uses packed 3D latents that the R+ estimator doesn't handle.
+  const packName = (state.currentActivePack || state.selectedPackName || "").toString();
+  return !/^Krea2/i.test(packName);
+}
+
 function updateRplusControls() {
-  const locked = hasReferenceImage();
+  const activePackBlocksRplus = !isRplusSupportedForActivePack();
+  const locked = hasReferenceImage() || activePackBlocksRplus;
+  if (activePackBlocksRplus && state.rplusEnabled) {
+    state.rplusEnabled = false;
+  }
   state.rplusVibrance = normalizeRplusControlValue(state.rplusVibrance);
   state.rplusBias = normalizeRplusControlValue(state.rplusBias);
   rplusSettingGroupEl.classList.toggle("disabled", locked);
   rplusSettingGroupEl.setAttribute("aria-disabled", String(locked));
-  const modeTooltip = locked ? RPLUS_MODE_LOCKED_TOOLTIP : RPLUS_MODE_TOOLTIP;
+  let modeTooltip = locked ? RPLUS_MODE_LOCKED_TOOLTIP : RPLUS_MODE_TOOLTIP;
+  if (activePackBlocksRplus) {
+    modeTooltip = "R+ is only supported on Z-Image packs; the current pack ignores it.";
+  }
   rplusSettingGroupEl.title = modeTooltip;
   rplusToggleButtonEl.title = modeTooltip;
   rplusToggleButtonEl.textContent = state.rplusEnabled ? "R+ MODE: ON" : "R+ MODE: OFF";
