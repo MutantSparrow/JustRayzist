@@ -1,15 +1,131 @@
 :root {
   color-scheme: dark;
+
+  /* === TOKEN INDEX ==============================================================
+     Design tokens for the JustRayzist UI. Additive scale — legacy names below the
+     scale block still resolve for `api.html` and hand-authored rules that haven't
+     migrated yet. See docs/UI normalization plan for the rollout phases.
+     Layout: brand colors first, then greyscale ramp, then alpha helpers, then
+     numeric scales (font, weight, spacing, height, duration, radius, z-index).
+     ============================================================================== */
+
+  /* Brand accents (kept from legacy — do not rename) */
+  --cyan: #45e0ff;
+  --lime: #b7ff00;
+  --magenta: #ff2cb6;
+  --danger: #ff3b3b;
+
+  /* Category swatch quartet (mirrors existing .swatch-* palette at styles.css:2382) */
+  --cat-lora: #ff2cb6;
+  --cat-wildcard: #b7ff00;
+  --cat-chat: #45e0ff;
+  --cat-pack: #ff2cb6;
+
+  /* Greyscale ramp — 10 stops from near-black to near-white. Retires the ~30
+     near-identical dark shades the audit surfaced (raw hex #000..#2b2b2b). */
+  --ink-0: #050505;
+  --ink-1: #0a0a0a;
+  --ink-2: #121212;
+  --ink-3: #1a1a1a;
+  --ink-4: #222;
+  --ink-5: #2a2a2a;
+  --ink-6: #3a3a3a;
+  --ink-7: #8d8d8d;
+  --ink-8: #d8d8d8;
+  --ink-9: #f2f2f2;
+
+  /* Border hairline (retires #252a30/#252c31/#2f2f36/#333842/etc.) */
+  --hairline: #2a2f36;
+  --hairline-soft: #1f242a;
+
+  /* Alpha helpers — 5 rungs per accent. Retires the 22 magenta / 14 lime / 7 cyan
+     rgba variants scattered through the file. */
+  --alpha-magenta-08: rgba(255, 44, 182, 0.08);
+  --alpha-magenta-16: rgba(255, 44, 182, 0.16);
+  --alpha-magenta-24: rgba(255, 44, 182, 0.24);
+  --alpha-magenta-40: rgba(255, 44, 182, 0.40);
+  --alpha-magenta-64: rgba(255, 44, 182, 0.64);
+  --alpha-lime-08: rgba(183, 255, 0, 0.08);
+  --alpha-lime-16: rgba(183, 255, 0, 0.16);
+  --alpha-lime-24: rgba(183, 255, 0, 0.24);
+  --alpha-lime-40: rgba(183, 255, 0, 0.40);
+  --alpha-lime-64: rgba(183, 255, 0, 0.64);
+  --alpha-cyan-08: rgba(69, 224, 255, 0.08);
+  --alpha-cyan-16: rgba(69, 224, 255, 0.16);
+  --alpha-cyan-24: rgba(69, 224, 255, 0.24);
+  --alpha-cyan-40: rgba(69, 224, 255, 0.40);
+  --alpha-cyan-64: rgba(69, 224, 255, 0.64);
+
+  /* Typography scale (rem, 8 rungs). Named by px equivalent (base 16px). */
+  --fs-11: 0.68rem;
+  --fs-12: 0.75rem;
+  --fs-13: 0.82rem;
+  --fs-14: 0.88rem;
+  --fs-16: 1rem;
+  --fs-20: 1.24rem;
+  --fs-24: 1.5rem;
+  --fs-28: 1.75rem;
+  /* Semantic aliases */
+  --fs-label: var(--fs-12);
+  --fs-body: var(--fs-13);
+  --fs-title: var(--fs-20);
+  --fs-title-lg: var(--fs-24);
+
+  /* Font weight (retires the 900-only-in-chat drift) */
+  --fw-400: 400;
+  --fw-600: 600;
+  --fw-700: 700;
+  --fw-800: 800;
+  --fw-900: 900;
+
+  /* Spacing scale (4px baseline) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* Interactive control heights (retires the 12-height sprawl 18..56) */
+  --h-control-sm: 24px;
+  --h-control-md: 32px;
+  --h-control-lg: 40px;
+
+  /* Radius scale — global `* { border-radius: 0 }` reset is intentional; tokens
+     exist for the pill-shaped swatches + future fx rings only. */
+  --radius-0: 0;
+  --radius-2: 2px;
+  --radius-6: 6px;
+  --radius-pill: 999px;
+
+  /* Motion */
+  --dur-fast: 120ms;
+  --dur-base: 220ms;
+  --dur-slow: 380ms;
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* z-index stacking (matches existing values) */
+  --z-topbar: 50;
+  --z-generate: 55;
+  --z-drawer-backdrop: 78;
+  --z-drawer: 80;
+  --z-rail: 82;
+  --z-modal: 90;
+  --z-overlay: 140;
+
+  /* Breakpoints (informational — @media can't read var() but naming keeps them
+     canonical for the CSS below and JS reads). Phase 5 rationalizes to 3 rungs. */
+  /* --bp-sm: 600px; --bp-md: 920px; --bp-lg: 1280px; */
+
+  /* Legacy tokens — retained for api.html which reads --bg / --panel. Do not
+     migrate away without also updating that file. */
   --bg: #181818;
   --panel: #0d0d0d;
   --panel-soft: #121212;
   --surface: #1f1f1f;
   --text: #f2f2f2;
   --muted: #aeaeae;
-  --cyan: #45e0ff;
-  --lime: #b7ff00;
-  --magenta: #ff2cb6;
-  --danger: #ff3b3b;
   --gap: 8px;
   --topbar-offset: 62px;
   --generate-shift: 0px;
