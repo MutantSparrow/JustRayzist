@@ -2052,7 +2052,7 @@ body.lora-drawer-open .gallery-area {
   color: var(--magenta);
 }
 
-@media (max-width: 640px) {
+@media (max-width: 600px) {
   .settings-row-resolution,
   .settings-row-split,
   .reference-image-active,
@@ -4219,7 +4219,7 @@ body.chat-drawer-open .gallery-area {
   }
 }
 
-@media (max-width: 960px) {
+@media (max-width: 920px) {
   .topbar {
     grid-template-columns: 1fr auto;
     grid-template-areas:
@@ -4275,9 +4275,7 @@ body.chat-drawer-open .gallery-area {
   .gallery {
     grid-template-columns: repeat(min(2, var(--gallery-columns)), minmax(0, 1fr));
   }
-}
 
-@media (max-width: 920px) {
   .confirm-dialog.lora-editor-dialog {
     width: min(100vw, calc(100vw - 18px));
   }
