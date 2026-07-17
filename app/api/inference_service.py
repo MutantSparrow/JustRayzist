@@ -263,16 +263,35 @@ class InferenceService:
             "default_weight": DEFAULT_LORA_WEIGHT,
         }
 
+    @staticmethod
+    def _pack_supports_qwen_text_decode(model_pack: ModelPack) -> bool:
+        """True when the pack's text encoder is a plain Qwen3 causal LM (chat/wildcard-decode ready).
+
+        The chat / wildcard-suggestion path in ``DiffusersQwenInference`` was designed against
+        ``Qwen3ForCausalLM`` — 1D causal position ids, plain-text ``text_encoder(input_ids, ...)``
+        forward, ``last_hidden_state`` + ``past_key_values`` for KV caching. Krea2-family packs
+        load ``Qwen3VLModel`` instead (vision-language, mRoPE with 3-axis position ids, VL chat
+        template). Feeding it into the plain-text decode either crashes on position_ids shape or
+        produces garbage. Gate the capability at the architecture level so the UI can hide chat
+        + wildcard-suggestion features on Krea2 rather than let them fail at inference time.
+        """
+        architecture = str(getattr(model_pack, "architecture", "") or "").strip().lower()
+        # ``krea2_turbo`` (and any future Krea2_* family) uses Qwen3VLModel; everything else in
+        # the current registry (``z_image_turbo`` with Qwen3ForCausalLM) is fine.
+        return not architecture.startswith("krea2")
+
     def wildcard_capabilities(self, pack_name: str | None = None) -> dict[str, Any]:
         active_pack = None
+        supported = True
         suggestions_supported = False
         try:
             _base_pack, effective_pack, _resource_tier = self._resolve_runtime_pack(pack_name)
             active_pack = effective_pack.base_name or effective_pack.name
-            suggestions_supported = True
+            supported = self._pack_supports_qwen_text_decode(effective_pack)
+            suggestions_supported = supported
             with self._state_lock:
                 active_session = self._active_session if self._active_pack_name == effective_pack.name else None
-            if active_session is not None:
+            if active_session is not None and supported:
                 try:
                     runtime_status = active_session.runtime_status()
                     suggestions_supported = bool(runtime_status.get("wildcard_suggestions_capable", True))
@@ -281,7 +300,7 @@ class InferenceService:
         except Exception:
             pass
         return {
-            "supported": True,
+            "supported": supported,
             "active_pack": active_pack,
             "suggestions_supported": suggestions_supported,
         }
@@ -301,10 +320,13 @@ class InferenceService:
             _base_pack, effective_pack, _resource_tier = self._resolve_runtime_pack(pack_name)
             active_pack = effective_pack.base_name or effective_pack.name
             encoder = self._text_encoder_label_for_pack(effective_pack)
-            supported = "text_encoder" in effective_pack.components
+            supported = (
+                "text_encoder" in effective_pack.components
+                and self._pack_supports_qwen_text_decode(effective_pack)
+            )
             with self._state_lock:
                 active_session = self._active_session if self._active_pack_name == effective_pack.name else None
-            if active_session is not None:
+            if active_session is not None and supported:
                 try:
                     runtime_status = active_session.runtime_status()
                     supported = bool(runtime_status.get("chat_capable", supported))
@@ -319,20 +341,20 @@ class InferenceService:
             "encoder": encoder,
         }
 
-    def chat_history(self, *, owner_id: str) -> dict[str, Any]:
+    def chat_history(self, *, owner_id: str, pack_name: str | None = None) -> dict[str, Any]:
         safe_owner_id = self.sanitize_owner_id(owner_id)
         return {
             "status": "ok",
             "history": load_chat_history(self._settings, safe_owner_id),
-            "capabilities": self.chat_capabilities(),
+            "capabilities": self.chat_capabilities(pack_name),
         }
 
-    def clear_chat_history(self, *, owner_id: str) -> dict[str, Any]:
+    def clear_chat_history(self, *, owner_id: str, pack_name: str | None = None) -> dict[str, Any]:
         safe_owner_id = self.sanitize_owner_id(owner_id)
         return {
             "status": "ok",
             "history": clear_chat_history(self._settings, safe_owner_id),
-            "capabilities": self.chat_capabilities(),
+            "capabilities": self.chat_capabilities(pack_name),
         }
 
     @staticmethod
@@ -423,6 +445,16 @@ class InferenceService:
         context_messages.append({"role": "user", "content": user_message})
         with self._state_lock:
             _base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name)
+            if not self._pack_supports_qwen_text_decode(effective_pack):
+                # Krea2-family packs load Qwen3VLModel (VL, mRoPE) — the shared
+                # DiffusersQwenInference text-decode path is built for Qwen3ForCausalLM and
+                # would crash on the position-id shape. Refuse the call cleanly instead of
+                # blowing up mid-forward.
+                raise ValueError(
+                    f"Chat is not supported on the '{effective_pack.base_name or effective_pack.name}' "
+                    "pack because its text encoder is a vision-language model. Switch to a "
+                    "Z-Image pack to use chat."
+                )
             session = self._session_for_pack(effective_pack, resource_tier)
             effective_seed = int(seed) if seed is not None else random.randint(1, 2_147_483_647)
             app_context = self._build_chat_app_context(
@@ -528,6 +560,12 @@ class InferenceService:
         ]
         with self._state_lock:
             _base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name)
+            if not self._pack_supports_qwen_text_decode(effective_pack):
+                raise ValueError(
+                    f"Wildcard suggestions are not supported on the "
+                    f"'{effective_pack.base_name or effective_pack.name}' pack because its text "
+                    "encoder is a vision-language model. Switch to a Z-Image pack to use this feature."
+                )
             session = self._session_for_pack(effective_pack, resource_tier)
             effective_seed = int(seed) if seed is not None else random.randint(1, 2_147_483_647)
 
@@ -959,7 +997,20 @@ class InferenceService:
             )
 
     def _load_base_pack(self, pack_name: str | None) -> ModelPack:
-        requested_pack_name = (pack_name or self._default_pack_name or "").strip()
+        # Prefer the currently-active pack over the discovery-order default when the caller does
+        # not pin a pack. Rationale: after `switch_active_pack`, subsequent chat / wildcard /
+        # LoRA capability calls that arrive with `pack_name=None` (the UI's default) would
+        # otherwise resolve to `_default_pack_name` (env `JUSTRAYZIST_PACK` or the first
+        # user-visible pack), which either triggers an unwanted pack reload on every call or
+        # returns capabilities for the wrong pack. Falling back to `_active_selected_pack_name`
+        # keeps callers pinned to whatever the user last selected.
+        requested_pack_name = (pack_name or "").strip()
+        if not requested_pack_name:
+            active_selected = getattr(self, "_active_selected_pack_name", None)
+            if active_selected:
+                requested_pack_name = active_selected
+            elif self._default_pack_name:
+                requested_pack_name = self._default_pack_name.strip()
         if requested_pack_name:
             pack = load_model_pack_by_name(self._settings.paths.model_packs_dir, requested_pack_name)
             _assert_supported_backend(pack)

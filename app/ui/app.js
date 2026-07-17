@@ -1885,6 +1885,7 @@ async function loadLoraLibrary(options = {}) {
   const requestId = state.loraLibraryLoadRequestSeq + 1;
   state.loraLibraryLoadRequestSeq = requestId;
   const query = new URLSearchParams({ _: String(Date.now()) });
+  if (state.selectedPackName) query.set("pack", state.selectedPackName);
   const response = await apiFetch(`/loras?${query.toString()}`, { cache: "no-store" });
   let payload = null;
   try {
@@ -2571,7 +2572,13 @@ function applyChatCapabilities(capabilities) {
     active_pack: String(capabilities?.active_pack || ""),
     encoder: String(capabilities?.encoder || ""),
   };
-  chatEncoderNameEl.textContent = state.chatCapabilities.encoder || state.chatCapabilities.active_pack || "Encoder unavailable";
+  if (!state.chatCapabilities.supported && state.chatCapabilities.active_pack) {
+    chatEncoderNameEl.textContent = `Chat unavailable on ${state.chatCapabilities.active_pack}`;
+  } else {
+    chatEncoderNameEl.textContent =
+      state.chatCapabilities.encoder || state.chatCapabilities.active_pack || "Encoder unavailable";
+  }
+  updateChatComposerState();
 }
 
 function renderChatTranscript() {
@@ -2717,7 +2724,8 @@ function setChatDrawerOpen(open) {
 
 async function loadChatHistory(options = {}) {
   const silent = Boolean(options.silent);
-  const response = await apiFetch("/chat/history");
+  const packQuery = state.selectedPackName ? `?pack=${encodeURIComponent(state.selectedPackName)}` : "";
+  const response = await apiFetch(`/chat/history${packQuery}`);
   let payload = null;
   try {
     payload = await response.json();
@@ -2739,7 +2747,8 @@ async function loadChatHistory(options = {}) {
 
 async function clearChatHistory() {
   if (state.chatBusy) return false;
-  const response = await apiFetch("/chat/history", { method: "DELETE" });
+  const packQuery = state.selectedPackName ? `?pack=${encodeURIComponent(state.selectedPackName)}` : "";
+  const response = await apiFetch(`/chat/history${packQuery}`, { method: "DELETE" });
   let payload = null;
   try {
     payload = await response.json();
@@ -2778,7 +2787,11 @@ async function sendChatMessage() {
     const response = await apiFetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, app_state: buildChatAppState() }),
+      body: JSON.stringify({
+        message,
+        app_state: buildChatAppState(),
+        pack: state.selectedPackName || null,
+      }),
     });
     let payload = null;
     try {
@@ -3060,6 +3073,7 @@ async function loadWildcardLibrary(options = {}) {
   const requestId = state.wildcardLibraryLoadRequestSeq + 1;
   state.wildcardLibraryLoadRequestSeq = requestId;
   const query = new URLSearchParams({ _: String(Date.now()) });
+  if (state.selectedPackName) query.set("pack", state.selectedPackName);
   const response = await apiFetch(`/wildcards?${query.toString()}`, { cache: "no-store" });
   let payload = null;
   try {
@@ -4478,6 +4492,23 @@ function applyRuntimeStatus(payload) {
   updateRplusControls();
 }
 
+async function refreshPackScopedCapabilities() {
+  // After a pack switch, chat/LoRA/wildcard capabilities all depend on the newly-active pack's
+  // architecture (Krea2's Qwen3VLModel does not support the shared text-decode path). Refresh
+  // them in parallel so the drawer states + tooltips reflect reality before the user retries.
+  const jobs = [];
+  if (typeof loadChatHistory === "function") {
+    jobs.push(loadChatHistory({ silent: true }).catch((err) => console.warn("chat refresh failed:", err)));
+  }
+  if (typeof loadLoraLibrary === "function") {
+    jobs.push(loadLoraLibrary({ refreshSummary: false }).catch((err) => console.warn("lora refresh failed:", err)));
+  }
+  if (typeof loadWildcardLibrary === "function") {
+    jobs.push(loadWildcardLibrary({ silent: true }).catch((err) => console.warn("wildcard refresh failed:", err)));
+  }
+  await Promise.all(jobs);
+}
+
 async function requestPackSwitch(targetName) {
   const name = String(targetName || "").trim();
   if (!name) return;
@@ -4516,6 +4547,9 @@ async function requestPackSwitch(targetName) {
     const payload = await response.json();
     state.selectedPackName = name;
     applyRuntimeStatus(payload);
+    // Chat / LoRA / wildcard capabilities depend on the new pack's encoder architecture —
+    // refresh them so the drawers stop advertising features the new pack doesn't support.
+    refreshPackScopedCapabilities().catch(() => {});
     setStatus(`Model pack switched to ${name}.`);
   } catch (err) {
     console.warn("Pack switch failed:", err);

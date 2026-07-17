@@ -707,12 +707,12 @@ def model_packs_switch(payload: SwitchPackRequest) -> dict:
 
 
 @app.get("/loras")
-def loras() -> JSONResponse:
+def loras(pack: str | None = None) -> JSONResponse:
     items = inference.list_loras()
     return JSONResponse(content={
         "items": items,
         "count": len(items),
-        "capabilities": inference.lora_capabilities(),
+        "capabilities": inference.lora_capabilities(pack),
     }, headers=_NO_STORE_HEADERS)
 
 
@@ -740,13 +740,13 @@ async def lora_events(request: Request) -> StreamingResponse:
 
 
 @app.get("/wildcards")
-def wildcards() -> JSONResponse:
+def wildcards(pack: str | None = None) -> JSONResponse:
     items = inference.list_wildcards()
     return JSONResponse(
         content={
             "items": items,
             "count": len(items),
-            "capabilities": inference.wildcard_capabilities(),
+            "capabilities": inference.wildcard_capabilities(pack),
         },
         headers=_NO_STORE_HEADERS,
     )
@@ -846,18 +846,26 @@ def wildcard_suggestions(payload: WildcardSuggestionRequest) -> dict:
 
 @app.get("/chat/history")
 def chat_history(
+    pack: str | None = None,
     x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
 ) -> JSONResponse:
     owner_id = _resolve_owner_id(x_justrayzist_client)
-    return JSONResponse(content=inference.chat_history(owner_id=owner_id), headers=_NO_STORE_HEADERS)
+    return JSONResponse(
+        content=inference.chat_history(owner_id=owner_id, pack_name=pack),
+        headers=_NO_STORE_HEADERS,
+    )
 
 
 @app.delete("/chat/history")
 def chat_history_clear(
+    pack: str | None = None,
     x_justrayzist_client: str | None = Header(default=None, alias="X-JustRayzist-Client"),
 ) -> JSONResponse:
     owner_id = _resolve_owner_id(x_justrayzist_client)
-    return JSONResponse(content=inference.clear_chat_history(owner_id=owner_id), headers=_NO_STORE_HEADERS)
+    return JSONResponse(
+        content=inference.clear_chat_history(owner_id=owner_id, pack_name=pack),
+        headers=_NO_STORE_HEADERS,
+    )
 
 
 @app.post("/chat")

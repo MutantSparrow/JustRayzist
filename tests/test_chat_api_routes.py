@@ -46,7 +46,7 @@ def test_chat_history_route_requires_client_header() -> None:
 
 def test_chat_history_route_returns_service_payload(monkeypatch) -> None:
     def fake_chat_history(**kwargs):
-        assert kwargs == {"owner_id": "example-client"}
+        assert kwargs == {"owner_id": "example-client", "pack_name": None}
         return {"status": "ok", "history": _history(), "capabilities": _capabilities()}
 
     monkeypatch.setattr(api_main.inference, "chat_history", fake_chat_history)
@@ -61,7 +61,7 @@ def test_chat_history_route_returns_service_payload(monkeypatch) -> None:
 
 def test_chat_history_clear_route_returns_service_payload(monkeypatch) -> None:
     def fake_clear_chat_history(**kwargs):
-        assert kwargs == {"owner_id": "example-client"}
+        assert kwargs == {"owner_id": "example-client", "pack_name": None}
         return {"status": "ok", "history": {"exchanges": [], "next_number": 1}, "capabilities": _capabilities()}
 
     monkeypatch.setattr(api_main.inference, "clear_chat_history", fake_clear_chat_history)
@@ -147,3 +147,41 @@ def test_chat_route_rejects_empty_message() -> None:
     response = client.post("/chat", headers=CLIENT_HEADER, json={"messages": []})
     assert response.status_code == 400
     assert "Chat message is required" in response.json()["detail"]
+
+
+def test_chat_history_route_forwards_pack_query(monkeypatch) -> None:
+    """The UI stamps ?pack=<selected> so capabilities reflect the active pack, not the default."""
+
+    captured: dict[str, object] = {}
+
+    def fake_chat_history(**kwargs):
+        captured.update(kwargs)
+        return {"status": "ok", "history": _history(), "capabilities": _capabilities()}
+
+    monkeypatch.setattr(api_main.inference, "chat_history", fake_chat_history)
+
+    client = TestClient(api_main.app)
+    response = client.get(
+        "/chat/history?pack=Krea2_Turbo",
+        headers=CLIENT_HEADER,
+    )
+    assert response.status_code == 200
+    assert captured == {"owner_id": "example-client", "pack_name": "Krea2_Turbo"}
+
+
+def test_chat_history_clear_route_forwards_pack_query(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_clear(**kwargs):
+        captured.update(kwargs)
+        return {"status": "ok", "history": {"exchanges": [], "next_number": 1}, "capabilities": _capabilities()}
+
+    monkeypatch.setattr(api_main.inference, "clear_chat_history", fake_clear)
+
+    client = TestClient(api_main.app)
+    response = client.delete(
+        "/chat/history?pack=Krea2_Turbo",
+        headers=CLIENT_HEADER,
+    )
+    assert response.status_code == 200
+    assert captured == {"owner_id": "example-client", "pack_name": "Krea2_Turbo"}
