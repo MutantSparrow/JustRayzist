@@ -6,7 +6,7 @@
   <title>JustRayzist</title>
   <link rel="icon" type="image/x-icon" href="/img/favicon.ico">
   <link rel="shortcut icon" href="/img/favicon.ico">
-  <link rel="stylesheet" href="/ui/styles.css?v=20260722_responsive">
+  <link rel="stylesheet" href="/ui/styles.css?v=20260723_copy">
 </head>
 <body>
   <header class="topbar">
@@ -16,7 +16,7 @@
     <div class="prompt-area">
       <div id="settings-summary" class="settings-summary" aria-live="polite"></div>
       <div class="prompt-shell">
-        <button id="settings-button" class="prompt-settings-button" type="button" aria-expanded="false" aria-label="Open generation settings" title="Open generation settings">
+        <button id="settings-button" class="prompt-settings-button" type="button" aria-expanded="false" aria-label="Open generation settings">
           <span class="prompt-settings-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" focusable="false">
               <line x1="4" y1="6" x2="20" y2="6"></line>
@@ -42,7 +42,7 @@
       </div>
     </div>
     <div class="generate-controls">
-      <button id="generate-button" class="generate-button btn btn-hfill" type="button" aria-label="GENERATE" title="GENERATE">
+      <button id="generate-button" class="generate-button btn btn-hfill" type="button" aria-label="GENERATE">
         <span id="generate-button-label" class="generate-button-label">GENERATE</span>
       </button>
       <button
@@ -113,13 +113,13 @@
         <div class="setting-group setting-group-orientation">
           <label>Orientation</label>
           <div class="toggle-row orientation-toggle-row" id="orientation-toggle">
-            <button class="toggle-option active icon-toggle-option" data-orientation="portrait" type="button" aria-label="Portrait" title="Portrait">
+            <button class="toggle-option active icon-toggle-option" data-orientation="portrait" type="button" aria-label="Portrait">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <rect x="7" y="3.5" width="10" height="17" rx="1.8"></rect>
                 <path d="M10 17.5h4"></path>
               </svg>
             </button>
-            <button class="toggle-option icon-toggle-option" data-orientation="landscape" type="button" aria-label="Landscape" title="Landscape">
+            <button class="toggle-option icon-toggle-option" data-orientation="landscape" type="button" aria-label="Landscape">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <rect x="3.5" y="7" width="17" height="10" rx="1.8"></rect>
                 <path d="M16.5 10v4"></path>
@@ -152,7 +152,7 @@
           <div id="reference-image-active" class="reference-image-active hidden">
             <div id="reference-image-thumb-wrap" class="reference-image-thumb-wrap" aria-label="Reference image preview">
               <img id="reference-image-thumb" class="reference-image-thumb" alt="Reference image preview">
-              <button id="reference-image-remove" class="reference-image-remove" type="button" aria-label="Remove reference image" title="Remove reference image">
+              <button id="reference-image-remove" class="reference-image-remove" type="button" aria-label="Remove reference image">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M6 6l12 12"></path>
                   <path d="M18 6L6 18"></path>
@@ -307,7 +307,7 @@
       <div class="gallery-tools-left">
         <label for="filter-input" class="sr-only">Filter gallery</label>
         <input id="filter-input" type="text" placeholder="Filter by prompt keywords">
-        <button id="reverse-order-button" class="reverse-button" type="button" aria-pressed="false" aria-label="Sort by newest first" title="Sort by newest first">
+        <button id="reverse-order-button" class="reverse-button" type="button" aria-pressed="false" aria-label="Sort by newest first">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h10"></path><path d="M8 11h7"></path><path d="M8 16h4"></path><path d="M5 5v14"></path><path d="M2.5 16.5L5 19l2.5-2.5"></path></svg>
         </button>
         <div id="gallery-color-filters" class="gallery-color-filters" aria-label="Filter gallery by color">
@@ -339,18 +339,18 @@
             </svg>
           </span>
         </div>
-        <button id="multi-select-toggle" class="multi-select-toggle-button" type="button" aria-pressed="false" aria-label="Enable multiselection" title="Enable multiselection">
+        <button id="multi-select-toggle" class="multi-select-toggle-button" type="button" aria-pressed="false" aria-label="Enable multiselection">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h10v10H5z"></path><path d="M9 3h10v10"></path><path d="M8 12l2 2 4-4"></path></svg>
         </button>
         <div id="multi-select-actions" class="multi-select-actions hidden" aria-live="polite">
           <span id="multi-select-count" class="multi-select-count">0 selected</span>
-          <button id="bulk-upscale-button" class="tile-upscale" type="button" disabled aria-label="Queue upscale for selected images" title="Queue upscale for selected images">
+          <button id="bulk-upscale-button" class="tile-upscale" type="button" disabled aria-label="Queue upscale for selected images">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 16L16 8"></path><path d="M10 8h6v6"></path><path d="M4 20h6v-2H6v-4H4z"></path><path d="M20 4h-6v2h4v4h2z"></path></svg>
           </button>
-          <button id="bulk-download-button" class="tile-download" type="button" disabled aria-label="Download selected images as ZIP" title="Download selected images as ZIP">
+          <button id="bulk-download-button" class="tile-download" type="button" disabled aria-label="Download selected images as ZIP">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10"></path><path d="M8 10l4 4 4-4"></path><path d="M5 18h14"></path></svg>
           </button>
-          <button id="bulk-delete-button" class="tile-delete bulk-delete-button" type="button" disabled aria-label="Delete selected images" title="Delete selected images">
+          <button id="bulk-delete-button" class="tile-delete bulk-delete-button" type="button" disabled aria-label="Delete selected images">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 7h2v8h-2v-8zm4 0h2v8h-2v-8zM7 10h2v8H7v-8z"/></svg>
           </button>
         </div>
@@ -358,7 +358,7 @@
     </section>
     <p id="status-line" class="status-line" aria-live="polite">Ready.</p>
     <section id="gallery" class="gallery"></section>
-    <p id="empty-state" class="empty-state hidden">No Pictures yet.</p>
+    <p id="empty-state" class="empty-state hidden">No pictures yet.</p>
   </main>
 
   <section id="viewer-modal" class="viewer-modal hidden" role="dialog" aria-modal="true" aria-label="Image viewer" aria-hidden="true">
@@ -366,28 +366,28 @@
       <div id="viewer-meta" class="viewer-meta"></div>
       <div class="viewer-actions">
         <span id="zoom-label" class="zoom-label">1.00x</span>
-        <button id="viewer-use-prompt-button" class="viewer-action-button viewer-action-neutral" type="button" aria-label="Use prompt text" title="Use prompt text">
+        <button id="viewer-use-prompt-button" class="viewer-action-button viewer-action-neutral" type="button" aria-label="Use prompt text">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 6h10"></path><path d="M7 10h10"></path><path d="M7 14h6"></path><path d="M5 4h14v16H5z"></path></svg>
         </button>
-        <button id="viewer-copy-prompt-button" class="viewer-action-button viewer-action-neutral" type="button" aria-label="Copy prompt text" title="Copy prompt text">
+        <button id="viewer-copy-prompt-button" class="viewer-action-button viewer-action-neutral" type="button" aria-label="Copy prompt text">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9h10v11H9z"></path><path d="M5 5h10v11"></path></svg>
         </button>
-        <button id="viewer-upscale-button" class="viewer-action-button viewer-action-magenta" type="button" aria-label="Upscale image" title="Upscale image">
+        <button id="viewer-upscale-button" class="viewer-action-button viewer-action-magenta" type="button" aria-label="Upscale image">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 16L16 8"></path><path d="M10 8h6v6"></path><path d="M4 20h6v-2H6v-4H4z"></path><path d="M20 4h-6v2h4v4h2z"></path></svg>
         </button>
-        <button id="viewer-clarity-button" class="viewer-action-button viewer-action-cyan" type="button" aria-label="Clarity pass" title="Clarity pass">
+        <button id="viewer-clarity-button" class="viewer-action-button viewer-action-cyan" type="button" aria-label="Clarity pass">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.2 4.8L19 10l-4.8 2.2L12 17l-2.2-4.8L5 10l4.8-2.2z"></path><path d="M19 4v4"></path><path d="M17 6h4"></path></svg>
         </button>
-        <a id="viewer-download" class="viewer-action-button viewer-action-lime" href="#" download aria-label="Download image" title="Download image">
+        <a id="viewer-download" class="viewer-action-button viewer-action-lime" href="#" download aria-label="Download image">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10"></path><path d="M8 10l4 4 4-4"></path><path d="M5 18h14"></path></svg>
         </a>
         <button id="viewer-favorite-button" class="viewer-favorite-button" type="button" aria-label="Favorite image" aria-pressed="false" title="Favorite">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35 10.55 20C5.4 15.24 2 12.09 2 8.25 2 5.3 4.3 3 7.25 3c1.67 0 3.27.77 4.3 1.98A5.71 5.71 0 0 1 15.85 3C18.8 3 21.1 5.3 21.1 8.25c0 3.84-3.4 6.99-8.55 11.76L12 21.35Z"/></svg>
         </button>
-        <button id="viewer-delete-button" class="viewer-action-button viewer-action-danger" type="button" aria-label="Delete image" title="Delete image">
+        <button id="viewer-delete-button" class="viewer-action-button viewer-action-danger" type="button" aria-label="Delete image">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V5h6v2"></path><path d="M7 7l1 12h8l1-12"></path><path d="M10 10v6"></path><path d="M14 10v6"></path></svg>
         </button>
-        <button id="viewer-close-button" class="viewer-action-button viewer-action-danger" type="button" aria-label="Close preview" title="Close preview">
+        <button id="viewer-close-button" class="viewer-action-button viewer-action-danger" type="button" aria-label="Close preview">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>
         </button>
       </div>
@@ -550,6 +550,6 @@
     <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
   </section>
 
-  <script src="/ui/app.js?v=20260722_responsive"></script>
+  <script src="/ui/app.js?v=20260723_copy"></script>
 </body>
 </html>

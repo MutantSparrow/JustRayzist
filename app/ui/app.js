@@ -1801,7 +1801,7 @@ function renderLoraLibrary() {
     if (filteredItems.length === 0) {
       loraDrawerEmptyEl.classList.remove("hidden");
       if (state.loraLibrary.length === 0) {
-        loraDrawerEmptyEl.textContent = "No LoRAs installed yet.";
+        loraDrawerEmptyEl.textContent = "No LoRAs installed.";
       } else if (state.loraActiveOnlyFilter && state.loraPendingSelections.length === 0) {
         loraDrawerEmptyEl.textContent = "No active LoRAs.";
       } else {
@@ -3046,7 +3046,7 @@ function renderWildcardLibrary() {
       wildcardDrawerEmptyEl.classList.remove("hidden");
       wildcardDrawerEmptyEl.textContent =
         state.wildcardLibrary.length === 0
-          ? "No wildcards installed yet."
+          ? "No wildcards installed."
           : "No wildcards match the current filter.";
     } else {
       wildcardDrawerEmptyEl.classList.add("hidden");
