@@ -436,6 +436,20 @@ select {
   width: 100%;
 }
 
+.btn-hfill-lime:disabled,
+.btn-hfill:disabled,
+.btn:disabled {
+  filter: saturate(0.4);
+  opacity: var(--disabled-alpha);
+  cursor: not-allowed;
+}
+
+.btn-hfill-lime:disabled::after,
+.btn-hfill:disabled::after,
+.btn:disabled::after {
+  display: none;
+}
+
 /* === Primitive consolidation (phase 3) ========================================
    Comma-group base rules that document shared invariants across the 13 button /
    4 chip / 3 empty-state families. Existing per-component rules keep winning
@@ -689,7 +703,8 @@ select {
 }
 
 
-.settings-summary-pack {
+.settings-summary .settings-summary-pack,
+.settings-summary .summary-value.settings-summary-pack {
   color: var(--magenta);
   font-weight: 700;
   letter-spacing: 0.03em;
@@ -801,6 +816,12 @@ select {
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.chat-encoder-name.encoder-label--unavailable {
+  color: var(--ink-7);
+  text-decoration: line-through;
+  font-weight: 700;
 }
 
 .chat-clear-button {

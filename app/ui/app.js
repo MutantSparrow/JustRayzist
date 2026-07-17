@@ -2572,12 +2572,14 @@ function applyChatCapabilities(capabilities) {
     active_pack: String(capabilities?.active_pack || ""),
     encoder: String(capabilities?.encoder || ""),
   };
-  if (!state.chatCapabilities.supported && state.chatCapabilities.active_pack) {
+  const unavailable = !state.chatCapabilities.supported && state.chatCapabilities.active_pack;
+  if (unavailable) {
     chatEncoderNameEl.textContent = `Chat unavailable on ${state.chatCapabilities.active_pack}`;
   } else {
     chatEncoderNameEl.textContent =
       state.chatCapabilities.encoder || state.chatCapabilities.active_pack || "Encoder unavailable";
   }
+  chatEncoderNameEl.classList.toggle("encoder-label--unavailable", unavailable);
   updateChatComposerState();
 }
 
@@ -4997,7 +4999,11 @@ function updateRplusControls() {
   }
   rplusSettingGroupEl.title = modeTooltip;
   rplusToggleButtonEl.title = modeTooltip;
-  rplusToggleButtonEl.textContent = state.rplusEnabled ? "R+ MODE: ON" : "R+ MODE: OFF";
+  if (activePackBlocksRplus) {
+    rplusToggleButtonEl.textContent = "R+ MODE: NOT AVAILABLE";
+  } else {
+    rplusToggleButtonEl.textContent = state.rplusEnabled ? "R+ MODE: ON" : "R+ MODE: OFF";
+  }
   rplusToggleButtonEl.classList.toggle("active", state.rplusEnabled);
   rplusToggleButtonEl.disabled = locked;
   rplusToggleButtonEl.setAttribute("aria-pressed", String(state.rplusEnabled));
