@@ -210,6 +210,7 @@ Key API behavior:
 - `GET /health`
 - `GET /config`
 - `GET /model-packs`
+- `POST /model-packs/switch`
 - `GET /loras`
 - `GET /wildcards`
 - `POST /wildcards`
@@ -341,6 +342,34 @@ Sample response:
       "architecture": "z_image_turbo"
     }
   ]
+}
+```
+
+### `POST /model-packs/switch`
+
+Eagerly load the named pack as the active session. Rejects hidden / disabled / unknown packs with 400. Returns the fresh runtime status once the session has loaded.
+
+Sample request body:
+
+```json
+{
+  "name": "Krea2_Turbo"
+}
+```
+
+Sample response:
+
+```json
+{
+  "status": "ok",
+  "runtime": {
+    "runtime_profile": "balanced",
+    "resource_tier": "high",
+    "active_pack": "Krea2_Turbo",
+    "selected_pack": "Krea2_Turbo",
+    "effective_pack": "Krea2_Turbo",
+    "active_backend": "fp8_krea"
+  }
 }
 ```
 

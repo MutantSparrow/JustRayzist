@@ -687,6 +687,25 @@ def model_packs() -> dict:
     return {"items": packs, "count": len(packs)}
 
 
+class SwitchPackRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
+@app.post("/model-packs/switch")
+def model_packs_switch(payload: SwitchPackRequest) -> dict:
+    """Eagerly load the named pack as the active session. Returns the fresh runtime status.
+
+    Same filter as ``GET /model-packs`` (``user_visible=true and enabled=true``). Runs under the
+    generation lock so an in-flight generate is not clobbered — the UI is responsible for
+    greying out controls while a job is running to avoid the switch queuing behind it.
+    """
+    try:
+        runtime = inference.switch_active_pack(payload.name)
+    except ModelPackValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "runtime": runtime}
+
+
 @app.get("/loras")
 def loras() -> JSONResponse:
     items = inference.list_loras()

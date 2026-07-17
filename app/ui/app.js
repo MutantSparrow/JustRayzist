@@ -9,6 +9,9 @@ const settingsButtonEl = document.getElementById("settings-button");
 const settingsPanelEl = document.getElementById("settings-panel");
 const settingsSummaryEl = document.getElementById("settings-summary");
 const resolutionSelectEl = document.getElementById("resolution-select");
+const modelPackSelectEl = document.getElementById("model-pack-select");
+const packSwitchModalEl = document.getElementById("pack-switch-modal");
+const packSwitchMessageEl = document.getElementById("pack-switch-message");
 const orientationToggleEl = document.getElementById("orientation-toggle");
 const freezeSeedButtonEl = document.getElementById("freeze-seed-button");
 const proceduralLatentSettingEl = document.getElementById("procedural-latent-setting");
@@ -143,6 +146,9 @@ const requiredUi = [
   ["settings-panel", settingsPanelEl],
   ["settings-summary", settingsSummaryEl],
   ["resolution-select", resolutionSelectEl],
+  ["model-pack-select", modelPackSelectEl],
+  ["pack-switch-modal", packSwitchModalEl],
+  ["pack-switch-message", packSwitchMessageEl],
   ["orientation-toggle", orientationToggleEl],
   ["freeze-seed-button", freezeSeedButtonEl],
   ["procedural-latent-setting", proceduralLatentSettingEl],
@@ -553,6 +559,11 @@ const state = {
     encoder: null,
   },
   chatDraft: "",
+  // Model-pack switcher (populated by /model-packs on boot, /health for current active).
+  modelPacks: [],
+  selectedPackName: null,
+  currentActivePack: null,
+  packSwitching: false,
 };
 
 function hasReferenceImage() {
@@ -4374,6 +4385,148 @@ function hideZipProgressModal() {
   zipProgressModalEl.setAttribute("aria-hidden", "true");
 }
 
+function showPackSwitchModal(targetName) {
+  const label = String(targetName || "").trim() || "model pack";
+  packSwitchMessageEl.textContent = `Loading ${label}…`;
+  packSwitchModalEl.classList.remove("hidden");
+  packSwitchModalEl.setAttribute("aria-hidden", "false");
+}
+
+function hidePackSwitchModal() {
+  packSwitchModalEl.classList.add("hidden");
+  packSwitchModalEl.setAttribute("aria-hidden", "true");
+}
+
+function isGenerationInFlight() {
+  // We can't switch packs while a gen is running: the switch runs under the server-side
+  // _generation_lock and would block. state.activeJob is the same signal the queue/UI uses to
+  // decide whether a job is in flight; state.queue.length > 0 covers jobs waiting to fire next.
+  return Boolean(state.activeJob) || (Array.isArray(state.queue) && state.queue.length > 0);
+}
+
+function updateModelPackControlDisabled() {
+  if (!modelPackSelectEl) return;
+  const shouldDisable = state.packSwitching || isGenerationInFlight() || !state.modelPacks.length;
+  modelPackSelectEl.disabled = shouldDisable;
+}
+
+function renderModelPackSelect() {
+  if (!modelPackSelectEl) return;
+  const packs = Array.isArray(state.modelPacks) ? state.modelPacks : [];
+  const activeName = state.selectedPackName || state.currentActivePack || "";
+  modelPackSelectEl.innerHTML = "";
+  if (!packs.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No model packs available";
+    modelPackSelectEl.appendChild(opt);
+    modelPackSelectEl.disabled = true;
+    return;
+  }
+  for (const pack of packs) {
+    const opt = document.createElement("option");
+    opt.value = pack.name;
+    opt.textContent = pack.name;
+    if (pack.name === activeName) {
+      opt.selected = true;
+    }
+    modelPackSelectEl.appendChild(opt);
+  }
+  updateModelPackControlDisabled();
+}
+
+async function fetchModelPacks() {
+  try {
+    const response = await apiFetch("/model-packs", { headers: { Accept: "application/json" } });
+    if (!response.ok) return;
+    const payload = await response.json();
+    state.modelPacks = Array.isArray(payload.items) ? payload.items : [];
+  } catch (err) {
+    console.warn("Failed to load /model-packs:", err);
+    state.modelPacks = [];
+  }
+  renderModelPackSelect();
+}
+
+async function fetchRuntimeStatus() {
+  try {
+    const response = await apiFetch("/health", { headers: { Accept: "application/json" } });
+    if (!response.ok) return;
+    const payload = await response.json();
+    applyRuntimeStatus(payload);
+  } catch (err) {
+    console.warn("Failed to load /health:", err);
+  }
+}
+
+function applyRuntimeStatus(payload) {
+  if (!payload || typeof payload !== "object") return;
+  // /health returns active_pack / selected_pack / effective_pack at the top level; the
+  // /model-packs/switch endpoint returns them nested under `runtime`. Accept both shapes.
+  const runtime = payload.runtime && typeof payload.runtime === "object" ? payload.runtime : payload;
+  const active = runtime.active_pack || runtime.effective_pack || null;
+  const selected = runtime.selected_pack || active;
+  state.currentActivePack = active || null;
+  if (selected) {
+    state.selectedPackName = selected;
+  } else if (!state.selectedPackName && active) {
+    state.selectedPackName = active;
+  }
+  renderModelPackSelect();
+  updateSettingsSummary();
+}
+
+async function requestPackSwitch(targetName) {
+  const name = String(targetName || "").trim();
+  if (!name) return;
+  if (state.packSwitching) return;
+  if (isGenerationInFlight()) {
+    setStatus("Wait for the current generation to finish before switching packs.", true);
+    renderModelPackSelect();
+    return;
+  }
+  const currentActive = state.currentActivePack || state.selectedPackName;
+  if (currentActive === name) {
+    state.selectedPackName = name;
+    renderModelPackSelect();
+    updateSettingsSummary();
+    return;
+  }
+  state.packSwitching = true;
+  updateModelPackControlDisabled();
+  showPackSwitchModal(name);
+  try {
+    const response = await apiFetch("/model-packs/switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const body = await response.json();
+        if (body && body.detail) detail = body.detail;
+      } catch (_) {
+        /* ignore */
+      }
+      throw new Error(detail);
+    }
+    const payload = await response.json();
+    state.selectedPackName = name;
+    applyRuntimeStatus(payload);
+    setStatus(`Model pack switched to ${name}.`);
+  } catch (err) {
+    console.warn("Pack switch failed:", err);
+    setStatus(`Pack switch failed: ${err.message || err}`, true);
+    // Revert dropdown selection to the last-known active pack.
+    renderModelPackSelect();
+  } finally {
+    state.packSwitching = false;
+    hidePackSwitchModal();
+    updateModelPackControlDisabled();
+  }
+}
+
 function cancelZipDownload() {
   if (state.zipAbortController) {
     state.zipAbortController.abort();
@@ -4552,6 +4705,10 @@ function setUpscaleScale(scale) {
 function updateSettingsSummary() {
   const dimensions = parseResolution(resolutionSelectEl.value);
   const pieces = [];
+  const packLabel = state.currentActivePack || state.selectedPackName;
+  if (packLabel) {
+    pieces.push(`Pack <span class="summary-value settings-summary-pack">${escapeHtml(packLabel)}</span>`);
+  }
   if (hasReferenceImage()) {
     pieces.push(`Reference <span class="summary-value">${escapeHtml(state.referenceImage.filename)}</span>`);
     pieces.push(
@@ -5835,6 +5992,9 @@ function updateGenerateButtonState() {
   generateButtonLabelEl.textContent = label;
   generateButtonEl.setAttribute("aria-label", label);
   generateButtonEl.title = label;
+  // Pack switcher shares the /generation_lock with generation; grey it out while jobs are queued
+  // or in-flight so the user can't stack a switch behind a generate.
+  updateModelPackControlDisabled();
 }
 
 async function loadImages(options = {}) {
@@ -6061,6 +6221,7 @@ function enqueueGenerationFromPrompt() {
     width: dimensions.width,
     height: dimensions.height,
     seed,
+    pack: state.selectedPackName,
     enhance_prompt: state.promptEnhance,
     procedural_creativity: state.proceduralCreativity,
     inference_process: inferenceProcess,
@@ -6119,7 +6280,7 @@ async function enqueueImg2ImgFromPrompt() {
     width: reference.width,
     height: reference.height,
     seed,
-    pack: null,
+    pack: state.selectedPackName,
     enhance_prompt: state.promptEnhance,
     procedural_creativity: 0,
     similarity: normalizeSimilarityPercent(reference.similarity),
@@ -6366,6 +6527,9 @@ async function processGenerationQueue() {
             procedural_creativity: Number(job.procedural_creativity || 0),
             inference_process: sanitizeInferenceProcess(job.inference_process),
           };
+          if (job.pack) {
+            payloadBody.pack = job.pack;
+          }
           if (payloadBody.inference_process === "rplus") {
             payloadBody.steps = RPLUS_UI_STEPS;
             payloadBody.rplus_vibrance = normalizeRplusControlValue(job.rplus_vibrance);
@@ -6446,6 +6610,9 @@ async function processGenerationQueue() {
         state.activeJob = null;
         persistClientQueueState();
         await loadImages();
+        // Update the top-bar pack badge with the effective_pack the server actually used —
+        // /health reflects _active_pack_name which is only populated after the first generate.
+        fetchRuntimeStatus().catch(() => {});
       } catch (error) {
         if (job?.kind === "img2img") {
           await releaseQueuedReferenceForJob(job);
@@ -6688,6 +6855,11 @@ async function bootstrap() {
       applyChatCapabilities(state.chatCapabilities);
       renderChatTranscript();
       setStatus(String(error?.message || error), true);
+    }
+    try {
+      await Promise.all([fetchModelPacks(), fetchRuntimeStatus()]);
+    } catch (error) {
+      console.warn("Failed to bootstrap model pack state:", error);
     }
     updateSettingsSummary();
     updateViewerNavState();
@@ -6942,6 +7114,13 @@ orientationToggleEl.addEventListener("click", (event) => {
 resolutionSelectEl.addEventListener("change", () => {
   updateSettingsSummary();
 });
+
+if (modelPackSelectEl) {
+  modelPackSelectEl.addEventListener("change", () => {
+    const target = modelPackSelectEl.value;
+    requestPackSwitch(target);
+  });
+}
 
 promptInputEl.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || event.shiftKey) return;

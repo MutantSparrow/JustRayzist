@@ -6,7 +6,7 @@
   <title>JustRayzist</title>
   <link rel="icon" type="image/x-icon" href="/img/favicon.ico">
   <link rel="shortcut icon" href="/img/favicon.ico">
-  <link rel="stylesheet" href="/ui/styles.css?v=20260424_01">
+  <link rel="stylesheet" href="/ui/styles.css?v=20260717_pack_switcher">
 </head>
 <body>
   <header class="topbar">
@@ -125,6 +125,16 @@
               </svg>
             </button>
           </div>
+        </div>
+      </div>
+
+      <div class="settings-row settings-row-pack">
+        <div class="setting-group setting-group-pack">
+          <label for="model-pack-select">Model Pack</label>
+          <select id="model-pack-select" aria-describedby="model-pack-hint" disabled>
+            <option value="">Loading packs…</option>
+          </select>
+          <span id="model-pack-hint" class="setting-hint">Swapping packs unloads the current one first.</span>
         </div>
       </div>
 
@@ -521,11 +531,20 @@
     </div>
   </section>
 
+  <section id="pack-switch-modal" class="confirm-modal hidden" aria-hidden="true">
+    <div class="confirm-dialog zip-progress-dialog">
+      <p id="pack-switch-message" class="confirm-message">Switching model pack…</p>
+      <div class="zip-progress-body">
+        <div class="tile-spinner zip-progress-spinner">Loading weights…</div>
+      </div>
+    </div>
+  </section>
+
   <section id="disconnect-overlay" class="disconnect-overlay hidden" aria-hidden="true">
     <div class="disconnect-crt" aria-hidden="true"></div>
     <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
   </section>
 
-  <script src="/ui/app.js?v=20260511_chat_actions"></script>
+  <script src="/ui/app.js?v=20260717_pack_switcher"></script>
 </body>
 </html>

@@ -1105,6 +1105,39 @@ class InferenceService:
             apply_resource_tier_policy=apply_resource_tier_policy,
         )
 
+    def switch_active_pack(self, pack_name: str) -> dict[str, Any]:
+        """Eagerly load ``pack_name`` as the active pack; return the fresh runtime status.
+
+        Backs the ``POST /switch-pack`` endpoint. Reuses the same resolve/complete/derive path
+        as the /generate flow (so donor-completed and derived-fp8 variants stay consistent).
+        User-hidden / disabled packs are rejected before the session is touched. Under the
+        ``_generation_lock`` so we don't clobber an in-flight generate.
+
+        Raises:
+            ModelPackValidationError: unknown pack or pack marked user_visible=false / enabled=false.
+        """
+        requested = (pack_name or "").strip()
+        if not requested:
+            raise ModelPackValidationError("Pack name is required.")
+
+        # Verify the target is a user-facing pack. The generate path is happy to load hidden
+        # derived packs by name (that's how __auto_fp8_storage gets routed) — but the switch
+        # endpoint is user-driven, so refuse anything not in the dropdown.
+        try:
+            candidate = load_model_pack_by_name(self._settings.paths.model_packs_dir, requested)
+        except ModelPackValidationError:
+            raise
+        if not candidate.user_visible or not candidate.enabled:
+            raise ModelPackValidationError(
+                f"Model pack '{requested}' is not user-selectable."
+            )
+
+        base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(requested)
+        with self._generation_lock:
+            self._session_for_pack(effective_pack, resource_tier)
+            self._active_selected_pack_name = base_pack.name
+        return self.runtime_status()
+
     def resolve_output_path(self, raw_path: str) -> Path:
         resolved = Path(str(raw_path)).expanduser().resolve()
         outputs_dir = self._settings.paths.outputs_dir.resolve()

@@ -486,6 +486,20 @@ select {
   justify-content: space-between;
 }
 
+.settings-row-pack {
+  grid-template-columns: 1fr;
+}
+
+.setting-group-pack select {
+  text-transform: none;
+}
+
+.settings-summary-pack {
+  color: var(--magenta);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
 .lora-drawer-backdrop {
   position: fixed;
   inset: 0;
