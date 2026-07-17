@@ -21,6 +21,7 @@ def test_chat_service_passes_app_context_and_persists_actions(temp_app_paths, ma
     fake_pack = SimpleNamespace(
         name="Rayzist_bf16",
         base_name="Rayzist_bf16",
+        architecture="z_image_turbo",
         components={"text_encoder": SimpleNamespace(path=Path("encoder.gguf"))},
     )
 

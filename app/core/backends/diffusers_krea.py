@@ -22,6 +22,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.core.backends.diffusers_qwen import DiffusersQwen3VLInference, DiffusersQwenInference
 from app.core.backends.diffusers_zimage import DiffusersZImageBackend
 from app.core.pipeline_factory import (
     LoadedKreaPipeline,
@@ -272,6 +273,149 @@ class DiffusersKreaBackend(DiffusersZImageBackend):
         processor = AutoProcessor.from_pretrained(str(config_dir), local_files_only=True)
         setattr(pipe, "_rayzist_qwen3vl_processor", processor)
         return processor
+
+    # --- Chat / prompt-enhancement / wildcard-suggest ---
+    # The shared DiffusersQwenInference decode loop targets Qwen3ForCausalLM (1D RoPE, plain
+    # last_hidden_state / past_key_values). Krea2's text encoder is Qwen3VLModel — a wrapper
+    # with a Qwen3VLTextModel at ``.language_model`` and a vision tower at ``.visual``. Driving
+    # the top-level VL forward triggers the rope_deltas / image-prefill path even for text-only
+    # inputs. Route through the language sub-model via ``DiffusersQwen3VLInference``.
+    #
+    # Under sequential CPU offload, the pipeline's accelerate hooks keep parameters on meta
+    # placeholders — same problem WP-5's ``_encode_prompt_with_context_image`` handles by
+    # ``remove_hook_from_module`` + move to device + run + ``pipe.remove_all_hooks()`` +
+    # re-enable offload. ``_run_with_staged_text_encoder`` wraps that dance around every chat /
+    # rewrite / wildcard-suggest call so the caller-facing methods stay clean.
+
+    def _qwen_for_pipe(self, pipe: Any, torch_module: Any) -> DiffusersQwenInference:
+        return DiffusersQwen3VLInference.from_pipe(
+            pipe,
+            torch_module=torch_module,
+            encoder_label=self._text_encoder_label(),
+        )
+
+    def _run_with_staged_text_encoder(self, pipe: Any, torch_module: Any, action):
+        """Stage the pipeline's text encoder on the execution device, run ``action(pipe)``, and
+        restore the pipeline's offload chain.
+
+        ``action`` is a callable that receives the (staged) pipeline and returns whatever the
+        caller needs. Any exception the action raises is propagated after the restore step so
+        the pipeline is always left in a consistent state.
+        """
+        text_encoder = getattr(pipe, "text_encoder", None)
+        # Nothing to stage if the pipeline doesn't hold a text encoder or CUDA isn't around.
+        # Fall straight through to the action.
+        if text_encoder is None or not torch_module.cuda.is_available():
+            return action(pipe)
+
+        # No accelerate hooks on the transformer's submodules => pipeline was placed with
+        # ``pipe.to("cuda")`` (i.e. ``high`` tier). No staging dance needed; caller uses the
+        # encoder as-is.
+        transformer = getattr(pipe, "transformer", None)
+        has_hooks = False
+        if transformer is not None:
+            for module in transformer.modules():
+                if hasattr(module, "_hf_hook"):
+                    has_hooks = True
+                    break
+        if not has_hooks:
+            return action(pipe)
+
+        from accelerate.hooks import remove_hook_from_module
+
+        device = pipe._execution_device
+        remove_hook_from_module(text_encoder, recurse=True)
+        text_encoder.to(device)
+        try:
+            return action(pipe)
+        finally:
+            # remove_all_hooks() also clears our text_encoder hooks (which we already dropped
+            # above), then enable_sequential_cpu_offload() rebuilds the whole offload chain
+            # exactly as the pipeline builder did originally.
+            try:
+                pipe.remove_all_hooks()
+                if hasattr(pipe, "enable_sequential_cpu_offload"):
+                    pipe.enable_sequential_cpu_offload()
+            except Exception:  # pragma: no cover - defensive teardown
+                LOGGER.warning("Failed to restore sequential CPU offload after chat.", exc_info=True)
+
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        max_new_tokens: int = 256,
+        seed: int | None = None,
+        app_context: str | None = None,
+        temperature: float = 0.75,
+    ) -> dict[str, Any]:
+        loaded = self._ensure_loaded()
+        import torch
+
+        def _run(pipe: Any) -> dict[str, Any]:
+            return self._qwen_for_pipe(pipe, torch).chat(
+                messages=messages,
+                max_new_tokens=max_new_tokens,
+                seed=seed,
+                app_context=app_context,
+                temperature=temperature,
+            )
+
+        return self._run_with_staged_text_encoder(loaded.pipeline, torch, _run)
+
+    def suggest_wildcard_entries(
+        self,
+        *,
+        theme: str,
+        format_example: str,
+        existing_entries: list[str] | None = None,
+        target_count: int = 6,
+        min_words: int = 1,
+        max_words: int = 32,
+        seed: int | None = None,
+    ) -> list[str]:
+        loaded = self._ensure_loaded()
+        import torch
+
+        def _run(pipe: Any) -> list[str]:
+            return self._qwen_for_pipe(pipe, torch).suggest_wildcard_entries(
+                theme=theme,
+                format_example=format_example,
+                existing_entries=existing_entries,
+                target_count=target_count,
+                min_words=min_words,
+                max_words=max_words,
+                seed=seed,
+            )
+
+        return self._run_with_staged_text_encoder(loaded.pipeline, torch, _run)
+
+    def _enhance_prompt(
+        self,
+        pipe: Any,
+        prompt: str,
+        torch_module: Any,
+        *,
+        seed: int | None = None,
+    ) -> str:
+        # Called from the generate() forward — pipe is already the loaded pipeline. Stage the
+        # encoder just for the rewrite call so the base generate() flow can keep running.
+        def _run(inner_pipe: Any) -> str:
+            return self._qwen_for_pipe(inner_pipe, torch_module).enhance_prompt(prompt, seed=seed)
+
+        return self._run_with_staged_text_encoder(pipe, torch_module, _run)
+
+    def _compress_long_prompt(
+        self,
+        pipe: Any,
+        prompt: str,
+        torch_module: Any,
+        *,
+        seed: int | None = None,
+    ) -> str:
+        def _run(inner_pipe: Any) -> str:
+            return self._qwen_for_pipe(inner_pipe, torch_module).compress_long_prompt(prompt, seed=seed)
+
+        return self._run_with_staged_text_encoder(pipe, torch_module, _run)
 
 
 class Fp8KreaBackend(DiffusersKreaBackend):

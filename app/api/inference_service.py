@@ -265,20 +265,17 @@ class InferenceService:
 
     @staticmethod
     def _pack_supports_qwen_text_decode(model_pack: ModelPack) -> bool:
-        """True when the pack's text encoder is a plain Qwen3 causal LM (chat/wildcard-decode ready).
+        """True when the pack's text encoder is one of the wired text-decode paths.
 
-        The chat / wildcard-suggestion path in ``DiffusersQwenInference`` was designed against
-        ``Qwen3ForCausalLM`` — 1D causal position ids, plain-text ``text_encoder(input_ids, ...)``
-        forward, ``last_hidden_state`` + ``past_key_values`` for KV caching. Krea2-family packs
-        load ``Qwen3VLModel`` instead (vision-language, mRoPE with 3-axis position ids, VL chat
-        template). Feeding it into the plain-text decode either crashes on position_ids shape or
-        produces garbage. Gate the capability at the architecture level so the UI can hide chat
-        + wildcard-suggestion features on Krea2 rather than let them fail at inference time.
+        - ``z_image_turbo`` ships Qwen3ForCausalLM — the shared ``DiffusersQwenInference`` path.
+        - ``krea2_turbo`` ships Qwen3VLModel — the ``DiffusersQwen3VLInference`` subclass drives
+          the ``.language_model`` submodule with the same base decode loop.
+
+        Anything outside those two architectures is treated as unsupported so the UI can hide
+        the chat + wildcard-suggest features rather than fail at inference time.
         """
         architecture = str(getattr(model_pack, "architecture", "") or "").strip().lower()
-        # ``krea2_turbo`` (and any future Krea2_* family) uses Qwen3VLModel; everything else in
-        # the current registry (``z_image_turbo`` with Qwen3ForCausalLM) is fine.
-        return not architecture.startswith("krea2")
+        return architecture in {"z_image_turbo", "krea2_turbo"}
 
     def wildcard_capabilities(self, pack_name: str | None = None) -> dict[str, Any]:
         active_pack = None
@@ -446,14 +443,9 @@ class InferenceService:
         with self._state_lock:
             _base_pack, effective_pack, resource_tier = self._resolve_runtime_pack(pack_name)
             if not self._pack_supports_qwen_text_decode(effective_pack):
-                # Krea2-family packs load Qwen3VLModel (VL, mRoPE) — the shared
-                # DiffusersQwenInference text-decode path is built for Qwen3ForCausalLM and
-                # would crash on the position-id shape. Refuse the call cleanly instead of
-                # blowing up mid-forward.
                 raise ValueError(
                     f"Chat is not supported on the '{effective_pack.base_name or effective_pack.name}' "
-                    "pack because its text encoder is a vision-language model. Switch to a "
-                    "Z-Image pack to use chat."
+                    "pack because its text encoder architecture is not wired for chat decoding."
                 )
             session = self._session_for_pack(effective_pack, resource_tier)
             effective_seed = int(seed) if seed is not None else random.randint(1, 2_147_483_647)
@@ -563,8 +555,8 @@ class InferenceService:
             if not self._pack_supports_qwen_text_decode(effective_pack):
                 raise ValueError(
                     f"Wildcard suggestions are not supported on the "
-                    f"'{effective_pack.base_name or effective_pack.name}' pack because its text "
-                    "encoder is a vision-language model. Switch to a Z-Image pack to use this feature."
+                    f"'{effective_pack.base_name or effective_pack.name}' pack — its text "
+                    "encoder architecture is not wired for chat-style decoding."
                 )
             session = self._session_for_pack(effective_pack, resource_tier)
             effective_seed = int(seed) if seed is not None else random.randint(1, 2_147_483_647)

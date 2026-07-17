@@ -75,14 +75,26 @@ def test_z_image_pack_supports_text_decode(workspace_tmp_path: Path) -> None:
     assert InferenceService._pack_supports_qwen_text_decode(pack) is True
 
 
-def test_krea2_pack_blocks_text_decode(workspace_tmp_path: Path) -> None:
+def test_krea2_pack_supports_text_decode_via_qwen3vl_path(workspace_tmp_path: Path) -> None:
+    """Krea2 packs are now wired for chat / rewrite / wildcard-suggest via
+    DiffusersQwen3VLInference, so ``_pack_supports_qwen_text_decode`` accepts them."""
+
     root = workspace_tmp_path / "krea2-decode"
     root.mkdir()
     pack = _make_pack(root, name="Krea2_Turbo", architecture="krea2_turbo")
+    assert InferenceService._pack_supports_qwen_text_decode(pack) is True
+
+
+def test_unknown_architecture_blocks_text_decode(workspace_tmp_path: Path) -> None:
+    """Any pack outside the two wired architectures is refused so the UI can hide chat."""
+
+    root = workspace_tmp_path / "unknown-decode"
+    root.mkdir()
+    pack = _make_pack(root, name="MysteryPack", architecture="mystery_arch")
     assert InferenceService._pack_supports_qwen_text_decode(pack) is False
 
 
-def test_chat_capabilities_reports_unsupported_for_krea2(monkeypatch, workspace_tmp_path: Path) -> None:
+def test_chat_capabilities_reports_supported_for_krea2(monkeypatch, workspace_tmp_path: Path) -> None:
     root = workspace_tmp_path / "chat-caps-krea2"
     root.mkdir()
     service = InferenceService(_make_settings(root))
@@ -94,11 +106,11 @@ def test_chat_capabilities_reports_unsupported_for_krea2(monkeypatch, workspace_
     )
 
     caps = service.chat_capabilities("Krea2_Turbo")
-    assert caps["supported"] is False
+    assert caps["supported"] is True
     assert caps["active_pack"] == "Krea2_Turbo"
 
 
-def test_wildcard_capabilities_reports_unsupported_for_krea2(monkeypatch, workspace_tmp_path: Path) -> None:
+def test_wildcard_capabilities_reports_supported_for_krea2(monkeypatch, workspace_tmp_path: Path) -> None:
     root = workspace_tmp_path / "wildcard-caps-krea2"
     root.mkdir()
     service = InferenceService(_make_settings(root))
@@ -110,28 +122,44 @@ def test_wildcard_capabilities_reports_unsupported_for_krea2(monkeypatch, worksp
     )
 
     caps = service.wildcard_capabilities("Krea2_Turbo")
-    assert caps["supported"] is False
-    assert caps["suggestions_supported"] is False
+    assert caps["supported"] is True
+    assert caps["suggestions_supported"] is True
 
 
-def test_chat_call_refuses_krea2(monkeypatch, workspace_tmp_path: Path) -> None:
-    """The chat entry point rejects the call before touching the pipeline forward."""
-
-    root = workspace_tmp_path / "chat-refuse-krea2"
+def test_chat_capabilities_reports_unsupported_for_unknown_arch(
+    monkeypatch, workspace_tmp_path: Path
+) -> None:
+    root = workspace_tmp_path / "chat-caps-unknown"
     root.mkdir()
     service = InferenceService(_make_settings(root))
-    krea_pack = _make_pack(root, name="Krea2_Turbo", architecture="krea2_turbo")
+    mystery_pack = _make_pack(root, name="MysteryPack", architecture="mystery_arch")
     monkeypatch.setattr(
         service,
         "_resolve_runtime_pack",
-        lambda *args, **kwargs: (krea_pack, krea_pack, RUNTIME_PROFILES["balanced"]),
+        lambda *args, **kwargs: (mystery_pack, mystery_pack, RUNTIME_PROFILES["balanced"]),
     )
-    # Make sure we never actually construct a session.
+
+    caps = service.chat_capabilities("MysteryPack")
+    assert caps["supported"] is False
+
+
+def test_chat_call_refuses_unknown_arch(monkeypatch, workspace_tmp_path: Path) -> None:
+    """The chat entry point still rejects packs whose architecture isn't wired for text decode."""
+
+    root = workspace_tmp_path / "chat-refuse-unknown"
+    root.mkdir()
+    service = InferenceService(_make_settings(root))
+    mystery_pack = _make_pack(root, name="MysteryPack", architecture="mystery_arch")
+    monkeypatch.setattr(
+        service,
+        "_resolve_runtime_pack",
+        lambda *args, **kwargs: (mystery_pack, mystery_pack, RUNTIME_PROFILES["balanced"]),
+    )
     session_calls: list[str] = []
 
     def _fail_session(*args, **kwargs):
         session_calls.append("called")
-        raise AssertionError("Session must not be built for Krea2 chat refusal.")
+        raise AssertionError("Session must not be built for unsupported architecture.")
 
     monkeypatch.setattr(service, "_session_for_pack", _fail_session)
 

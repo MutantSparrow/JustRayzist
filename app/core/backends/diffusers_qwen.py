@@ -1721,4 +1721,69 @@ class DiffusersQwenInference:
 
 
 
-__all__ = ["DiffusersQwenInference"]
+class DiffusersQwen3VLInference(DiffusersQwenInference):
+    """Chat / prompt-enhancement path for packs whose text encoder is a ``Qwen3VLModel``.
+
+    Why a subclass: the shared ``DiffusersQwenInference`` decode loop drives the pipeline's
+    ``text_encoder`` directly with 2D position_ids and expects it to behave like a
+    ``Qwen3ForCausalLM`` (tied lm_head via ``embed_tokens``, 1-axis RoPE, plain
+    ``last_hidden_state``/``past_key_values`` output). Krea2 packs load ``Qwen3VLModel`` — a
+    multimodal wrapper with a vision tower, a ``.language_model`` sub-model (``Qwen3VLTextModel``)
+    and 3-axis mRoPE. Feeding the top-level ``Qwen3VLModel.forward`` for text generation trips
+    the vision / rope_deltas prefill path even on pure-text inputs.
+
+    Fix: bypass the top-level VL forward for chat / rewrite. Route directly to the
+    ``.language_model`` submodule (a ``Qwen3VLTextModel``), which auto-broadcasts 2D
+    position_ids to the 3-axis mRoPE layout its RoPE class expects and returns exactly the
+    ``last_hidden_state`` + ``past_key_values`` the base decode loop needs. Tied weights still
+    hold (config declares ``tie_word_embeddings=True``), so ``embed_tokens.weight`` doubles as
+    the lm-head projection — the same trick the base class already uses.
+    """
+
+    @classmethod
+    def _resolve_generation_module(cls, text_encoder: Any) -> Any:
+        """Return the module the decode loop should actually drive.
+
+        For ``Qwen3VLModel`` the language backbone lives at ``.language_model``. For anything
+        else (Z-Image's Qwen3ForCausalLM.model, etc.) fall back to the encoder itself so the
+        method stays safe to call from generic contexts.
+        """
+        if text_encoder is None:
+            return None
+        language_model = getattr(text_encoder, "language_model", None)
+        if language_model is not None and hasattr(language_model, "get_input_embeddings"):
+            return language_model
+        return text_encoder
+
+    @staticmethod
+    def _generate_with_base_model(  # type: ignore[override]
+        *,
+        text_encoder: Any,
+        encoded: dict[str, Any],
+        max_new_tokens: int,
+        eos_token_id: int | None,
+        torch_module: Any,
+        do_sample: bool = False,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        repetition_penalty: float = 1.0,
+    ) -> Any:
+        # Reuse the base implementation but drive the ``.language_model`` submodule of a
+        # Qwen3VLModel so the vision tower / rope_deltas prefill path never fires. The submodule
+        # (``Qwen3VLTextModel``) accepts 2D position_ids and returns ``last_hidden_state`` +
+        # ``past_key_values`` exactly like a plain Qwen3 causal LM backbone.
+        language_module = DiffusersQwen3VLInference._resolve_generation_module(text_encoder)
+        return DiffusersQwenInference._generate_with_base_model(
+            text_encoder=language_module,
+            encoded=encoded,
+            max_new_tokens=max_new_tokens,
+            eos_token_id=eos_token_id,
+            torch_module=torch_module,
+            do_sample=do_sample,
+            temperature=temperature,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+        )
+
+
+__all__ = ["DiffusersQwenInference", "DiffusersQwen3VLInference"]
