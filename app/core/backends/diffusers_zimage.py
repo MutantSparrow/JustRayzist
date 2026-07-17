@@ -271,6 +271,13 @@ class DiffusersZImageBackend:
     _SCHEDULER_DPM_MANUAL = "dpm"
     _SCHEDULER_DPM_EXP_LIGHT = "dpm_exp_light"
     _SCHEDULER_DPM_DDIM = "dpm_ddim"
+    # Cached probe result for DPMSolverMultistepScheduler.set_timesteps accepting `sigmas`.
+    # Both Z-Image and Krea2 pipelines unconditionally pass `sigmas=...` to
+    # `retrieve_timesteps`, which requires the scheduler's `set_timesteps` to declare the
+    # kwarg. In the diffusers version shipping here, DPMSolverMultistepScheduler does not —
+    # so any DPM mode crashes with "does not support custom sigmas schedules". Cached as
+    # None until probed to avoid re-inspecting on every apply.
+    _dpm_sigmas_capability_cache: bool | None = None
     _RPLUS_STAGE3_SEED = 37_717
     _RPLUS_SIGMA_PRESET_BRAVO: dict[int, tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...]]] = {
         3: ((0.991, 0.920), (0.942, 0.000), (0.710, 0.000)),
@@ -336,6 +343,7 @@ class DiffusersZImageBackend:
         self._img2img_pipe: Any | None = None
         self._active_scheduler_mode_by_pipe: dict[int, str] = {}
         self._base_scheduler_config_by_pipe: dict[int, dict[str, Any]] = {}
+        self._dpm_fallback_logged_pipes: set[int] = set()
         self._effective_execution_mode: str = "unknown"
         self._initial_execution_mode: str = "unknown"
         self._backend_name: str = self.BACKEND_NAME
@@ -825,8 +833,42 @@ class DiffusersZImageBackend:
             return cls._SCHEDULER_DPM_EXP_LIGHT, False
         return cls._SCHEDULER_DPM_DDIM, False
 
+    @classmethod
+    def _dpm_scheduler_accepts_sigmas(cls) -> bool:
+        """Whether the installed DPMSolverMultistepScheduler accepts `sigmas` in
+        ``set_timesteps``. Krea2 and Z-Image pipelines both call
+        ``retrieve_timesteps(scheduler, ..., sigmas=sigmas)`` unconditionally, which raises
+        when the scheduler's signature lacks the kwarg. Cached per-process."""
+        if cls._dpm_sigmas_capability_cache is None:
+            try:
+                import inspect
+
+                from diffusers import DPMSolverMultistepScheduler
+
+                params = inspect.signature(DPMSolverMultistepScheduler.set_timesteps).parameters
+                cls._dpm_sigmas_capability_cache = "sigmas" in params
+            except Exception:
+                cls._dpm_sigmas_capability_cache = False
+        return bool(cls._dpm_sigmas_capability_cache)
+
     def _apply_scheduler_mode(self, pipe: Any, mode: str) -> str:
         pipe_id = id(pipe)
+        if mode in {
+            self._SCHEDULER_DPM_MANUAL,
+            self._SCHEDULER_DPM_EXP_LIGHT,
+            self._SCHEDULER_DPM_DDIM,
+        } and not self._dpm_scheduler_accepts_sigmas():
+            if pipe_id not in self._dpm_fallback_logged_pipes:
+                LOGGER.warning(
+                    "DPMSolverMultistepScheduler.set_timesteps in the installed diffusers "
+                    "does not accept `sigmas`; %s always passes them. Falling back to Euler "
+                    "for pack %s at creative mode >= 2.",
+                    pipe.__class__.__name__,
+                    getattr(self._model_pack, "name", "<unknown-pack>"),
+                )
+                self._dpm_fallback_logged_pipes.add(pipe_id)
+            mode = self._SCHEDULER_EULER
+
         if self._active_scheduler_mode_by_pipe.get(pipe_id) == mode:
             return mode
 
@@ -916,11 +958,19 @@ class DiffusersZImageBackend:
         return any(indicator in message for indicator in indicators)
 
     def _resolve_scheduler_retry_mode(self, current_mode: str, exc: Exception) -> str | None:
-        if current_mode != self._SCHEDULER_EULER:
-            return None
         if not self._is_scheduler_incompatibility_error(exc):
             return None
-        return self._SCHEDULER_DPM_EXP_LIGHT
+        if current_mode == self._SCHEDULER_EULER:
+            return self._SCHEDULER_DPM_EXP_LIGHT
+        # Defense-in-depth: if a DPM path slips past the capability probe and still fails
+        # against the pipeline's sigma-driven timestep retrieval, retry once with Euler.
+        if current_mode in {
+            self._SCHEDULER_DPM_MANUAL,
+            self._SCHEDULER_DPM_EXP_LIGHT,
+            self._SCHEDULER_DPM_DDIM,
+        }:
+            return self._SCHEDULER_EULER
+        return None
 
     def _ensure_loaded(self) -> LoadedZImagePipeline:
         if self._loaded is None:

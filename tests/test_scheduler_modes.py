@@ -34,6 +34,14 @@ def test_euler_scheduler_uses_base_config_after_dpm_switch(monkeypatch) -> None:
 
     monkeypatch.setattr(diffusers, "FlowMatchEulerDiscreteScheduler", FakeEulerScheduler)
     monkeypatch.setattr(diffusers, "DPMSolverMultistepScheduler", FakeDPMScheduler)
+    # Pin the DPM-sigmas capability to True so the apply path uses the requested DPM mode
+    # rather than falling back to Euler at the probe. Real diffusers version-detection is
+    # covered separately in tests/test_scheduler_dpm_fallback.py.
+    monkeypatch.setattr(
+        DiffusersZImageBackend,
+        "_dpm_scheduler_accepts_sigmas",
+        classmethod(lambda cls: True),
+    )
 
     pipe = SimpleNamespace(scheduler=SimpleNamespace(config={"shift": 3.0, "use_dynamic_shifting": False}))
 
