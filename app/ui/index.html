@@ -6,7 +6,7 @@
   <title>JustRayzist</title>
   <link rel="icon" type="image/x-icon" href="/img/favicon.ico">
   <link rel="shortcut icon" href="/img/favicon.ico">
-  <link rel="stylesheet" href="/ui/styles.css?v=20260720_primitives">
+  <link rel="stylesheet" href="/ui/styles.css?v=20260721_a11y">
 </head>
 <body>
   <header class="topbar">
@@ -31,6 +31,7 @@
         <div id="topbar-reference-thumb-wrap" class="topbar-reference-thumb-wrap hidden" aria-hidden="true">
           <img id="topbar-reference-thumb" class="topbar-reference-thumb" alt="Reference image locked in">
         </div>
+        <label for="prompt-input" class="sr-only">Prompt</label>
         <textarea
           id="prompt-input"
           class="prompt-input"
@@ -247,6 +248,7 @@
       <h2 class="lora-drawer-title">LORA LIBRARY</h2>
     </div>
     <div class="lora-drawer-tools">
+      <label for="lora-filter-input" class="sr-only">Filter LoRAs</label>
       <input id="lora-filter-input" type="text" placeholder="Filter LoRAs by name">
       <button
         id="lora-active-filter"
@@ -268,6 +270,7 @@
       <h2 class="lora-drawer-title wildcard-drawer-title">WILDCARD LIBRARY</h2>
     </div>
     <div class="lora-drawer-tools">
+      <label for="wildcard-filter-input" class="sr-only">Filter wildcards</label>
       <input id="wildcard-filter-input" type="text" placeholder="Filter wildcards by name or token">
     </div>
     <div id="wildcard-drawer-capability" class="lora-drawer-capability" aria-live="polite"></div>
@@ -286,6 +289,7 @@
     </div>
     <section id="chat-transcript" class="chat-transcript" aria-live="polite"></section>
     <form id="chat-form" class="chat-composer">
+      <label for="chat-input" class="sr-only">Chat message</label>
       <textarea
         id="chat-input"
         class="chat-input"
@@ -298,9 +302,10 @@
   </aside>
 
   <main class="gallery-area">
-    <p id="gallery-count" class="gallery-count">0 images</p>
+    <p id="gallery-count" class="gallery-count" aria-live="polite">0 images</p>
     <section class="gallery-tools">
       <div class="gallery-tools-left">
+        <label for="filter-input" class="sr-only">Filter gallery</label>
         <input id="filter-input" type="text" placeholder="Filter by prompt keywords">
         <button id="reverse-order-button" class="reverse-button" type="button" aria-pressed="false" aria-label="Sort by newest first" title="Sort by newest first">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h10"></path><path d="M8 11h7"></path><path d="M8 16h4"></path><path d="M5 5v14"></path><path d="M2.5 16.5L5 19l2.5-2.5"></path></svg>
@@ -351,12 +356,12 @@
         </div>
       </div>
     </section>
-    <p id="status-line" class="status-line">Ready.</p>
+    <p id="status-line" class="status-line" aria-live="polite">Ready.</p>
     <section id="gallery" class="gallery"></section>
     <p id="empty-state" class="empty-state hidden">No Pictures yet.</p>
   </main>
 
-  <section id="viewer-modal" class="viewer-modal hidden" aria-hidden="true">
+  <section id="viewer-modal" class="viewer-modal hidden" role="dialog" aria-modal="true" aria-label="Image viewer" aria-hidden="true">
     <div class="viewer-summary">
       <div id="viewer-meta" class="viewer-meta"></div>
       <div class="viewer-actions">
@@ -400,7 +405,7 @@
     </div>
   </section>
 
-  <section id="lora-editor-modal" class="confirm-modal lora-editor-modal hidden" aria-hidden="true">
+  <section id="lora-editor-modal" class="confirm-modal lora-editor-modal hidden" role="dialog" aria-modal="true" aria-labelledby="lora-editor-title" aria-hidden="true">
     <div class="confirm-dialog lora-editor-dialog">
       <div class="lora-editor-header">
         <h3 id="lora-editor-title" class="lora-editor-title">ADD LORA</h3>
@@ -441,7 +446,7 @@
     </div>
   </section>
 
-  <section id="wildcard-editor-modal" class="confirm-modal wildcard-editor-modal hidden" aria-hidden="true">
+  <section id="wildcard-editor-modal" class="confirm-modal wildcard-editor-modal hidden" role="dialog" aria-modal="true" aria-labelledby="wildcard-editor-title" aria-hidden="true">
     <div class="confirm-dialog wildcard-editor-dialog">
       <div class="lora-editor-header wildcard-editor-header">
         <h3 id="wildcard-editor-title" class="lora-editor-title">ADD WILDCARD</h3>
@@ -482,7 +487,7 @@
     </div>
   </section>
 
-  <section id="wildcard-suggestion-modal" class="confirm-modal wildcard-suggestion-modal hidden" aria-hidden="true">
+  <section id="wildcard-suggestion-modal" class="confirm-modal wildcard-suggestion-modal hidden" role="dialog" aria-modal="true" aria-label="Generate new wildcards" aria-hidden="true">
     <div class="confirm-dialog wildcard-suggestion-dialog">
       <div class="lora-editor-header wildcard-editor-header">
         <h3 class="lora-editor-title">GENERATE NEW WILDCARDS</h3>
@@ -509,7 +514,7 @@
     </div>
   </section>
 
-  <section id="confirm-modal" class="confirm-modal hidden" aria-hidden="true">
+  <section id="confirm-modal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-message" aria-hidden="true">
     <div class="confirm-dialog">
       <p id="confirm-modal-message" class="confirm-message"></p>
       <div class="confirm-actions">
@@ -519,7 +524,7 @@
     </div>
   </section>
 
-  <section id="zip-progress-modal" class="confirm-modal hidden" aria-hidden="true">
+  <section id="zip-progress-modal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-label="Zip in progress" aria-hidden="true">
     <div class="confirm-dialog zip-progress-dialog">
       <p class="confirm-message">Zipping in progress</p>
       <div class="zip-progress-body">
@@ -531,9 +536,9 @@
     </div>
   </section>
 
-  <section id="pack-switch-modal" class="confirm-modal hidden" aria-hidden="true">
+  <section id="pack-switch-modal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="pack-switch-message" aria-hidden="true">
     <div class="confirm-dialog zip-progress-dialog">
-      <p id="pack-switch-message" class="confirm-message">Switching model pack…</p>
+      <p id="pack-switch-message" class="confirm-message" aria-live="polite">Switching model pack…</p>
       <div class="zip-progress-body">
         <div class="tile-spinner zip-progress-spinner">Loading weights…</div>
       </div>
@@ -545,6 +550,6 @@
     <p class="disconnect-message">SESSION DISCONNECTED. HAVE A NICE DAY</p>
   </section>
 
-  <script src="/ui/app.js?v=20260720_primitives"></script>
+  <script src="/ui/app.js?v=20260721_a11y"></script>
 </body>
 </html>
