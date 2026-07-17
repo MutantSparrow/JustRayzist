@@ -65,6 +65,97 @@ class DiffusersKreaBackend(DiffusersZImageBackend):
     def _default_guidance_scale(self) -> float:
         return self._KREA_DEFAULT_GUIDANCE_SCALE
 
+    def _pack_procedural_latents_for_krea(
+        self,
+        *,
+        pipe: Any,
+        procedural_latents: Any,
+        request: GenerationRequest,
+    ) -> Any:
+        """Reshape + pack a 4D procedural latent tensor into Krea2's packed 3D form.
+
+        Returns ``None`` (dropping the injection) if the tensor's channel count can't be
+        reinterpreted for Krea2. The procedural profile's seed still shapes the RNG for the
+        pipeline's own randn-based latents, so Creative Mode >= 1 still varies output even
+        when the injection is dropped."""
+        if procedural_latents is None:
+            return None
+        try:
+            shape = tuple(procedural_latents.shape)
+        except Exception:
+            return None
+        if len(shape) != 4:
+            # Already packed or otherwise unexpected — hand through untouched.
+            return procedural_latents
+
+        try:
+            patch_size = int(getattr(pipe, "patch_size", 2) or 2)
+            transformer_in_channels = int(getattr(pipe.transformer.config, "in_channels", 0))
+            vae_scale_factor = int(getattr(pipe, "vae_scale_factor", 8) or 8)
+        except Exception as exc:
+            LOGGER.warning(
+                "Krea2 procedural-latent pack introspection failed (%s); dropping injection.",
+                exc,
+            )
+            return None
+        if patch_size <= 0 or transformer_in_channels <= 0 or vae_scale_factor <= 0:
+            return None
+
+        target_channels = transformer_in_channels // (patch_size**2)
+        latent_height = int(request.height) // vae_scale_factor
+        latent_width = int(request.width) // vae_scale_factor
+        if (
+            target_channels <= 0
+            or latent_height <= 0
+            or latent_width <= 0
+            or latent_height % patch_size != 0
+            or latent_width % patch_size != 0
+        ):
+            LOGGER.warning(
+                "Krea2 procedural latent shape mismatch (H=%s W=%s p=%s); dropping injection.",
+                latent_height,
+                latent_width,
+                patch_size,
+            )
+            return None
+
+        batch, source_channels, source_h, source_w = shape
+        target_shape = (batch, target_channels, latent_height, latent_width)
+        # Z-Image's procedural builder emits `(B, transformer.in_channels, H, W)` — for Krea2
+        # that's 64 channels versus the 16 the pre-pack tensor needs, so element counts
+        # don't line up 1:1. Only accept an exact match; otherwise drop the injection.
+        # Creativity's noise-profile RNG seed still varies the pipeline's own randn latents
+        # via the shared generator, so aesthetic variety is preserved.
+        if not (
+            source_channels == target_channels
+            and source_h == latent_height
+            and source_w == latent_width
+        ):
+            LOGGER.warning(
+                "Krea2 procedural latent shape %s does not match target %s; dropping "
+                "injection. Creative Mode still varies output via the shared RNG seed.",
+                shape,
+                target_shape,
+            )
+            return None
+
+        try:
+            packed = pipe._pack_latents(
+                procedural_latents,
+                batch,
+                target_channels,
+                latent_height,
+                latent_width,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Krea2 procedural latent pack via pipe._pack_latents failed (%s); "
+                "dropping injection.",
+                exc,
+            )
+            return None
+        return packed
+
     # --- LoRA compat: Krea2 transformer speaks its own key layout ---
     # ``_prepare_zimage_lora_compat_state`` remaps Z-Image transformer keys (e.g. flattens
     # ``.transformer_blocks.<i>.attn.to_q`` → the packed variant Z-Image expects) and drops
@@ -136,6 +227,19 @@ class DiffusersKreaBackend(DiffusersZImageBackend):
         procedural_latents: Any,
         torch_module: Any,
     ) -> dict[str, Any]:
+        # Krea2Pipeline consumes packed 3D latents (B, image_seq_len, in_channels). The
+        # Z-Image procedural latent builder emits 4D (B, C, H, W) with the transformer's
+        # raw `in_channels`, which unpacks into "too many values to unpack (expected 3)"
+        # when Krea2Pipeline downstream does `batch_size, _, channels = latents.shape`.
+        # Reshape here to match Krea2's pre-pack channel count (in_channels // patch**2)
+        # and pack via the pipeline's own helper. If the channel count can't be
+        # reinterpreted cleanly, drop the injection and warn once — creativity's noise-
+        # banding effect still applies via the procedural profile.
+        packed_procedural_latents = self._pack_procedural_latents_for_krea(
+            pipe=pipe,
+            procedural_latents=procedural_latents,
+            request=request,
+        )
         base = super()._build_generate_pipe_kwargs(
             pipe=pipe,
             prompt=prompt,
@@ -143,7 +247,7 @@ class DiffusersKreaBackend(DiffusersZImageBackend):
             steps=steps,
             guidance_scale=guidance_scale,
             generator=generator,
-            procedural_latents=procedural_latents,
+            procedural_latents=packed_procedural_latents,
             torch_module=torch_module,
         )
         context_image = getattr(request, "context_image", None)
