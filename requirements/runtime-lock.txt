@@ -1,5 +1,5 @@
 accelerate==1.2.0
-diffusers==0.36.0
+diffusers==0.39.0
 einops==0.8.1
 fastapi==0.116.0
 gguf==0.17.1
@@ -13,7 +13,16 @@ psutil==6.0.0
 pyyaml==6.0.3
 rotary-embedding-torch==0.8.6
 safetensors==0.6.2
+# Runtime optimization stack (capability-gated at apply time — torchao / sageattention / triton
+# only fire on supported GPUs, older cards skip with a log line). See
+# app/core/pipeline_factory/optimizations.py.
+sageattention==1.0.6
+torchao==0.17.0
 tqdm==4.67.1
-transformers==4.56.0
+transformers==4.57.6
+# Triton kernels back torch.compile, torchao, and sageattention. Linux/Mac use the official
+# ``triton``; Windows uses the ``triton-windows`` fork built with matching semantics.
+triton==3.5.1 ; platform_system != "Windows"
+triton-windows==3.5.1.post24 ; platform_system == "Windows"
 typer==0.16.0
 uvicorn==0.35.0

@@ -81,6 +81,7 @@ Z-Image path.
 | WP-7 | Runtime model switch | `app/core/worker/session.py` (`GenerationSession.switch_model_pack`, tier-adaptive keep-resident/unload, `recycle` releases resident cache) |
 | WP-4 | Real pack | `models/packs/Krea2_Turbo/` — `modelpack.yaml` (fp8 component paths) + official diffusers configs |
 | WP-6 | Tiering (fp8 path + per-pack thresholds) | fp8 backend runs on 16GB via `constrained` sequential offload; on ≥24GB Krea2 auto-selects `high` (no offload). Per-pack `resource_tier_thresholds` in `modelpack.yaml` override the global `RUNTIME_PROFILES[tier].min_free_vram_gb` bar per model (Krea2 sets high=22 / balanced=14 / constrained=4 based on the RTX 4090 bench: ~5.8× faster no-offload vs sequential-offload for the 12B fp8 transformer). Wired through `ResourceTierController.current_for(pack)` and `GenerationSession`'s pack-switch path. |
+| — | Runtime optimization framework | `app/core/pipeline_factory/optimizations.py` — post-load applier for `torch.compile`, `torchao` fp8 dynamic quant (Ada+ only), SageAttention (Turing+), TF32 (Ampere+), VAE tiling, and persistent Inductor cache. Each is capability-gated at apply time so a pack requesting an option the local GPU cannot support degrades gracefully with a log line. Krea2 pack enables compile+sage+tf32+tiling; Z-Image pack enables sage+tf32+tiling (compile off because its `_cast` seam recompile-storms on first gen). fp8 quant kept OFF pending an aten `abs_cuda(Float8_e4m3fn)` kernel — bumping to torch 2.11 / torchao 0.17 was not enough. Bench (RTX 4090 warm): Krea2 high tier 32.7 s → 21.9 s (~1.5× on top of the tier win). |
 | WP-8 | Tests | `tests/test_krea_registry_dispatch.py`, `test_runtime_model_switch.py`, `test_krea_comfy_convert.py`, Krea cases in `test_fetch_model_assets.py` |
 | WP-9 | Docs | `models/packs/README.md`, pack READMEs, this file |
 | — | Provisioning | installers/launchers fetch Krea weights (opt-in, license-gated) — see "Provisioning" |
@@ -127,27 +128,21 @@ These de-risk the plan but do **not** replace the on-GPU generate spike:
 
 ## Remaining
 
-The WP-0 gate is resolved and both backend and web-app generation are proven on the RTX 4080. What's
-left is downstream feature work and hardening:
+WP-0 is resolved, both backend and web-app generation are proven on RTX 4080 + 4090, the runtime
+optimization framework is landed, and the pyproject deps are bumped. What's left:
 
-1. **WP-5 VL image conditioning — GPU verification.** Wired: `_build_generate_pipe_kwargs` in
-   the Krea backend substitutes `prompt_embeds`/`prompt_embeds_mask` produced by
-   `_encode_prompt_with_context_image` (Qwen3VL + vision tokens + pixel_values, tapping
-   `pipe.text_encoder_select_layers`). Plumbing has weightless coverage; still to do on a CUDA box:
-   confirm the encoded embeds are shape-compatible with what Krea2's transformer expects at
-   inference, and validate that a real reference image steers style/composition as it does in the
-   ComfyUI style-ref workflow.
-2. **WP-6 full tiering calibration.** The fp8 path works on 16GB (`constrained` sequential offload);
-   still to do: bf16-vs-fp8 auto-selection per tier, whether `high`/24GB can skip offload, and a
-   clean failure message when a tier can't host the 12B model.
-3. **Parity on real weights.** LoRA compose, upscale/refine, R+/procedural, and prompt-enhance have
+1. **WP-5 VL image conditioning — UI wiring.** Field + encode path are landed and GPU-verified
+   (fox → wolf style-ref test 2026-07-16). The existing "reference image" UI drawer currently maps
+   to the img2img flow, not to `GenerationRequest.context_image`. Route it — Krea2 packs should
+   pass the reference through the VL encode; Z-Image packs continue img2img.
+2. **Parity on real weights.** LoRA compose, upscale/refine, R+/procedural, and prompt-enhance have
    not been exercised on Krea (R+ has a code override but is unrun).
-4. **bf16 (`diffusers_krea`) backend.** Implemented but unrun — won't fit 16GB; needs a ≥24GB card.
-5. **Native fp8 compute.** Current scheme is fp8 storage / bf16 compute (`native_fp8_not_implemented`).
-   Ada (sm_89) supports native fp8; a future optimization, not required for correctness.
-6. **Pin bump.** `pyproject.toml` still pins `diffusers>=0.36.0`; bump to `>=0.39.0` (the Krea
-   classes are imported lazily with a clear error until then).
-7. **WP-10 release.** Branch merge to `main` / final review.
+3. **bf16 (`diffusers_krea`) backend.** Implemented but unrun — 12B bf16 needs ≥24GB card in `high`
+   tier.
+4. **Native fp8 compute.** `torchao.Float8DynamicActivationFloat8WeightConfig` still fails on
+   Windows/torch 2.11 with `"abs_cuda" not implemented for 'Float8_e4m3fn'`. Either wait for the
+   aten kernel or route through a bf16→fp8 conversion at load. Unblocks another ~1.5× on Krea2.
+5. **WP-10 release.** Branch merge to `main` / final review.
 
 ## How to verify
 

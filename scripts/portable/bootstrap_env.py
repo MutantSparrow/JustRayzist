@@ -82,22 +82,38 @@ def module_imports(python_exe: str, module_name: str) -> bool:
 
 
 def diffusers_symbols_available(python_exe: str) -> bool:
+    """Probe for the diffusers symbols both pack families need.
+
+    Z-Image ships with ``ZImagePipeline`` / ``ZImageTransformer2DModel`` (diffusers >=0.36).
+    Krea2 requires ``Krea2Pipeline`` / ``Krea2Transformer2DModel`` / ``AutoencoderKLQwenImage``
+    (diffusers >=0.39). We require the Krea2-inclusive set so a single-pin install covers both
+    packs; the fallback installer below bumps to 0.39 if a stale build is detected.
+    """
     ok, _ = run_probe(
         [
             python_exe,
             "-c",
-            "from diffusers import ZImageImg2ImgPipeline, ZImagePipeline, ZImageTransformer2DModel",
+            (
+                "from diffusers import ZImagePipeline, ZImageTransformer2DModel, "
+                "ZImageImg2ImgPipeline, Krea2Pipeline, Krea2Transformer2DModel, "
+                "AutoencoderKLQwenImage"
+            ),
         ]
     )
     return ok
 
 
 def install_diffusers_with_fallback(python_exe: str, *, env: dict[str, str]) -> None:
+    """Ensure a diffusers build exposing both Z-Image and Krea2 symbols is installed.
+
+    The primary pin (``diffusers==0.39.0``) matches the runtime lockfile. Fallbacks cover the
+    unlikely case where the pinned release is unreachable but a compatible pre-release or main
+    build exists.
+    """
     setup_command = r".\RunMeFirst.bat" if sys.platform.startswith("win") else "./RunMeFirst.sh"
     attempts = [
-        ("diffusers==0.36.0", ["-m", "pip", "install", "--upgrade", "diffusers==0.36.0"]),
-        ("diffusers==0.36.0.dev0", ["-m", "pip", "install", "--upgrade", "diffusers==0.36.0.dev0"]),
-        ("pre-release diffusers>=0.36.0", ["-m", "pip", "install", "--upgrade", "--pre", "diffusers>=0.36.0"]),
+        ("diffusers==0.39.0", ["-m", "pip", "install", "--upgrade", "diffusers==0.39.0"]),
+        ("pre-release diffusers>=0.39.0", ["-m", "pip", "install", "--upgrade", "--pre", "diffusers>=0.39.0"]),
         (
             "diffusers main branch zip",
             [
@@ -116,11 +132,14 @@ def install_diffusers_with_fallback(python_exe: str, *, env: dict[str, str]) -> 
             print(f"Install attempt failed for {label}.", file=sys.stderr)
             continue
         if diffusers_symbols_available(python_exe):
-            print(f"Using {label} (ZImage symbols verified).")
+            print(f"Using {label} (Z-Image + Krea2 symbols verified).")
             return
-        print(f"Installed {label} but ZImage symbols are still missing.", file=sys.stderr)
+        print(
+            f"Installed {label} but expected Z-Image / Krea2 symbols are still missing.",
+            file=sys.stderr,
+        )
     raise RuntimeError(
-        "Unable to install a diffusers build exposing the required ZImage symbols. "
+        "Unable to install a diffusers build exposing the required Z-Image + Krea2 symbols. "
         f"Check internet access and rerun {setup_command}."
     )
 

@@ -153,6 +153,30 @@ _KREA2_WEIGHT_FILES = (
     "qwen3vl_4b_fp8_scaled.safetensors",
     "qwen_image_vae.safetensors",
 )
+# Qwen3VL processor sidecars needed by the WP-5 style-reference path. AutoProcessor.from_pretrained
+# requires all of these next to the text_encoder config so a multimodal processor builds with
+# local_files_only=True.
+_KREA2_TEXT_ENCODER_FILES = (
+    "preprocessor_config.json",
+    "chat_template.json",
+    "video_preprocessor_config.json",
+    "vocab.json",
+    "merges.txt",
+)
+
+
+def _missing_krea2_files(project_root: Path) -> list[str]:
+    pack_dir = project_root / "models" / "packs" / _KREA2_PACK_FOLDER
+    missing: list[str] = []
+    weights_dir = pack_dir / "weights"
+    for name in _KREA2_WEIGHT_FILES:
+        if not (weights_dir / name).exists():
+            missing.append(f"weights/{name}")
+    text_encoder_dir = pack_dir / "config" / "text_encoder"
+    for name in _KREA2_TEXT_ENCODER_FILES:
+        if not (text_encoder_dir / name).exists():
+            missing.append(f"config/text_encoder/{name}")
+    return missing
 
 
 def ensure_pack_assets(
@@ -165,13 +189,13 @@ def ensure_pack_assets(
     """Ensure a selected pack's (opt-in, gitignored) weights are present before launch.
 
     Currently only Krea2_Turbo needs this: its config dirs are committed but the ~18GB ComfyUI fp8
-    weights are fetched on demand under the Krea 2 Community License. If missing, download them
-    (with consent) in an interactive session, or instruct the user to fetch manually otherwise.
+    weights and the Qwen3VL processor sidecars (vocab / merges / preprocessor configs) are fetched
+    on demand under the Krea 2 Community License. If missing, download them (with consent) in an
+    interactive session, or instruct the user to fetch manually otherwise.
     """
     if selected_pack != _KREA2_PACK_FOLDER:
         return
-    weights_dir = project_root / "models" / "packs" / _KREA2_PACK_FOLDER / "weights"
-    missing = [name for name in _KREA2_WEIGHT_FILES if not (weights_dir / name).exists()]
+    missing = _missing_krea2_files(project_root)
     if not missing:
         return
 
@@ -209,10 +233,10 @@ def ensure_pack_assets(
     )
     if completed.returncode != 0:
         raise RuntimeError("Failed to fetch Krea2_Turbo weights (fetch helper exited non-zero).")
-    still_missing = [name for name in _KREA2_WEIGHT_FILES if not (weights_dir / name).exists()]
+    still_missing = _missing_krea2_files(project_root)
     if still_missing:
         raise RuntimeError(
-            "Krea2_Turbo weights still missing after fetch: " + ", ".join(still_missing)
+            "Krea2_Turbo assets still missing after fetch: " + ", ".join(still_missing)
         )
 
 

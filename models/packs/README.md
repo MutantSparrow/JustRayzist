@@ -97,6 +97,39 @@ Krea2 notes:
 
 GGUF component loading is supported for `transformer`, `vae`, and `text_encoder`.
 
+## Per-pack runtime optimizations
+
+Each pack can opt into post-load runtime optimizations via a top-level `optimizations` block.
+Every option is capability-gated at apply time (see
+`app/core/pipeline_factory/optimizations.py`), so a manifest requesting an option the local GPU
+cannot support degrades gracefully with a log line rather than crashing.
+
+```yaml
+optimizations:
+  torch_compile:
+    enabled: true          # universal CUDA (Turing+)
+    mode: default          # or "reduce-overhead" / "max-autotune"
+  fp8_quantization:
+    enabled: false         # Ada+ only (sm_89), currently blocked on aten fp8 kernel
+    scope: transformer     # or "transformer+text_encoder"
+  sage_attention:
+    enabled: true          # Turing+ (sm_75+) via a shim on F.scaled_dot_product_attention
+  tf32:
+    enabled: true          # Ampere+ (sm_80+), no-op on Turing/Volta
+  vae_tiling:
+    enabled: true          # universal — vae.enable_tiling() + enable_slicing()
+```
+
+A boolean shortcut is accepted (`torch_compile: true` == `{enabled: true}` with defaults).
+Unknown keys are rejected at pack-load time.
+
+The framework also sets `TORCHINDUCTOR_CACHE_DIR` to `.build/inductor` (override with
+`JUSTRAYZIST_INDUCTOR_CACHE_DIR`) so torch.compile artifacts persist across sessions — the second
+run of the same pack + shape re-uses the cache and skips most of the JIT warmup.
+
+An escape hatch `JUSTRAYZIST_DISABLE_OPTIMIZATIONS=1` turns every option off at runtime without
+editing manifests — useful when debugging suspected optimization regressions.
+
 ## Per-pack resource tier thresholds
 
 By default the runtime tier (`high` / `balanced` / `constrained`) is picked by comparing free VRAM

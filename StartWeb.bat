@@ -319,12 +319,24 @@ set "KREA_ROOT=%CD%\models\packs\Krea2_Turbo"
 set "KREA_TRANSFORMER=%KREA_ROOT%\weights\krea2_turbo_fp8.safetensors"
 set "KREA_ENCODER=%KREA_ROOT%\weights\qwen3vl_4b_fp8_scaled.safetensors"
 set "KREA_VAE=%KREA_ROOT%\weights\qwen_image_vae.safetensors"
+rem Qwen3VL processor sidecars are needed by the WP-5 style-reference path so AutoProcessor
+rem can build a multimodal processor with local_files_only=True. Fetch script provisions them.
+set "KREA_PREPROC=%KREA_ROOT%\config\text_encoder\preprocessor_config.json"
+set "KREA_CHAT=%KREA_ROOT%\config\text_encoder\chat_template.json"
+set "KREA_VIDEOPREPROC=%KREA_ROOT%\config\text_encoder\video_preprocessor_config.json"
+set "KREA_VOCAB=%KREA_ROOT%\config\text_encoder\vocab.json"
+set "KREA_MERGES=%KREA_ROOT%\config\text_encoder\merges.txt"
 set "FETCH_SCRIPT=%CD%\scripts\fetch_model_assets.ps1"
 set "KREA_MISSING=0"
 
 if not exist "!KREA_TRANSFORMER!" set "KREA_MISSING=1"
 if not exist "!KREA_ENCODER!" set "KREA_MISSING=1"
 if not exist "!KREA_VAE!" set "KREA_MISSING=1"
+if not exist "!KREA_PREPROC!" set "KREA_MISSING=1"
+if not exist "!KREA_CHAT!" set "KREA_MISSING=1"
+if not exist "!KREA_VIDEOPREPROC!" set "KREA_MISSING=1"
+if not exist "!KREA_VOCAB!" set "KREA_MISSING=1"
+if not exist "!KREA_MERGES!" set "KREA_MISSING=1"
 
 if !KREA_MISSING! EQU 0 (
   echo Krea2_Turbo model assets ready.
@@ -364,6 +376,26 @@ if not exist "!KREA_ENCODER!" (
 )
 if not exist "!KREA_VAE!" (
   echo Missing file after download: !KREA_VAE!
+  exit /b 1
+)
+if not exist "!KREA_PREPROC!" (
+  echo Missing Qwen3VL processor sidecar: !KREA_PREPROC!
+  exit /b 1
+)
+if not exist "!KREA_CHAT!" (
+  echo Missing Qwen3VL chat template: !KREA_CHAT!
+  exit /b 1
+)
+if not exist "!KREA_VIDEOPREPROC!" (
+  echo Missing Qwen3VL video preprocessor config: !KREA_VIDEOPREPROC!
+  exit /b 1
+)
+if not exist "!KREA_VOCAB!" (
+  echo Missing Qwen3VL vocab.json: !KREA_VOCAB!
+  exit /b 1
+)
+if not exist "!KREA_MERGES!" (
+  echo Missing Qwen3VL merges.txt: !KREA_MERGES!
   exit /b 1
 )
 echo Krea2_Turbo model assets ready.

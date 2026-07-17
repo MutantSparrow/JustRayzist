@@ -313,9 +313,19 @@ function Test-EnvironmentHealth {
     }
   }
 
-  $importProbe = Try-RunPython -PythonExe $venvPython -Code "import typer,fastapi,uvicorn,multipart,PIL,torch,diffusers,transformers,accelerate,safetensors; from diffusers import ZImagePipeline, ZImageTransformer2DModel, ZImageImg2ImgPipeline"
+  # Core runtime imports plus the diffusers symbols both pack families rely on.
+  # Krea2 needs diffusers >=0.39 (Krea2Pipeline / Krea2Transformer2DModel / AutoencoderKLQwenImage);
+  # Z-Image only needs >=0.36 but our lockfile pins 0.39 to satisfy both.
+  $importProbe = Try-RunPython -PythonExe $venvPython -Code "import typer,fastapi,uvicorn,multipart,PIL,torch,diffusers,transformers,accelerate,safetensors; from diffusers import ZImagePipeline, ZImageTransformer2DModel, ZImageImg2ImgPipeline, Krea2Pipeline, Krea2Transformer2DModel, AutoencoderKLQwenImage"
   if (-not $importProbe.Success) {
-    $issues.Add("Core runtime imports failed in .venv (including required ZImage diffusers symbols).")
+    $issues.Add("Core runtime imports failed in .venv (needs diffusers >=0.39 with Z-Image + Krea2 symbols).")
+  }
+  # Optimization stack (torchao + sageattention + triton) is capability-gated at apply time, but
+  # the import surface itself must be present — otherwise every pack that has an optimization
+  # block enabled logs a soft-fail on every load.
+  $optImportProbe = Try-RunPython -PythonExe $venvPython -Code "import torchao, sageattention, triton"
+  if (-not $optImportProbe.Success) {
+    $issues.Add("Optimization deps missing (torchao / sageattention / triton).")
   }
   $seedImportProbe = Try-RunPython -PythonExe $venvPython -Code "import cv2,omegaconf,peft,einops,rotary_embedding_torch"
   if (-not $seedImportProbe.Success) {
